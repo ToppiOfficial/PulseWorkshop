@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>SrcWorkshop.SteamHost</RootNamespace>
+    <!-- Steamworks is x64-native; the host must be a 64-bit process. -->
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>false</SelfContained>
+    <Platforms>x64</Platforms>
+    <Platform>x64</Platform>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\SrcWorkshop.Core\SrcWorkshop.Core.csproj" />
+    <!-- C++/CLI bridge. Referenced as a project so the build ordering and DLL copy are handled.
+         Requires the Steamworks SDK present (see external/steamworks_sdk/PLACEMENT.md). -->
+    <ProjectReference Include="..\SrcWorkshop.SteamBridge\SrcWorkshop.SteamBridge.vcxproj" />
+  </ItemGroup>
+
+  <!-- The host process loads steam_api64.dll at runtime, so it must sit next to SrcWorkshop.SteamHost.exe.
+       Copy it straight from the SDK (the bridge copies it only to its own output). -->
+  <PropertyGroup>
+    <SteamSdkDir Condition="'$(SteamSdkDir)' == ''">$(MSBuildThisFileDirectory)..\..\external\steamworks_sdk\</SteamSdkDir>
+    <SteamApiDll>$(SteamSdkDir)redistributable_bin\win64\steam_api64.dll</SteamApiDll>
+  </PropertyGroup>
+
+  <ItemGroup Condition="Exists('$(SteamApiDll)')">
+    <None Include="$(SteamApiDll)">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Link>steam_api64.dll</Link>
+    </None>
+  </ItemGroup>
+
+</Project>

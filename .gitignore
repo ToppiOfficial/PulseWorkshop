@@ -67,3 +67,15 @@ vcpkg_installed/
 # test output & cache
 Testing/
 .cache/
+
+# .NET / Visual Studio
+bin/
+obj/
+.vs/
+*.user
+*.suo
+
+# Steamworks SDK (not redistributable) and per-app testing aid
+external/steamworks_sdk/public/
+external/steamworks_sdk/redistributable_bin/
+steam_appid.txt

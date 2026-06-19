@@ -1,0 +1,14 @@
+<Project>
+  <!-- Shared MSBuild settings. The C#-only properties are guarded so the C++/CLI
+       (.vcxproj) project, which also imports this file, ignores them. -->
+  <PropertyGroup>
+    <Platforms>x64</Platforms>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(MSBuildProjectExtension)' == '.csproj'">
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <PlatformTarget>x64</PlatformTarget>
+  </PropertyGroup>
+</Project>

@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>SrcWorkshop.Core</RootNamespace>
+    <Platforms>x64</Platforms>
+    <Platform>x64</Platform>
+  </PropertyGroup>
+
+</Project>

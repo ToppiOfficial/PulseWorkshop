@@ -224,6 +224,8 @@ BridgeQueryResult^ SteamWorkshop::QueryUserPublished(int page)
         item->FileSize = details.m_ulTotalFilesSize != 0
             ? details.m_ulTotalFilesSize
             : static_cast<UInt64>(details.m_nFileSize < 0 ? 0 : details.m_nFileSize);
+        // Cloud filename of the primary content file (legacy RemoteStorage items have one).
+        item->ContentFileName = ToManaged(details.m_pchFileName);
 
         // Tags arrive as a comma-separated string on the details struct.
         item->Tags = gcnew List<String^>();

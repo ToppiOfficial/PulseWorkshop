@@ -1,0 +1,310 @@
+using System.Diagnostics;
+using System.IO;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Input;
+using Microsoft.Win32;
+using SrcWorkshop.App.ViewModels;
+using SrcWorkshop.Core.Models;
+
+namespace SrcWorkshop.App;
+
+public partial class MainWindow : Window
+{
+    private readonly MainViewModel _vm = new();
+
+    public MainWindow()
+    {
+        InitializeComponent();
+        DataContext = _vm;
+        Title = $"SrcWorkshop - Steam Workshop Manager (v{AppVersion})";
+        _vm.NavigateToDrafts += () => DraftsTab.IsSelected = true;
+        Closed += async (_, _) => await _vm.DisposeAsync();
+    }
+
+    /// <summary>The app version (from the assembly's <see cref="Version"/> in the .csproj), e.g. "0.1.0".</summary>
+    private static string AppVersion
+    {
+        get
+        {
+            var v = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version;
+            return v is null ? "0.0.0" : $"{v.Major}.{v.Minor}.{v.Build}";
+        }
+    }
+
+    /// <summary>
+    /// Enter in a search box flushes the pending (debounced) filter immediately instead of waiting
+    /// for the typing-pause timer. The TextBox is matched to its list by x:Name.
+    /// </summary>
+    private void SearchBox_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Enter)
+            return;
+
+        switch ((sender as FrameworkElement)?.Name)
+        {
+            case nameof(PublishedSearchBox): _vm.ApplyPublishedSearchNow(); break;
+            case nameof(DraftsSearchBox): _vm.ApplyDraftsSearchNow(); break;
+            case nameof(TemplatesSearchBox): _vm.ApplyTemplatesSearchNow(); break;
+        }
+    }
+
+    private void PublishedList_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_vm.IsBusy)
+            return;
+        if (((ListBox)sender).SelectedItem is WorkshopItem item)
+        {
+            ClearOtherSelections(PublishedList);
+            _vm.EditPublished(item);
+        }
+    }
+
+    private void DraftsList_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_vm.IsBusy)
+            return;
+        if (((ListBox)sender).SelectedItem is DraftListItemViewModel item)
+        {
+            ClearOtherSelections(DraftsList);
+            _vm.EditDraft(item.Draft);
+        }
+    }
+
+    /// <summary>
+    /// Opens the Workshop item in the Steam client (steam://) so it appears in the Steam overlay/
+    /// community; if Steam can't handle the protocol, falls back to the default browser.
+    /// </summary>
+    private void OpenWorkshopItem_Click(object sender, RoutedEventArgs e)
+    {
+        if (RowData<WorkshopItem>(sender) is not { } item)
+            return;
+
+        var steamUrl = $"steam://url/CommunityFilePage/{item.PublishedFileId}";
+        if (!TryOpen(steamUrl))
+            TryOpen(item.WorkshopUrl); // browser fallback
+    }
+
+    /// <summary>
+    /// Opens the official Steam "Add/Edit Images &amp; Videos" page for the item being edited.
+    /// Gallery previews have no SDK API for these legacy Workshop games, so we deep-link instead.
+    /// </summary>
+    private void OpenManagePreviews_Click(object sender, RoutedEventArgs e) =>
+        OpenSteamItemPage("https://steamcommunity.com/sharedfiles/managepreviews/?id=");
+
+    /// <summary>Opens the official Steam "Manage Required Items" page for the item being edited.</summary>
+    private void OpenManageRequiredItems_Click(object sender, RoutedEventArgs e) =>
+        OpenSteamItemPage("https://steamcommunity.com/workshop/managerequireditems/?id=");
+
+    /// <summary>
+    /// Deep-links to a Steam Workshop management page for the currently-edited published item,
+    /// preferring the Steam client (steam://openurl) and falling back to the default browser.
+    /// </summary>
+    private void OpenSteamItemPage(string baseUrl)
+    {
+        if (_vm.Editor?.PublishedFileId is not { } id)
+            return;
+
+        var webUrl = baseUrl + id;
+        if (!TryOpen("steam://openurl/" + webUrl))
+            TryOpen(webUrl);
+    }
+
+    /// <summary>Launches a URL via the shell's default handler; returns false if it couldn't start.</summary>
+    private static bool TryOpen(string url)
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private void TemplatesList_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_vm.IsBusy)
+            return;
+        if (((ListBox)sender).SelectedItem is TemplateListItemViewModel item)
+        {
+            ClearOtherSelections(TemplatesList);
+            _vm.EditTemplate(item.Template);
+        }
+    }
+
+    /// <summary>
+    /// The three lists (Published / Drafts / Templates) each track their own selection. Opening an
+    /// item from one list must clear the highlight in the other two - otherwise a stale selection
+    /// lingers, and re-clicking that still-selected row is a no-op (SelectionChanged never fires),
+    /// leaving the editor (and its template-vs-draft buttons) showing the wrong mode.
+    /// </summary>
+    private void ClearOtherSelections(ListBox keep)
+    {
+        foreach (var list in new[] { PublishedList, DraftsList, TemplatesList })
+        {
+            if (!ReferenceEquals(list, keep))
+                list.SelectedItem = null;
+        }
+    }
+
+    // --- Context menu / template handlers ------------------------------------------------------
+
+    private static T? RowData<T>(object sender) where T : class
+    {
+        // A clicked element inside a list row carries that row's data item as its DataContext.
+        if (sender is FrameworkElement { DataContext: T data })
+            return data;
+        return null;
+    }
+
+    private void DraftDelete_Click(object sender, RoutedEventArgs e)
+    {
+        if (RowData<DraftListItemViewModel>(sender) is not { } item)
+            return;
+
+        var isLinked = item.Draft.Edit.PublishedFileId is not null;
+        var message = isLinked
+            ? $"Delete the in-progress edit draft \"{item.Draft.Name}\"?\n\n" +
+              "This discards your unsaved edits and reverts to the published item. The Workshop item itself is NOT deleted."
+            : $"Delete draft \"{item.Draft.Name}\"?";
+
+        if (Confirm("Delete draft", message))
+            _vm.DeleteDraft(item.Draft);
+    }
+
+    private void TemplateUse_Click(object sender, RoutedEventArgs e)
+    {
+        if (_vm.IsBusy || RowData<TemplateListItemViewModel>(sender) is not { } item)
+            return;
+
+        _vm.ApplyTemplate(item.Template, out var removed);
+        if (removed.Count > 0)
+        {
+            MessageBox.Show(this,
+                "Some files referenced by this template no longer exist and were removed from it:\n\n - " +
+                string.Join("\n - ", removed),
+                "Template files missing", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+    }
+
+    private void TemplateDelete_Click(object sender, RoutedEventArgs e)
+    {
+        if (RowData<TemplateListItemViewModel>(sender) is { } item &&
+            Confirm("Delete template", $"Delete template \"{item.Template.Name}\"?"))
+        {
+            _vm.DeleteTemplate(item.Template);
+        }
+    }
+
+    private bool Confirm(string title, string message) =>
+        MessageBox.Show(this, message, title, MessageBoxButton.YesNo, MessageBoxImage.Warning)
+            == MessageBoxResult.Yes;
+
+    private void SaveAsTemplate_Click(object sender, RoutedEventArgs e)
+    {
+        if (_vm.Editor is null)
+            return;
+
+        var suggested = string.IsNullOrWhiteSpace(_vm.Editor.Title) ? "New template" : _vm.Editor.Title;
+        var name = Views.TextPromptWindow.Ask(this, "Save as template", "Template name", suggested);
+        if (name is not null)
+            _vm.SaveAsTemplate(name);
+    }
+
+    // --- Content file zone ---------------------------------------------------------------------
+
+    private EditorViewModel? Editor => _vm.Editor;
+
+    private void ContentDrop_Click(object sender, MouseButtonEventArgs e)
+    {
+        if (Editor is null)
+            return;
+
+        var ext = Editor.ContentFileExtension; // e.g. ".vpk"
+        var dialog = new OpenFileDialog
+        {
+            Title = "Choose content file",
+            Filter = $"Content file (*{ext})|*{ext}|All files (*.*)|*.*",
+            CheckFileExists = true,
+        };
+        if (dialog.ShowDialog(this) == true)
+            Editor.ContentFile = dialog.FileName;
+    }
+
+    private void ContentDrop_DragOver(object sender, DragEventArgs e)
+    {
+        e.Effects = IsSingleFileDrop(e, Editor?.ContentFileExtension) ? DragDropEffects.Copy : DragDropEffects.None;
+        e.Handled = true;
+    }
+
+    private void ContentDrop_Drop(object sender, DragEventArgs e)
+    {
+        if (Editor is null)
+            return;
+        var path = GetDroppedFile(e, Editor.ContentFileExtension);
+        if (path is not null)
+            Editor.ContentFile = path;
+    }
+
+    // --- Preview image zone --------------------------------------------------------------------
+
+    private static readonly string[] ImageExts = { ".png", ".jpg", ".jpeg", ".gif" };
+
+    private void PreviewDrop_Click(object sender, MouseButtonEventArgs e)
+    {
+        if (Editor is null)
+            return;
+
+        var dialog = new OpenFileDialog
+        {
+            Title = "Choose preview image",
+            Filter = "Images (*.png;*.jpg;*.jpeg;*.gif)|*.png;*.jpg;*.jpeg;*.gif|All files (*.*)|*.*",
+            CheckFileExists = true,
+        };
+        if (dialog.ShowDialog(this) == true)
+            Editor.PreviewImagePath = dialog.FileName;
+    }
+
+    private void PreviewDrop_DragOver(object sender, DragEventArgs e)
+    {
+        e.Effects = IsSingleFileDrop(e, ImageExts) ? DragDropEffects.Copy : DragDropEffects.None;
+        e.Handled = true;
+    }
+
+    private void PreviewDrop_Drop(object sender, DragEventArgs e)
+    {
+        if (Editor is null)
+            return;
+        var path = GetDroppedFile(e, ImageExts);
+        if (path is not null)
+            Editor.PreviewImagePath = path;
+    }
+
+    // --- Drag-drop helpers ---------------------------------------------------------------------
+
+    private static bool IsSingleFileDrop(DragEventArgs e, params string?[] allowedExts) =>
+        GetDroppedFile(e, allowedExts) is not null;
+
+    private static string? GetDroppedFile(DragEventArgs e, params string?[] allowedExts)
+    {
+        if (!e.Data.GetDataPresent(DataFormats.FileDrop))
+            return null;
+        if (e.Data.GetData(DataFormats.FileDrop) is not string[] files || files.Length != 1)
+            return null;
+
+        var file = files[0];
+        if (!File.Exists(file))
+            return null;
+
+        // No filter, or extension matches one of the allowed (case-insensitive).
+        var exts = allowedExts.Where(x => !string.IsNullOrEmpty(x)).ToArray();
+        if (exts.Length == 0)
+            return file;
+
+        var fileExt = Path.GetExtension(file);
+        return exts.Any(x => string.Equals(x, fileExt, StringComparison.OrdinalIgnoreCase)) ? file : null;
+    }
+}

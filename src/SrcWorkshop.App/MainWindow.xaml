@@ -1,0 +1,517 @@
+<Window x:Class="SrcWorkshop.App.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:vm="clr-namespace:SrcWorkshop.App.ViewModels"
+        xmlns:local="clr-namespace:SrcWorkshop.App"
+        Title="SrcWorkshop - Steam Workshop Manager"
+        Height="720" Width="1180" MinHeight="560" MinWidth="900"
+        Background="{StaticResource BgBrush}"
+        WindowStartupLocation="CenterScreen">
+
+    <Window.Resources>
+        <local:NullToVisibilityConverter x:Key="NullToVis" />
+        <local:BoolToVisibilityConverter x:Key="BoolToVis" />
+        <local:StringToVisibilityConverter x:Key="StringToVis" />
+        <local:FirstLetterConverter x:Key="FirstLetter" />
+        <local:PathEllipsisConverter x:Key="PathEllipsis" />
+    </Window.Resources>
+
+    <Grid Margin="10">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <!-- Top bar: game picker + connect -->
+        <Border Grid.Row="0" Background="{StaticResource HeaderGradientBrush}"
+                BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
+                CornerRadius="3" Padding="12,10" Margin="0,0,0,8">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+
+                <TextBlock Text="Game" VerticalAlignment="Center" Margin="0,0,8,0"
+                           Style="{StaticResource MutedText}" />
+                <ComboBox Grid.Column="1" Width="200" ItemsSource="{Binding Games}"
+                          SelectedItem="{Binding SelectedGame}" DisplayMemberPath="DisplayName"
+                          VerticalAlignment="Center" />
+
+                <Button Grid.Column="2" Content="Connect" Margin="12,0,0,0"
+                        Style="{StaticResource AccentButton}" Command="{Binding ConnectCommand}" />
+
+                <TextBlock Grid.Column="3" Text="{Binding StatusMessage}" Margin="16,0,12,0"
+                           VerticalAlignment="Center" TextTrimming="CharacterEllipsis"
+                           Style="{StaticResource MutedText}" />
+
+                <!-- Logged-in Steam user: avatar + persona name + SteamID64, far right. -->
+                <StackPanel Grid.Column="4" Orientation="Horizontal" VerticalAlignment="Center"
+                            Visibility="{Binding HasProfile, Converter={StaticResource BoolToVis}}">
+                    <Border Width="34" Height="34" CornerRadius="17"
+                            Background="{StaticResource PanelAltBrush}"
+                            BorderBrush="{StaticResource BorderBrush}" BorderThickness="1">
+                        <Border.Clip>
+                            <EllipseGeometry Center="17,17" RadiusX="17" RadiusY="17" />
+                        </Border.Clip>
+                        <Grid>
+                            <!-- Placeholder initial behind the image (shows until/if avatar loads). -->
+                            <TextBlock Text="{Binding PersonaName, Converter={StaticResource FirstLetter}}"
+                                       Foreground="{StaticResource MutedTextBrush}" FontSize="15"
+                                       FontWeight="SemiBold" HorizontalAlignment="Center"
+                                       VerticalAlignment="Center" />
+                            <Image Stretch="UniformToFill"
+                                   Source="{Binding AvatarUrl, TargetNullValue={x:Null}}"
+                                   Visibility="{Binding AvatarUrl, Converter={StaticResource StringToVis}}" />
+                        </Grid>
+                    </Border>
+                    <StackPanel Margin="8,0,0,0" VerticalAlignment="Center">
+                        <TextBlock Text="{Binding PersonaName}" FontWeight="SemiBold"
+                                   TextTrimming="CharacterEllipsis" MaxWidth="180" />
+                        <TextBlock Text="{Binding SteamIdDisplay}" Style="{StaticResource MutedText}"
+                                   FontSize="11" />
+                    </StackPanel>
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <!-- Main content: lists on the left, editor on the right -->
+        <Grid Grid.Row="1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="2*" />
+                <ColumnDefinition Width="8" />
+                <ColumnDefinition Width="3*" />
+            </Grid.ColumnDefinitions>
+
+            <!-- Left: separate Published / Drafts / Templates tabs -->
+            <Border Grid.Column="0" Background="{StaticResource PanelGradientBrush}"
+                    BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
+                    CornerRadius="3" Padding="8">
+                <TabControl x:Name="LeftTabs" Background="Transparent" BorderThickness="0">
+                    <TabItem Header="Published">
+                        <Grid Margin="4,8,4,4">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="*" />
+                            </Grid.RowDefinitions>
+                            <Grid Margin="0,0,0,8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBox Grid.Column="0" x:Name="PublishedSearchBox"
+                                         Text="{Binding PublishedSearch, UpdateSourceTrigger=PropertyChanged}"
+                                         KeyDown="SearchBox_KeyDown"
+                                         Tag="Search title, tags, description, id..." />
+                                <ToggleButton Grid.Column="1" Content=".*" Margin="6,0,0,0" Padding="8,4"
+                                              IsChecked="{Binding PublishedRegex}" ToolTip="Regex" />
+                                <Button Grid.Column="2" Content="Refresh" Margin="6,0,0,0"
+                                        Command="{Binding RefreshPublishedCommand}" />
+                            </Grid>
+                            <ListBox Grid.Row="1" ItemsSource="{Binding PublishedView}"
+                                     BorderThickness="0" Background="Transparent"
+                                     SelectionChanged="PublishedList_SelectionChanged"
+                                     x:Name="PublishedList">
+                                <ListBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <Grid Margin="2,6">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="64" />
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <Border Width="56" Height="56" CornerRadius="3"
+                                                    Background="{StaticResource PanelAltBrush}">
+                                                <Image Stretch="UniformToFill">
+                                                    <Image.Source>
+                                                        <BitmapImage UriSource="{Binding PreviewUrl}" />
+                                                    </Image.Source>
+                                                </Image>
+                                            </Border>
+                                            <StackPanel Grid.Column="1" Margin="10,0,0,0" VerticalAlignment="Center">
+                                                <TextBlock Text="{Binding Title}" FontWeight="SemiBold"
+                                                           TextTrimming="CharacterEllipsis" />
+                                                <StackPanel Orientation="Horizontal">
+                                                    <TextBlock Text="{Binding Visibility}" Style="{StaticResource MutedText}" />
+                                                    <TextBlock Text="  |  " Style="{StaticResource MutedText}" />
+                                                    <TextBlock Text="{Binding FileSizeDisplay}" Style="{StaticResource MutedText}" />
+                                                </StackPanel>
+                                                <TextBlock Style="{StaticResource MutedText}">
+                                                    <Run Text="Updated " /><Run Text="{Binding Updated, StringFormat='{}{0:yyyy-MM-dd}', Mode=OneWay}" />
+                                                    <Run Text="  -  Published " /><Run Text="{Binding Created, StringFormat='{}{0:yyyy-MM-dd}', Mode=OneWay}" />
+                                                </TextBlock>
+                                            </StackPanel>
+                                            <Button Grid.Column="2" Style="{StaticResource LinkButton}"
+                                                    VerticalAlignment="Center" Margin="6,0,0,0"
+                                                    Click="OpenWorkshopItem_Click"
+                                                    ToolTip="Open this item on Steam (falls back to your browser)." />
+                                        </Grid>
+                                    </DataTemplate>
+                                </ListBox.ItemTemplate>
+                            </ListBox>
+                        </Grid>
+                    </TabItem>
+
+                    <TabItem Header="Drafts" x:Name="DraftsTab">
+                        <Grid Margin="4,8,4,4">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="*" />
+                            </Grid.RowDefinitions>
+                            <Grid Margin="0,0,0,8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBox Grid.Column="0" x:Name="DraftsSearchBox"
+                                         Text="{Binding DraftsSearch, UpdateSourceTrigger=PropertyChanged}"
+                                         KeyDown="SearchBox_KeyDown"
+                                         Tag="Search drafts..." />
+                                <ToggleButton Grid.Column="1" Content=".*" Margin="6,0,0,0" Padding="8,4"
+                                              IsChecked="{Binding DraftsRegex}" ToolTip="Regex" />
+                            </Grid>
+                            <ListBox Grid.Row="1" ItemsSource="{Binding DraftsView}"
+                                 BorderThickness="0" Background="Transparent"
+                                 SelectionChanged="DraftsList_SelectionChanged" x:Name="DraftsList">
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <Grid Margin="2,6">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="48" />
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <Border Width="40" Height="40" CornerRadius="3"
+                                                Background="{StaticResource PanelAltBrush}">
+                                            <Image Stretch="UniformToFill"
+                                                   Source="{Binding ThumbnailSource}"
+                                                   Visibility="{Binding HasThumbnail, Converter={StaticResource BoolToVis}}" />
+                                        </Border>
+                                        <StackPanel Grid.Column="1" Margin="10,0,0,0" VerticalAlignment="Center">
+                                            <TextBlock Text="{Binding Name}" FontWeight="SemiBold"
+                                                       TextTrimming="CharacterEllipsis" />
+                                            <TextBlock Text="{Binding Modified, StringFormat='Modified {0:g}'}"
+                                                       Style="{StaticResource MutedText}" />
+                                        </StackPanel>
+                                        <Button Grid.Column="2" Style="{StaticResource TrashButton}"
+                                                VerticalAlignment="Center" Click="DraftDelete_Click" />
+                                    </Grid>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
+                        </Grid>
+                    </TabItem>
+
+                    <TabItem Header="Templates">
+                        <Grid Margin="4,8,4,4">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="*" />
+                            </Grid.RowDefinitions>
+                            <Grid Margin="0,0,0,8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBox Grid.Column="0" x:Name="TemplatesSearchBox"
+                                         Text="{Binding TemplatesSearch, UpdateSourceTrigger=PropertyChanged}"
+                                         KeyDown="SearchBox_KeyDown"
+                                         Tag="Search templates..." />
+                                <ToggleButton Grid.Column="1" Content=".*" Margin="6,0,0,0" Padding="8,4"
+                                              IsChecked="{Binding TemplatesRegex}" ToolTip="Regex" />
+                            </Grid>
+                            <ListBox Grid.Row="1" ItemsSource="{Binding TemplatesView}"
+                                 BorderThickness="0" Background="Transparent"
+                                 SelectionChanged="TemplatesList_SelectionChanged" x:Name="TemplatesList">
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <Grid Margin="2,6">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="48" />
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <Border Width="40" Height="40" CornerRadius="3"
+                                                Background="{StaticResource PanelAltBrush}">
+                                            <Image Stretch="UniformToFill"
+                                                   Source="{Binding ThumbnailSource}"
+                                                   Visibility="{Binding HasThumbnail, Converter={StaticResource BoolToVis}}" />
+                                        </Border>
+                                        <StackPanel Grid.Column="1" Margin="10,0,0,0" VerticalAlignment="Center">
+                                            <TextBlock Text="{Binding Name}" FontWeight="SemiBold"
+                                                       TextTrimming="CharacterEllipsis" />
+                                            <TextBlock Text="{Binding Description}" Style="{StaticResource MutedText}"
+                                                       TextTrimming="CharacterEllipsis" />
+                                        </StackPanel>
+                                        <Button Grid.Column="2" Content="Use" Padding="8,2" Margin="0,0,4,0"
+                                                VerticalAlignment="Center" Click="TemplateUse_Click"
+                                                ToolTip="Start a new item from this template." />
+                                        <Button Grid.Column="3" Style="{StaticResource TrashButton}"
+                                                VerticalAlignment="Center" Click="TemplateDelete_Click" />
+                                    </Grid>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
+                        </Grid>
+                    </TabItem>
+                </TabControl>
+            </Border>
+
+            <GridSplitter Grid.Column="1" Width="8" HorizontalAlignment="Stretch"
+                          Background="Transparent" />
+
+            <!-- Right: editor -->
+            <Border Grid.Column="2" Background="{StaticResource PanelGradientBrush}"
+                    BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
+                    CornerRadius="3" Padding="16">
+                <Grid>
+                    <TextBlock Text="Select an item, draft, or template - or click New item."
+                               Style="{StaticResource MutedText}"
+                               VerticalAlignment="Center" HorizontalAlignment="Center"
+                               Visibility="{Binding Editor, Converter={StaticResource NullToVis}, ConverterParameter=invert}" />
+
+                    <!-- Whole editor scrolls so nothing (e.g. Visibility) is cut off on a small window. -->
+                    <ScrollViewer DataContext="{Binding Editor}" VerticalScrollBarVisibility="Auto"
+                                  Padding="0,0,8,0"
+                                  Visibility="{Binding DataContext.Editor, RelativeSource={RelativeSource AncestorType=Border}, Converter={StaticResource NullToVis}}">
+                      <StackPanel>
+
+                        <!-- Title (doubles as the template name in template mode), larger font -->
+                        <StackPanel>
+                            <TextBlock Text="Title" Style="{StaticResource MutedText}" Margin="0,0,0,4" />
+                            <TextBox Text="{Binding Title, UpdateSourceTrigger=PropertyChanged}"
+                                     FontSize="18" Padding="10,8" />
+                        </StackPanel>
+
+                        <!-- Description + Change note: side-by-side editors with a drag handle to
+                             resize their height (Crowbar-style). The editors live in a fixed-height
+                             row that the GridSplitter below grows/shrinks. -->
+                        <Grid Margin="0,12,0,0">
+                            <Grid.RowDefinitions>
+                                <RowDefinition x:Name="DescRow" Height="220" MinHeight="90" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+                            <Grid Grid.Row="0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="3*" />
+                                    <ColumnDefinition Width="12" />
+                                    <ColumnDefinition Width="2*" />
+                                </Grid.ColumnDefinitions>
+                                <DockPanel Grid.Column="0">
+                                    <TextBlock DockPanel.Dock="Top" Text="Description" Style="{StaticResource MutedText}" Margin="0,0,0,4" />
+                                    <TextBox Text="{Binding Description, UpdateSourceTrigger=PropertyChanged}"
+                                             AcceptsReturn="True" TextWrapping="Wrap"
+                                             VerticalScrollBarVisibility="Auto" VerticalContentAlignment="Top"
+                                             FontFamily="Consolas" />
+                                </DockPanel>
+                                <DockPanel Grid.Column="2">
+                                    <TextBlock DockPanel.Dock="Top" Text="{Binding ChangeNoteLabel}"
+                                               Style="{StaticResource MutedText}" Margin="0,0,0,4" />
+                                    <TextBox Text="{Binding ChangeNote, UpdateSourceTrigger=PropertyChanged}"
+                                             AcceptsReturn="True" TextWrapping="Wrap"
+                                             VerticalScrollBarVisibility="Auto" VerticalContentAlignment="Top"
+                                             FontFamily="Consolas" />
+                                </DockPanel>
+                            </Grid>
+                            <!-- Drag down/up to resize the description + change note height. -->
+                            <GridSplitter Grid.Row="1" Height="6" HorizontalAlignment="Stretch"
+                                          VerticalAlignment="Center" ResizeBehavior="PreviousAndCurrent"
+                                          ResizeDirection="Rows" Background="Transparent"
+                                          Cursor="SizeNS" Margin="0,2,0,0" />
+                        </Grid>
+
+                        <!-- Content file + Preview image: drag-drop / click-to-browse zones
+                             (also shown in template mode - templates can hold content/preview). -->
+                        <Grid Margin="0,12,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="12" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+
+                            <!-- Content file -->
+                            <StackPanel Grid.Column="0">
+                                <TextBlock Style="{StaticResource MutedText}" Margin="0,0,0,4">
+                                    <Run Text="Content file (" /><Run Text="{Binding ContentFileExtension, Mode=OneWay}" /><Run Text=")" />
+                                </TextBlock>
+                                <Border x:Name="ContentDrop" Height="96" CornerRadius="3" AllowDrop="True"
+                                        Background="{StaticResource BgBrush}" BorderBrush="{StaticResource BorderBrush}"
+                                        BorderThickness="1" Cursor="Hand"
+                                        MouseLeftButtonUp="ContentDrop_Click"
+                                        DragOver="ContentDrop_DragOver" Drop="ContentDrop_Drop">
+                                    <Grid>
+                                        <!-- Empty: no new file chosen and no published file to describe. -->
+                                        <TextBlock Style="{StaticResource MutedText}" TextAlignment="Center"
+                                                   VerticalAlignment="Center" TextWrapping="Wrap" Margin="10"
+                                                   Text="Drop or click to choose content file"
+                                                   Visibility="{Binding ShowContentPlaceholder, Converter={StaticResource BoolToVis}}" />
+                                        <!-- Already-published file (info only; stays unless a new file is chosen). -->
+                                        <StackPanel VerticalAlignment="Center" Margin="10"
+                                                    Visibility="{Binding ShowPublishedContentInfo, Converter={StaticResource BoolToVis}}">
+                                            <TextBlock Text="{Binding PublishedContentInfo}"
+                                                       ToolTip="{Binding PublishedContentInfo}"
+                                                       TextAlignment="Center" TextTrimming="CharacterEllipsis" />
+                                            <TextBlock Text="Currently published - drop a file to replace"
+                                                       Style="{StaticResource MutedText}"
+                                                       TextAlignment="Center" TextWrapping="Wrap" Margin="0,4,0,0" />
+                                        </StackPanel>
+                                        <!-- New file chosen for upload. -->
+                                        <StackPanel VerticalAlignment="Center" Margin="10"
+                                                    Visibility="{Binding HasContentFile, Converter={StaticResource BoolToVis}}">
+                                            <TextBlock Text="{Binding ContentFile, Converter={StaticResource PathEllipsis}}"
+                                                       ToolTip="{Binding ContentFile}"
+                                                       TextAlignment="Center" />
+                                            <TextBlock Text="{Binding ContentFileSizeDisplay}" Style="{StaticResource MutedText}"
+                                                       TextAlignment="Center" Margin="0,4,0,0" />
+                                        </StackPanel>
+                                    </Grid>
+                                </Border>
+                            </StackPanel>
+
+                            <!-- Preview image -->
+                            <StackPanel Grid.Column="2">
+                                <TextBlock Text="Preview image" Style="{StaticResource MutedText}" Margin="0,0,0,4" />
+                                <Border x:Name="PreviewImageDrop" Height="96" CornerRadius="3" AllowDrop="True"
+                                        Background="{StaticResource BgBrush}" BorderBrush="{StaticResource BorderBrush}"
+                                        BorderThickness="1" Cursor="Hand"
+                                        MouseLeftButtonUp="PreviewDrop_Click"
+                                        DragOver="PreviewDrop_DragOver" Drop="PreviewDrop_Drop">
+                                    <Grid>
+                                        <TextBlock Style="{StaticResource MutedText}" TextAlignment="Center"
+                                                   VerticalAlignment="Center" TextWrapping="Wrap" Margin="10"
+                                                   Text="Drop or click to choose image"
+                                                   Visibility="{Binding HasPreviewDisplay, Converter={StaticResource BoolToVis}, ConverterParameter=invert}" />
+                                        <Image Source="{Binding PreviewDisplaySource}" Stretch="Uniform" Margin="4"
+                                               Visibility="{Binding HasPreviewDisplay, Converter={StaticResource BoolToVis}}" />
+                                        <Border VerticalAlignment="Bottom" HorizontalAlignment="Right" Margin="6"
+                                                Background="#AA000000" CornerRadius="3" Padding="6,2"
+                                                Visibility="{Binding HasPreviewImage, Converter={StaticResource BoolToVis}}">
+                                            <TextBlock Text="{Binding PreviewImageSizeDisplay}" Foreground="White" FontSize="11" />
+                                        </Border>
+                                    </Grid>
+                                </Border>
+                            </StackPanel>
+                        </Grid>
+
+                        <!-- Visibility (before tags), with "manage on Steam" shortcuts on the right.
+                             Gallery images/videos and contributors have no SDK API for these legacy
+                             RemoteStorage games, so we deep-link to the official Steam pages instead. -->
+                        <Grid Margin="0,12,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Grid.Column="0">
+                                <TextBlock Text="Visibility" Style="{StaticResource MutedText}" Margin="0,0,0,4" />
+                                <ComboBox ItemsSource="{Binding VisibilityOptions}"
+                                          SelectedItem="{Binding Visibility}" Width="180" HorizontalAlignment="Left" />
+                            </StackPanel>
+
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Bottom"
+                                        HorizontalAlignment="Right"
+                                        Visibility="{Binding IsEditingPublished, Converter={StaticResource BoolToVis}}">
+                                <Button Content="Images &amp; Videos" Click="OpenManagePreviews_Click"
+                                        Margin="0,0,8,0"
+                                        ToolTip="Add/edit gallery images and videos for this item on Steam (no SDK API for these games)." />
+                                <Button Content="Required Items" Click="OpenManageRequiredItems_Click"
+                                        ToolTip="Manage required items for this item on Steam (no SDK API for these games)." />
+                            </StackPanel>
+                        </Grid>
+
+                        <!-- Categorized tags (Crowbar-style columns). No inner scroll - the whole
+                             editor scrolls instead. -->
+                        <DockPanel Margin="0,12,0,0">
+                            <TextBlock DockPanel.Dock="Top" Text="Tags" Style="{StaticResource MutedText}" Margin="0,0,0,6" />
+                                <ItemsControl ItemsSource="{Binding TagGroups}">
+                                    <ItemsControl.ItemsPanel>
+                                        <ItemsPanelTemplate>
+                                            <WrapPanel Orientation="Horizontal" />
+                                        </ItemsPanelTemplate>
+                                    </ItemsControl.ItemsPanel>
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <StackPanel Margin="0,0,24,12" MinWidth="140">
+                                                <TextBlock Text="{Binding Name}" FontWeight="SemiBold"
+                                                           Foreground="{StaticResource MutedTextBrush}" Margin="0,0,0,4" />
+
+                                                <!-- Single-select (e.g. GMod "Type") -->
+                                                <ComboBox Width="160" HorizontalAlignment="Left"
+                                                          ItemsSource="{Binding TypeOptions}"
+                                                          SelectedItem="{Binding SelectedType}"
+                                                          Visibility="{Binding IsSingle, Converter={StaticResource BoolToVis}}" />
+
+                                                <!-- Multi / limited check-list -->
+                                                <StackPanel Visibility="{Binding IsCheckList, Converter={StaticResource BoolToVis}}">
+                                                    <TextBlock Text="{Binding LimitHint}" Style="{StaticResource MutedText}"
+                                                               Margin="0,0,0,4"
+                                                               Visibility="{Binding LimitHint, Converter={StaticResource NullToVis}}" />
+                                                    <ItemsControl ItemsSource="{Binding Tags}">
+                                                        <ItemsControl.ItemTemplate>
+                                                            <DataTemplate>
+                                                                <CheckBox Content="{Binding Name}" IsChecked="{Binding IsSelected}"
+                                                                          IsEnabled="{Binding IsEnabled}"
+                                                                          Foreground="{StaticResource TextBrush}" Margin="0,2" />
+                                                            </DataTemplate>
+                                                        </ItemsControl.ItemTemplate>
+                                                    </ItemsControl>
+                                                </StackPanel>
+
+                                                <!-- Always-set (fixed) -->
+                                                <ItemsControl ItemsSource="{Binding Tags}"
+                                                              Visibility="{Binding IsAlwaysSet, Converter={StaticResource BoolToVis}}">
+                                                    <ItemsControl.ItemTemplate>
+                                                        <DataTemplate>
+                                                            <TextBlock Text="{Binding Name}" Foreground="{StaticResource MutedTextBrush}" Margin="0,2" />
+                                                        </DataTemplate>
+                                                    </ItemsControl.ItemTemplate>
+                                                </ItemsControl>
+                                            </StackPanel>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                        </DockPanel>
+                      </StackPanel>
+                    </ScrollViewer>
+                </Grid>
+            </Border>
+        </Grid>
+
+        <!-- Bottom action bar: indeterminate progress (while busy) on the left, actions on the right. -->
+        <Grid Grid.Row="2" Margin="0,8,0,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+
+            <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="2,0,16,0"
+                        Visibility="{Binding IsBusy, Converter={StaticResource BoolToVis}}">
+                <TextBlock Text="{Binding StatusMessage}" Style="{StaticResource MutedText}"
+                           TextTrimming="CharacterEllipsis" Margin="0,0,0,4" />
+                <ProgressBar IsIndeterminate="True" />
+            </StackPanel>
+
+            <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right">
+                <TextBlock Text="{Binding PublishRequirementsHint}" Style="{StaticResource MutedText}"
+                           VerticalAlignment="Center" Margin="0,0,12,0"
+                           Visibility="{Binding PublishRequirementsHint, Converter={StaticResource StringToVis}}" />
+                <Button Content="New item" Command="{Binding NewItemCommand}" Margin="0,0,8,0" />
+            <Button Content="Save as template" Click="SaveAsTemplate_Click" Margin="0,0,8,0"
+                    ToolTip="Save the current tags / description / visibility as a reusable template."
+                    Visibility="{Binding CanSaveAsTemplate, Converter={StaticResource BoolToVis}}" />
+            <Button Content="{Binding SaveActionText}" Command="{Binding SaveDraftCommand}" Margin="0,0,8,0" />
+            <Button Content="Revert" Command="{Binding RevertCommand}" Margin="0,0,8,0"
+                    ToolTip="Discard this draft and reset to the published item's current state."
+                    Visibility="{Binding CanRevert, Converter={StaticResource BoolToVis}}" />
+            <Button Content="{Binding PrimaryActionText}" Style="{StaticResource AccentButton}"
+                    Command="{Binding PublishCommand}"
+                    Visibility="{Binding ShowItemActions, Converter={StaticResource BoolToVis}}" />
+            </StackPanel>
+        </Grid>
+    </Grid>
+</Window>

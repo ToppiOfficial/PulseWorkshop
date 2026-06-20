@@ -68,10 +68,15 @@ public sealed class SteamHostClient : IAsyncDisposable
         }
         finally
         {
-            _writer.Dispose();
-            _reader.Dispose();
-            await _pipe.DisposeAsync().ConfigureAwait(false);
-            _gate.Dispose();
+            Quietly(() => _writer.Dispose());
+            Quietly(() => _reader.Dispose());
+            try { await _pipe.DisposeAsync().ConfigureAwait(false); } catch { }
+            Quietly(() => _gate.Dispose());
+        }
+
+        static void Quietly(Action dispose)
+        {
+            try { dispose(); } catch { }
         }
     }
 }

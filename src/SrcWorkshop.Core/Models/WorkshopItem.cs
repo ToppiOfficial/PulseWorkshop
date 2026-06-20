@@ -30,6 +30,9 @@ public sealed record WorkshopItem
     /// <summary>Human-readable file size, e.g. "307.9 MB".</summary>
     public string FileSizeDisplay => FormatBytes(FileSizeBytes);
 
+    /// <summary>Cloud filename of the published primary content file (e.g. "mymod.vpk"), if known.</summary>
+    public string? ContentFileName { get; init; }
+
     /// <summary>Public Workshop page, handy for "open in browser" / "open in Steam".</summary>
     public string WorkshopUrl =>
         $"https://steamcommunity.com/sharedfiles/filedetails/?id={PublishedFileId}";

@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <RootNamespace>SrcWorkshop.App</RootNamespace>
+    <!-- Output exe is SrcWorkshop.exe (code namespace stays SrcWorkshop.App). -->
+    <AssemblyName>SrcWorkshop</AssemblyName>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+	<ApplicationIcon>icon\appicon.ico</ApplicationIcon>
+    <!-- x64 only (native Steamworks). Declared here so VS offers only x64, never Any CPU. -->
+    <Platforms>x64</Platforms>
+    <Platform>x64</Platform>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <!-- App version. Shown in the window title at runtime (see MainWindow ctor). -->
+    <Version>0.1.1</Version>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\SrcWorkshop.Core\SrcWorkshop.Core.csproj" />
+  </ItemGroup>
+
+</Project>

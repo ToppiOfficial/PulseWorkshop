@@ -33,6 +33,7 @@ namespace SteamBridge {
         property System::Int64 UpdatedUnix;   // seconds since epoch, 0 if unknown
         property System::Int64 CreatedUnix;   // initial publish time, 0 if unknown
         property System::UInt64 FileSize;     // total size of all files, bytes
+        property System::String^ ContentFileName; // cloud filename of the primary content file
     };
 
     /// <summary>One page of query results.</summary>

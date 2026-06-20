@@ -37,12 +37,14 @@
 # Executables
 *.exe
 *.out
-*.app
 
 # Build directories
 build/
 Build/
 build-*/
+
+# Portable publish output (produced by publish.ps1)
+publish/
 
 # CMake generated files
 CMakeFiles/

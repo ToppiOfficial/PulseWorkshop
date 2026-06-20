@@ -109,6 +109,7 @@ internal sealed class HostServer
                     ? DateTimeOffset.FromUnixTimeSeconds(b.CreatedUnix)
                     : null,
                 FileSizeBytes = b.FileSize,
+                ContentFileName = string.IsNullOrEmpty(b.ContentFileName) ? null : b.ContentFileName,
             });
         }
 

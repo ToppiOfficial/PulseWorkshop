@@ -15,16 +15,29 @@ public sealed class Template
 
     public string Description { get; set; } = string.Empty;
 
+    /// <summary>Optional default change note to pre-fill when an item is created from this template.</summary>
+    public string ChangeNote { get; set; } = string.Empty;
+
     public List<string> Tags { get; set; } = new();
 
     public WorkshopVisibility DefaultVisibility { get; set; } = WorkshopVisibility.Private;
 
-    /// <summary>Produce a new editable item seeded from this template.</summary>
+    /// <summary>Optional local content file (.vpk/.gma) to pre-fill; may be null.</summary>
+    public string? ContentFile { get; set; }
+
+    /// <summary>Optional local preview image to pre-fill; may be null.</summary>
+    public string? PreviewImagePath { get; set; }
+
+    /// <summary>Produce a new editable item seeded from this template (title copied from the name).</summary>
     public ItemEdit ToNewEdit(uint appId) => new()
     {
         AppId = appId,
+        Title = Name,
         Description = Description,
         Tags = new List<string>(Tags),
         Visibility = DefaultVisibility,
+        ContentFile = ContentFile,
+        PreviewImagePath = PreviewImagePath,
+        ChangeNote = ChangeNote,
     };
 }

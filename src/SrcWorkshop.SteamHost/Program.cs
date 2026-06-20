@@ -20,10 +20,11 @@ internal static class Program
             return 2;
         }
 
-        // The Steamworks App ID must be known *before* SteamAPI_Init. Writing steam_appid.txt
-        // next to the exe is the documented way and lets us hook the running client without
-        // relaunching through Steam (and without a separate login).
-        TryWriteAppIdFile(appId);
+        // The Steamworks App ID must be known *before* SteamAPI_Init. Use the SteamAppId /
+        // SteamGameId environment variables (the approach Crowbar's SteamPipe relies on) rather
+        // than a steam_appid.txt next to the exe - a stray steam_appid.txt is known to break
+        // Workshop content uploads (they fail with EResult NoConnection / Fail).
+        SetAppIdEnvironment(appId);
 
         using var workshop = new SteamWorkshop();
         if (!workshop.Init())
@@ -49,17 +50,20 @@ internal static class Program
         }
     }
 
-    private static void TryWriteAppIdFile(uint appId)
+    private static void SetAppIdEnvironment(uint appId)
     {
+        var id = appId.ToString();
+        Environment.SetEnvironmentVariable("SteamAppId", id);
+        Environment.SetEnvironmentVariable("SteamGameId", id);
+
+        // Defensive: if a steam_appid.txt was left next to the exe by an older build, remove it -
+        // it overrides the env var and breaks content uploads.
         try
         {
-            var dir = AppContext.BaseDirectory;
-            File.WriteAllText(Path.Combine(dir, "steam_appid.txt"), appId.ToString(), Encoding.ASCII);
+            var stale = Path.Combine(AppContext.BaseDirectory, "steam_appid.txt");
+            if (File.Exists(stale))
+                File.Delete(stale);
         }
-        catch
-        {
-            // Fall back to the SteamAppId env var if the directory is not writable.
-            Environment.SetEnvironmentVariable("SteamAppId", appId.ToString());
-        }
+        catch { /* best effort */ }
     }
 }

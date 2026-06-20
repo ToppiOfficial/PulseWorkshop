@@ -75,6 +75,11 @@ public sealed class PublishResult
 
     /// <summary>True when Steam requires the user to accept the Workshop legal agreement.</summary>
     public bool NeedsLegalAgreement { get; init; }
+
+    /// <summary>False when the content upload failed (see <see cref="Error"/>).</summary>
+    public bool Success { get; init; } = true;
+
+    public string? Error { get; init; }
 }
 
 /// <summary>Progress of an in-flight upload, polled by the App while publishing.</summary>

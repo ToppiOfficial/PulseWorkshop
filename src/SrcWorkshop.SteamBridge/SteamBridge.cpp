@@ -127,6 +127,14 @@ bool SteamWorkshop::Init()
     if (!SteamAPI_Init())
         return false;
 
+    // Give the client a moment to establish the content/UGC connection before any upload, pumping
+    // callbacks so the connection handshake completes (avoids EResult NoConnection/Fail on upload).
+    for (int i = 0; i < 50; ++i)
+    {
+        SteamAPI_RunCallbacks();
+        ::Sleep(20);
+    }
+
     _initialized = true;
     return true;
 }
@@ -241,108 +249,249 @@ BridgeQueryResult^ SteamWorkshop::QueryUserPublished(int page)
     return result;
 }
 
+namespace {
+
+    // Returns just the file name portion of a path (handles both \ and /).
+    std::string FileNameOf(const std::string& path)
+    {
+        auto slash = path.find_last_of("\\/");
+        return (slash == std::string::npos) ? path : path.substr(slash + 1);
+    }
+
+    // Uploads a local file into Steam Cloud (Remote Storage) under cloudName, streamed in chunks so
+    // large files (hundreds of MB) don't need to fit in memory. Returns false with an error message.
+    bool UploadToCloud(const std::string& localPath, const std::string& cloudName, std::string& error)
+    {
+        ISteamRemoteStorage* rs = SteamRemoteStorage();
+
+        FILE* f = nullptr;
+        if (fopen_s(&f, localPath.c_str(), "rb") != 0 || f == nullptr)
+        {
+            error = "Could not open content file: " + localPath;
+            return false;
+        }
+
+        UGCFileWriteStreamHandle_t stream = rs->FileWriteStreamOpen(cloudName.c_str());
+        if (stream == k_UGCFileStreamHandleInvalid)
+        {
+            fclose(f);
+            error = "FileWriteStreamOpen failed (Steam Cloud may be disabled or out of quota).";
+            return false;
+        }
+
+        const int chunkSize = 1 << 20; // 1 MB
+        std::vector<char> buffer(chunkSize);
+        bool ok = true;
+        size_t read = 0;
+        while ((read = fread(buffer.data(), 1, chunkSize, f)) > 0)
+        {
+            if (!rs->FileWriteStreamWriteChunk(stream, buffer.data(), static_cast<int32>(read)))
+            {
+                ok = false;
+                error = "FileWriteStreamWriteChunk failed (likely Steam Cloud quota exceeded).";
+                break;
+            }
+            SteamAPI_RunCallbacks();
+        }
+        fclose(f);
+
+        if (!ok)
+        {
+            rs->FileWriteStreamClose(stream);
+            return false;
+        }
+
+        if (!rs->FileWriteStreamClose(stream))
+        {
+            error = "FileWriteStreamClose failed.";
+            return false;
+        }
+        return true;
+    }
+
+    void BuildTagArray(System::Collections::Generic::List<System::String^>^ tags,
+                       std::vector<std::string>& store, std::vector<const char*>& ptrs,
+                       SteamParamStringArray_t& out)
+    {
+        if (tags != nullptr)
+        {
+            store.reserve(tags->Count);
+            for each (System::String ^ t in tags)
+                store.push_back(ToNative(t));
+            for (auto& s : store)
+                ptrs.push_back(s.c_str());
+        }
+        out.m_ppStrings = ptrs.empty() ? nullptr : ptrs.data();
+        out.m_nNumStrings = static_cast<int32>(ptrs.size());
+    }
+
+} // anonymous namespace
+
 BridgePublishResult^ SteamWorkshop::Publish(BridgeEdit^ edit)
 {
     BridgePublishResult^ result = gcnew BridgePublishResult();
+    result->Success = false;
     if (!_initialized)
+    {
+        result->Error = "Steam is not initialized.";
         return result;
+    }
 
-    ISteamUGC* ugc = SteamUGC();
+    ISteamRemoteStorage* rs = SteamRemoteStorage();
     AppId_t appId = SteamUtils()->GetAppID();
+
+    // L4D2 / GMod use the legacy Steam Cloud (RemoteStorage) Workshop - there is no upload depot,
+    // so ISteamUGC::SubmitItemUpdate fails with "no workshop depot found". Mirror Crowbar: push the
+    // content (and preview) into Steam Cloud, then publish/update the item referencing them.
+
+    bool hasContent = !String::IsNullOrEmpty(edit->ContentFile);
+    bool hasPreview = !String::IsNullOrEmpty(edit->PreviewImagePath);
+
+    // Cloud staging names. Use the content file's real filename (like Crowbar) so the game gets
+    // the correct addon name/extension.
+    std::string contentCloud = hasContent ? FileNameOf(ToNative(edit->ContentFile)) : "";
+    std::string previewCloud = hasPreview ? ("preview_" + FileNameOf(ToNative(edit->PreviewImagePath))) : "";
+
+    // Quota check before a potentially large upload.
+    if (hasContent)
+    {
+        uint64 totalBytes = 0, availBytes = 0;
+        if (rs->GetQuota(&totalBytes, &availBytes))
+        {
+            FILE* f = nullptr;
+            if (fopen_s(&f, ToNative(edit->ContentFile).c_str(), "rb") == 0 && f)
+            {
+                _fseeki64(f, 0, SEEK_END);
+                long long sz = _ftelli64(f);
+                fclose(f);
+                if (sz > 0 && static_cast<uint64>(sz) > availBytes)
+                {
+                    result->Error = "Steam Cloud quota too low for this content (" +
+                        (static_cast<UInt64>(sz)).ToString() + " bytes needed, " +
+                        (static_cast<UInt64>(availBytes)).ToString() + " available).";
+                    return result;
+                }
+            }
+        }
+
+        std::string err;
+        if (!UploadToCloud(ToNative(edit->ContentFile), contentCloud, err))
+        {
+            result->Error = gcnew String(err.c_str());
+            return result;
+        }
+
+        // Confirm Steam registered the Cloud file before we reference it in the publish.
+        if (!rs->FileExists(contentCloud.c_str()))
+        {
+            result->Error = "Content was written to Steam Cloud but not registered (FileExists=false).";
+            return result;
+        }
+        Console::Error->WriteLine(String::Format("[bridge] content cloud file '{0}' size={1}",
+            gcnew String(contentCloud.c_str()), (Int32)rs->GetFileSize(contentCloud.c_str())));
+    }
+
+    if (hasPreview)
+    {
+        std::string err;
+        if (!UploadToCloud(ToNative(edit->PreviewImagePath), previewCloud, err))
+        {
+            result->Error = "Preview upload failed: " + gcnew String(err.c_str());
+            return result;
+        }
+    }
+
     PublishedFileId_t fileId = static_cast<PublishedFileId_t>(edit->PublishedFileId);
 
-    // Create a new item first if needed.
     if (fileId == 0)
     {
-        SteamAPICall_t createCall = ugc->CreateItem(appId, k_EWorkshopFileTypeCommunity);
-        CreateItemResult_t created;
-        if (!WaitForCall(createCall, created) || created.m_eResult != k_EResultOK)
-            return result;
-
-        fileId = created.m_nPublishedFileId;
-        result->NeedsLegalAgreement = created.m_bUserNeedsToAcceptWorkshopLegalAgreement;
-    }
-
-    result->PublishedFileId = static_cast<UInt64>(fileId);
-
-    UGCUpdateHandle_t update = ugc->StartItemUpdate(appId, fileId);
-    _activeUpdateHandle = update;
-
-    if (!String::IsNullOrEmpty(edit->Title))
-        ugc->SetItemTitle(update, ToNative(edit->Title).c_str());
-
-    if (edit->Description != nullptr)
-        ugc->SetItemDescription(update, ToNative(edit->Description).c_str());
-
-    ugc->SetItemVisibility(update, ToSteamVisibility(edit->Visibility));
-
-    if (edit->Tags != nullptr)
-    {
+        // --- Publish a brand-new item ---
         std::vector<std::string> tagStore;
-        tagStore.reserve(edit->Tags->Count);
-        for each (String ^ t in edit->Tags)
-            tagStore.push_back(ToNative(t));
-
         std::vector<const char*> tagPtrs;
-        tagPtrs.reserve(tagStore.size());
-        for (auto& s : tagStore)
-            tagPtrs.push_back(s.c_str());
-
         SteamParamStringArray_t tags;
-        tags.m_ppStrings = tagPtrs.empty() ? nullptr : tagPtrs.data();
-        tags.m_nNumStrings = static_cast<int32>(tagPtrs.size());
-        ugc->SetItemTags(update, &tags);
+        BuildTagArray(edit->Tags, tagStore, tagPtrs, tags);
+
+        std::string title = ToNative(edit->Title);
+        std::string desc = ToNative(edit->Description);
+
+        SteamAPICall_t call = rs->PublishWorkshopFile(
+            hasContent ? contentCloud.c_str() : nullptr,
+            hasPreview ? previewCloud.c_str() : nullptr,
+            appId, title.c_str(), desc.c_str(),
+            ToSteamVisibility(edit->Visibility),
+            (tags.m_nNumStrings > 0) ? &tags : nullptr,
+            k_EWorkshopFileTypeCommunity);
+
+        RemoteStoragePublishFileResult_t published;
+        if (!WaitForCall(call, published, 1800000))
+        {
+            result->Error = "Timed out publishing the workshop file.";
+            return result;
+        }
+
+        result->PublishedFileId = static_cast<UInt64>(published.m_nPublishedFileId);
+        result->NeedsLegalAgreement = published.m_bUserNeedsToAcceptWorkshopLegalAgreement;
+        result->Success = (published.m_eResult == k_EResultOK);
+        if (!result->Success)
+            result->Error = "Publish failed (EResult " + (static_cast<int>(published.m_eResult)).ToString() + ").";
     }
-
-    if (!String::IsNullOrEmpty(edit->ContentFolder))
-        ugc->SetItemContent(update, ToNative(edit->ContentFolder).c_str());
-
-    if (!String::IsNullOrEmpty(edit->PreviewImagePath))
-        ugc->SetItemPreview(update, ToNative(edit->PreviewImagePath).c_str());
-
-    std::string note = ToNative(edit->ChangeNote);
-    SteamAPICall_t submitCall = ugc->SubmitItemUpdate(update, note.empty() ? nullptr : note.c_str());
-
-    SubmitItemUpdateResult_t submitted;
-    if (WaitForCall(submitCall, submitted, 120000))
+    else
     {
-        if (submitted.m_bUserNeedsToAcceptWorkshopLegalAgreement)
-            result->NeedsLegalAgreement = true;
+        // --- Update an existing item ---
+        result->PublishedFileId = static_cast<UInt64>(fileId);
+        PublishedFileUpdateHandle_t handle = rs->CreatePublishedFileUpdateRequest(fileId);
+
+        if (!String::IsNullOrEmpty(edit->Title))
+            rs->UpdatePublishedFileTitle(handle, ToNative(edit->Title).c_str());
+        if (edit->Description != nullptr)
+            rs->UpdatePublishedFileDescription(handle, ToNative(edit->Description).c_str());
+        rs->UpdatePublishedFileVisibility(handle, ToSteamVisibility(edit->Visibility));
+
+        if (hasContent)
+            rs->UpdatePublishedFileFile(handle, contentCloud.c_str());
+        if (hasPreview)
+            rs->UpdatePublishedFilePreviewFile(handle, previewCloud.c_str());
+
+        std::vector<std::string> tagStore;
+        std::vector<const char*> tagPtrs;
+        SteamParamStringArray_t tags;
+        BuildTagArray(edit->Tags, tagStore, tagPtrs, tags);
+        if (tags.m_nNumStrings > 0)
+            rs->UpdatePublishedFileTags(handle, &tags);
+
+        std::string note = ToNative(edit->ChangeNote);
+        if (!note.empty())
+            rs->UpdatePublishedFileSetChangeDescription(handle, note.c_str());
+
+        SteamAPICall_t call = rs->CommitPublishedFileUpdate(handle);
+        RemoteStorageUpdatePublishedFileResult_t updated;
+        if (!WaitForCall(call, updated, 1800000))
+        {
+            result->Error = "Timed out updating the workshop file.";
+            return result;
+        }
+
+        result->NeedsLegalAgreement = updated.m_bUserNeedsToAcceptWorkshopLegalAgreement;
+        result->Success = (updated.m_eResult == k_EResultOK);
+        if (!result->Success)
+            result->Error = "Update failed (EResult " + (static_cast<int>(updated.m_eResult)).ToString() + ").";
     }
 
-    _activeUpdateHandle = 0;
+    // NOTE: do NOT FileDelete the Cloud staging files here. Steam promotes them to the item's UGC
+    // copy asynchronously after publish; deleting immediately can race that promotion and leave the
+    // item with 0 bytes of content. Crowbar likewise leaves them. (A later cleanup pass could remove
+    // stale staging files once promotion is confirmed.)
+
     return result;
 }
 
 BridgeProgress^ SteamWorkshop::GetProgress()
 {
+    // The RemoteStorage upload runs synchronously inside Publish(), so there is no separate
+    // in-flight progress to poll. Reported as done; the App shows status via the publish result.
     BridgeProgress^ progress = gcnew BridgeProgress();
     progress->Status = "idle";
-
-    if (!_initialized || _activeUpdateHandle == 0)
-    {
-        progress->Done = true;
-        return progress;
-    }
-
-    uint64 processed = 0, total = 0;
-    EItemUpdateStatus status = SteamUGC()->GetItemUpdateProgress(
-        _activeUpdateHandle, &processed, &total);
-
-    progress->BytesProcessed = processed;
-    progress->BytesTotal = total;
-    progress->Done = (status == k_EItemUpdateStatusInvalid);
-
-    switch (status)
-    {
-    case k_EItemUpdateStatusPreparingConfig:  progress->Status = "preparing"; break;
-    case k_EItemUpdateStatusPreparingContent: progress->Status = "preparing content"; break;
-    case k_EItemUpdateStatusUploadingContent: progress->Status = "uploading content"; break;
-    case k_EItemUpdateStatusUploadingPreviewFile: progress->Status = "uploading preview"; break;
-    case k_EItemUpdateStatusCommittingChanges: progress->Status = "committing"; break;
-    default: progress->Status = "done"; break;
-    }
-
+    progress->Done = true;
     return progress;
 }
 

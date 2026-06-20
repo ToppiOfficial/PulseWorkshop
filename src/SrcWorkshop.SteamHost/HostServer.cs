@@ -120,55 +120,57 @@ internal sealed class HostServer
         };
     }
 
+    private static readonly string LogPath = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "SrcWorkshop", "host.log");
+
+    private static void Log(string message)
+    {
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(LogPath)!);
+            File.AppendAllText(LogPath, $"[{DateTime.Now:HH:mm:ss}] {message}{Environment.NewLine}");
+        }
+        catch { /* logging is best-effort */ }
+    }
+
     private PublishResult HandlePublish(string? payloadJson)
     {
         var edit = PipeJson.Deserialize<ItemEdit>(payloadJson ?? "null")
             ?? throw new InvalidOperationException("Missing publish payload.");
 
-        // ISteamUGC::SetItemContent wants a FOLDER, but the user picks a single packed file
-        // (.vpk / .gma). Stage that file into a temp folder and point Steam at the folder.
-        string? stagedFolder = StageContentFile(edit.ContentFile);
-        try
+        Log($"Publish: id={edit.PublishedFileId?.ToString() ?? "new"} title='{edit.Title}' " +
+            $"contentFile='{edit.ContentFile}' contentExists={(!string.IsNullOrWhiteSpace(edit.ContentFile) && File.Exists(edit.ContentFile))} " +
+            $"preview='{edit.PreviewImagePath}'");
+
+        // The bridge uploads the content/preview to Steam Cloud (RemoteStorage) directly from these
+        // file paths - no folder staging needed. A content file is required for a brand-new item.
+        if (!string.IsNullOrWhiteSpace(edit.ContentFile) && !File.Exists(edit.ContentFile))
+            return new PublishResult { Success = false, Error = $"Content file not found: {edit.ContentFile}" };
+
+        if (string.IsNullOrWhiteSpace(edit.ContentFile) && edit.PublishedFileId is null)
+            return new PublishResult { Success = false, Error = "A content file is required to publish a new item." };
+
+        var bridgeEdit = new BridgeEdit
         {
-            var bridgeEdit = new BridgeEdit
-            {
-                PublishedFileId = edit.PublishedFileId ?? 0,
-                Title = edit.Title,
-                Description = edit.Description,
-                Tags = edit.Tags.ToList(),
-                Visibility = (BridgeVisibility)(int)edit.Visibility,
-                ContentFolder = stagedFolder,
-                PreviewImagePath = edit.PreviewImagePath,
-                ChangeNote = edit.ChangeNote,
-            };
+            PublishedFileId = edit.PublishedFileId ?? 0,
+            Title = edit.Title,
+            Description = edit.Description,
+            Tags = edit.Tags.ToList(),
+            Visibility = (BridgeVisibility)(int)edit.Visibility,
+            ContentFile = edit.ContentFile,
+            PreviewImagePath = edit.PreviewImagePath,
+            ChangeNote = edit.ChangeNote,
+        };
 
-            var result = _workshop.Publish(bridgeEdit);
-            return new PublishResult
-            {
-                PublishedFileId = result.PublishedFileId,
-                NeedsLegalAgreement = result.NeedsLegalAgreement,
-            };
-        }
-        finally
+        var result = _workshop.Publish(bridgeEdit);
+        Log($"Publish result: id={result.PublishedFileId} success={result.Success} error='{result.Error}'");
+        return new PublishResult
         {
-            if (stagedFolder is not null)
-            {
-                try { Directory.Delete(stagedFolder, recursive: true); } catch { /* best effort */ }
-            }
-        }
-    }
-
-    /// <summary>Copies a single content file into a fresh temp folder and returns that folder,
-    /// or null when no content file was supplied (e.g. metadata-only edits).</summary>
-    private static string? StageContentFile(string? contentFile)
-    {
-        if (string.IsNullOrWhiteSpace(contentFile) || !File.Exists(contentFile))
-            return null;
-
-        var dir = Path.Combine(Path.GetTempPath(), "SrcWorkshop_content_" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(dir);
-        File.Copy(contentFile, Path.Combine(dir, Path.GetFileName(contentFile)), overwrite: true);
-        return dir;
+            PublishedFileId = result.PublishedFileId,
+            NeedsLegalAgreement = result.NeedsLegalAgreement,
+            Success = result.Success,
+            Error = result.Error,
+        };
     }
 
     private ProgressResult HandleProgress()

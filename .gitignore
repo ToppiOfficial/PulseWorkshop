@@ -74,8 +74,20 @@ obj/
 .vs/
 *.user
 *.suo
+x64/
+
+# MSBuild / C++ incremental build artifacts
+*.tlog
+*.lastbuildstate
+*.sourcelink.json
+*.vcxproj.FileListAbsolute.txt
 
 # Steamworks SDK (not redistributable) and per-app testing aid
 external/steamworks_sdk/public/
 external/steamworks_sdk/redistributable_bin/
 steam_appid.txt
+
+
+# CLAUDE
+CLAUDE.md
+claude/

@@ -1,5 +1,0 @@
-D:\Development\github-repos\srcworkshop\src\SrcWorkshop.SteamBridge\x64\Debug\Ijwhost.dll
-D:\Development\github-repos\srcworkshop\src\SrcWorkshop.SteamBridge\x64\Debug\SrcWorkshop.SteamBridge.deps.json
-D:\Development\github-repos\srcworkshop\src\SrcWorkshop.SteamBridge\x64\Debug\SrcWorkshop.SteamBridge.runtimeconfig.json
-D:\Development\github-repos\srcworkshop\src\SrcWorkshop.SteamBridge\SrcWorks.B2C3D4E5\x64\Debug\SrcWorkshop.SteamBridge.sourcelink.json
-D:\Development\github-repos\srcworkshop\src\SrcWorkshop.SteamBridge\SrcWorks.B2C3D4E5\x64\Debug\SrcWorkshop.SteamBridge.genruntimeconfig.cache

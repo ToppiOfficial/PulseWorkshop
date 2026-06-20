@@ -49,6 +49,8 @@ namespace SteamBridge {
     public:
         property System::UInt64 PublishedFileId;
         property bool NeedsLegalAgreement;
+        property bool Success;
+        property System::String^ Error;  // populated when Success is false
     };
 
     /// <summary>The fields to write when creating or updating an item.</summary>
@@ -60,8 +62,8 @@ namespace SteamBridge {
         property System::String^ Description;
         property System::Collections::Generic::List<System::String^>^ Tags;
         property BridgeVisibility Visibility;
-        property System::String^ ContentFolder;    // absolute path; may be null
-        property System::String^ PreviewImagePath; // absolute path; may be null
+        property System::String^ ContentFile;       // absolute path to the .vpk/.gma; may be null
+        property System::String^ PreviewImagePath;  // absolute path; may be null
         property System::String^ ChangeNote;
     };
 

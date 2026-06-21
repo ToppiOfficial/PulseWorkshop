@@ -1,7 +1,7 @@
 using System.Net.Http;
 using System.Xml.Linq;
 
-namespace SrcWorkshop.App.Services;
+namespace PulseWorkshop.App.Services;
 
 /// <summary>
 /// Resolves public Steam profile bits we can't get cheaply from the bridge. The avatar image URL

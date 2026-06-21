@@ -1,6 +1,6 @@
 using System.IO;
 
-namespace SrcWorkshop.App.Services;
+namespace PulseWorkshop.App.Services;
 
 /// <summary>Resolves the path to the SteamHost helper executable next to the App.</summary>
 public static class HostLocator
@@ -19,7 +19,7 @@ public static class HostLocator
         if (File.Exists(packaged))
             return packaged;
 
-        // Dev fallback: ...\SrcWorkshop.App\bin\<plat>\<cfg>\net10.0-windows\ ->
+        // Dev fallback: ...\PulseWorkshop.App\bin\<plat>\<cfg>\net10.0-windows\ ->
         //               ...\SrcWorkshop.SteamHost\bin\<plat>\<cfg>\net10.0\win-x64\
         foreach (var devCandidate in EnumerateDevCandidates(baseDir))
         {

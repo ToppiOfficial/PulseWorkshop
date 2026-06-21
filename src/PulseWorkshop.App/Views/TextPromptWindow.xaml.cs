@@ -1,6 +1,6 @@
 using System.Windows;
 
-namespace SrcWorkshop.App.Views;
+namespace PulseWorkshop.App.Views;
 
 /// <summary>Small modal prompt for a single line of text (e.g. naming a template).</summary>
 public partial class TextPromptWindow : Window

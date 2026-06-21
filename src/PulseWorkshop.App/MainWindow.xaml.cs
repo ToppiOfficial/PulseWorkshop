@@ -1,13 +1,15 @@
 using System.Diagnostics;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Interop;
 using Microsoft.Win32;
-using SrcWorkshop.App.ViewModels;
+using PulseWorkshop.App.ViewModels;
 using SrcWorkshop.Core.Models;
 
-namespace SrcWorkshop.App;
+namespace PulseWorkshop.App;
 
 public partial class MainWindow : Window
 {
@@ -17,9 +19,35 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
         DataContext = _vm;
-        Title = $"SrcWorkshop - Steam Workshop Manager (v{AppVersion})";
+        Title = $"PulseWorkshop - Steam Workshop Manager (v{AppVersion})";
         _vm.NavigateToDrafts += () => DraftsTab.IsSelected = true;
         Closed += async (_, _) => await _vm.DisposeAsync();
+    }
+
+    /// <summary>
+    /// Darken the OS title bar to match the app's dark-grey theme. WPF doesn't theme the
+    /// non-client area, so we ask DWM to use the immersive dark title bar once the HWND exists.
+    /// </summary>
+    protected override void OnSourceInitialized(EventArgs e)
+    {
+        base.OnSourceInitialized(e);
+        ApplyDarkTitleBar();
+    }
+
+    // DWM window attribute that toggles the dark (immersive) title bar on Windows 10 20H1+ / 11.
+    private const int DWMWA_USE_IMMERSIVE_DARK_MODE = 20;
+
+    [DllImport("dwmapi.dll", PreserveSig = true)]
+    private static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int value, int size);
+
+    private void ApplyDarkTitleBar()
+    {
+        var hwnd = new WindowInteropHelper(this).Handle;
+        if (hwnd == IntPtr.Zero)
+            return;
+
+        int useDark = 1;
+        DwmSetWindowAttribute(hwnd, DWMWA_USE_IMMERSIVE_DARK_MODE, ref useDark, sizeof(int));
     }
 
     /// <summary>The app version (from the assembly's <see cref="Version"/> in the .csproj), e.g. "0.1.0".</summary>

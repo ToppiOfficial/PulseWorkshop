@@ -4,15 +4,15 @@ using System.IO;
 using System.Windows;
 using System.Windows.Data;
 using System.Windows.Threading;
-using SrcWorkshop.App.Mvvm;
-using SrcWorkshop.App.Services;
+using PulseWorkshop.App.Mvvm;
+using PulseWorkshop.App.Services;
 using SrcWorkshop.Core.Games;
 using SrcWorkshop.Core.Ipc;
 using SrcWorkshop.Core.Models;
 using SrcWorkshop.Core.Services;
 using SrcWorkshop.Core.Storage;
 
-namespace SrcWorkshop.App.ViewModels;
+namespace PulseWorkshop.App.ViewModels;
 
 /// <summary>
 /// Top-level view model: game picker, connection status, and the three separate lists

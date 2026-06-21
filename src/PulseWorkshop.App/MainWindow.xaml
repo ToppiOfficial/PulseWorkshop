@@ -1,9 +1,9 @@
-<Window x:Class="SrcWorkshop.App.MainWindow"
+<Window x:Class="PulseWorkshop.App.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        xmlns:vm="clr-namespace:SrcWorkshop.App.ViewModels"
-        xmlns:local="clr-namespace:SrcWorkshop.App"
-        Title="SrcWorkshop - Steam Workshop Manager"
+        xmlns:vm="clr-namespace:PulseWorkshop.App.ViewModels"
+        xmlns:local="clr-namespace:PulseWorkshop.App"
+        Title="PulseWorkshop - Steam Workshop Manager"
         Height="720" Width="1180" MinHeight="560" MinWidth="900"
         Background="{StaticResource BgBrush}"
         WindowStartupLocation="CenterScreen">

@@ -1,7 +1,7 @@
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
 
-namespace SrcWorkshop.App.Mvvm;
+namespace PulseWorkshop.App.Mvvm;
 
 /// <summary>Minimal INotifyPropertyChanged base for view models.</summary>
 public abstract class ObservableObject : INotifyPropertyChanged

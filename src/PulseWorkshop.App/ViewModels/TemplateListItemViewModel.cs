@@ -1,7 +1,7 @@
 using System.IO;
 using SrcWorkshop.Core.Models;
 
-namespace SrcWorkshop.App.ViewModels;
+namespace PulseWorkshop.App.ViewModels;
 
 /// <summary>
 /// A template as shown in the Templates list, with a resolved thumbnail from its local preview

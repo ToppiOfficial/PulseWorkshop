@@ -5,7 +5,7 @@
 
 .DESCRIPTION
     Produces:
-        publish\SrcWorkshop.exe              - the WPF UI (run this)
+        publish\PulseWorkshop.exe            - the WPF UI (run this)
         publish\SrcWorkshop.SteamHost.exe    - per-game Steam host (launched by the App)
         + SrcWorkshop.SteamBridge.dll, steam_api64.dll, Ijwhost.dll and app DLLs
 
@@ -53,7 +53,7 @@ if (-not (Test-Path $steamDll)) {
 }
 
 $sln      = Join-Path $PSScriptRoot 'SrcWorkshop.sln'
-$appProj  = Join-Path $PSScriptRoot 'src\SrcWorkshop.App\SrcWorkshop.App.csproj'
+$appProj  = Join-Path $PSScriptRoot 'src\PulseWorkshop.App\PulseWorkshop.App.csproj'
 $hostProj = Join-Path $PSScriptRoot 'src\SrcWorkshop.SteamHost\SrcWorkshop.SteamHost.csproj'
 
 # --- Clean output ------------------------------------------------------------
@@ -81,13 +81,13 @@ if ($LASTEXITCODE -ne 0) { Fail "App publish failed ($LASTEXITCODE)." }
 Get-ChildItem $OutDir -Include *.pdb -Recurse | Remove-Item -Force -ErrorAction SilentlyContinue
 
 # --- Sanity-check the drop has everything it needs ---------------------------
-$required = 'SrcWorkshop.exe', 'SrcWorkshop.SteamHost.exe', 'SrcWorkshop.SteamBridge.dll',
+$required = 'PulseWorkshop.exe', 'SrcWorkshop.SteamHost.exe', 'SrcWorkshop.SteamBridge.dll',
            'steam_api64.dll', 'Ijwhost.dll'
 $missing = $required | Where-Object { -not (Test-Path (Join-Path $OutDir $_)) }
 if ($missing) { Fail "Publish is missing required files: $($missing -join ', ')" }
 
 # --- Summary -----------------------------------------------------------------
 Write-Host "`n=== Portable build ready: $OutDir ===" -ForegroundColor Green
-Write-Host "Run: $(Join-Path $OutDir 'SrcWorkshop.exe')  (needs .NET 10 Desktop Runtime + Steam)" -ForegroundColor Green
+Write-Host "Run: $(Join-Path $OutDir 'PulseWorkshop.exe')  (needs .NET 10 Desktop Runtime + Steam)" -ForegroundColor Green
 Get-ChildItem $OutDir -File | Sort-Object Name |
     Format-Table Name, @{N='KB';E={[math]::Round($_.Length/1KB,1)}} -AutoSize

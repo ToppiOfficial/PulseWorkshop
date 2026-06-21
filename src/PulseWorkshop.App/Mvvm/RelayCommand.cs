@@ -1,6 +1,6 @@
 using System.Windows.Input;
 
-namespace SrcWorkshop.App.Mvvm;
+namespace PulseWorkshop.App.Mvvm;
 
 /// <summary>Simple ICommand for synchronous actions.</summary>
 public sealed class RelayCommand : ICommand

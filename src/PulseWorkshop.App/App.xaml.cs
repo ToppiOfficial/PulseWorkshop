@@ -1,6 +1,6 @@
 using System.Windows;
 
-namespace SrcWorkshop.App;
+namespace PulseWorkshop.App;
 
 public partial class App : Application
 {

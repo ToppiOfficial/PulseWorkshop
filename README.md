@@ -16,7 +16,7 @@ the currently logged-in account, with Steam running.)
 
 ```
 SrcWorkshop.sln
-├── SrcWorkshop.App         WPF (net10.0-windows)   UI: game picker, published/drafts/templates lists, item editor
+├── PulseWorkshop.App       WPF (net10.0-windows)   UI: game picker, published/drafts/templates lists, item editor
 ├── SrcWorkshop.Core        classlib (net10.0)      models, game config, pipe client, draft/template stores, services
 ├── SrcWorkshop.SteamHost   console exe (net10.0)   owns the Steam session for one App ID; named-pipe JSON server
 └── SrcWorkshop.SteamBridge C++/CLI (net10.0)       thin managed wrapper over steam_api64.dll (Steamworks SDK)
@@ -72,7 +72,7 @@ C++/CLI `SteamBridge` needs MSBuild (the `dotnet` CLI cannot evaluate `$(VCTarge
 ## Publishing
 
 The repo ships **Folder publish profiles** that drop the App and the SteamHost into a single
-shared `publish/` folder, ready to run side by side. The App is published as `SrcWorkshop.exe`,
+shared `publish/` folder, ready to run side by side. The App is published as `PulseWorkshop.exe`,
 with `SrcWorkshop.SteamHost.exe` next to it (the App locates the host by that filename).
 
 **Easiest - one command** (builds the solution and publishes both projects into `publish/`):
@@ -85,7 +85,7 @@ with `SrcWorkshop.SteamHost.exe` next to it (the App locates the host by that fi
 
 1. **Build the solution once** (Release | x64) so the C++/CLI `SteamBridge` is built.
 2. Right-click **`SrcWorkshop.SteamHost`** -> **Publish** -> **FolderProfile**.
-3. Right-click **`SrcWorkshop.App`** -> **Publish** -> **FolderProfile**.
+3. Right-click **`PulseWorkshop.App`** -> **Publish** -> **FolderProfile**.
 
 Both projects publish into `publish/` (the App needs `SrcWorkshop.SteamHost.exe` next to it).
 The profiles are **framework-dependent** (no bundled runtime, no single-file), so the target
@@ -97,5 +97,5 @@ machine needs the **.NET 10 Desktop Runtime** installed - see [Prerequisites](#t
 
 ## Running
 
-Have **Steam running** and own the target game. Launch `SrcWorkshop.App`, pick a game, and
+Have **Steam running** and own the target game. Launch `PulseWorkshop.exe`, pick a game, and
 your published Workshop items load — no extra login prompt.

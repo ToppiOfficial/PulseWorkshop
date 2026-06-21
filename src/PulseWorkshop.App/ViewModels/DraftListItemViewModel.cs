@@ -1,7 +1,7 @@
 using System.IO;
 using SrcWorkshop.Core.Models;
 
-namespace SrcWorkshop.App.ViewModels;
+namespace PulseWorkshop.App.ViewModels;
 
 /// <summary>
 /// A draft as shown in the Drafts list, with a resolved thumbnail: the draft's own local preview

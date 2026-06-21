@@ -1,10 +1,10 @@
 using System.Collections.ObjectModel;
 using System.IO;
-using SrcWorkshop.App.Mvvm;
+using PulseWorkshop.App.Mvvm;
 using SrcWorkshop.Core.Games;
 using SrcWorkshop.Core.Models;
 
-namespace SrcWorkshop.App.ViewModels;
+namespace PulseWorkshop.App.ViewModels;
 
 /// <summary>
 /// Editable view of a single item (new, draft, or existing published item): title, description,

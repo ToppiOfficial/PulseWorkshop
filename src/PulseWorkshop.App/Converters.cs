@@ -2,7 +2,7 @@ using System.Globalization;
 using System.Windows;
 using System.Windows.Data;
 
-namespace SrcWorkshop.App;
+namespace PulseWorkshop.App;
 
 /// <summary>Non-empty string -> Visible, null/empty/whitespace -> Collapsed.</summary>
 public sealed class StringToVisibilityConverter : IValueConverter

@@ -1,6 +1,6 @@
 using System.Text.RegularExpressions;
 
-namespace SrcWorkshop.App.ViewModels;
+namespace PulseWorkshop.App.ViewModels;
 
 /// <summary>
 /// Reusable text filter for the Published / Drafts / Templates lists. Plain case-insensitive

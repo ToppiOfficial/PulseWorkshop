@@ -1,4 +1,4 @@
-<Window x:Class="SrcWorkshop.App.Views.TextPromptWindow"
+<Window x:Class="PulseWorkshop.App.Views.TextPromptWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="{Binding Title, RelativeSource={RelativeSource Self}}"

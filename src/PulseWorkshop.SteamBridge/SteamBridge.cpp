@@ -262,7 +262,10 @@ namespace {
 
     // Uploads a local file into Steam Cloud (Remote Storage) under cloudName, streamed in chunks so
     // large files (hundreds of MB) don't need to fit in memory. Returns false with an error message.
-    bool UploadToCloud(const std::string& localPath, const std::string& cloudName, std::string& error)
+    // Per-chunk progress is written to stderr (label distinguishes "content" / "preview") so the App
+    // can surface a live upload log instead of a static "uploading..." message.
+    bool UploadToCloud(const std::string& localPath, const std::string& cloudName,
+                       const std::string& label, std::string& error)
     {
         ISteamRemoteStorage* rs = SteamRemoteStorage();
 
@@ -273,6 +276,13 @@ namespace {
             return false;
         }
 
+        // Total size up front so progress can be reported as a percentage.
+        _fseeki64(f, 0, SEEK_END);
+        long long totalBytes = _ftelli64(f);
+        _fseeki64(f, 0, SEEK_SET);
+        if (totalBytes < 0)
+            totalBytes = 0;
+
         UGCFileWriteStreamHandle_t stream = rs->FileWriteStreamOpen(cloudName.c_str());
         if (stream == k_UGCFileStreamHandleInvalid)
         {
@@ -281,10 +291,17 @@ namespace {
             return false;
         }
 
+        const double mb = 1024.0 * 1024.0;
+        String^ tag = gcnew String(label.c_str());
+        Console::Error->WriteLine(String::Format(
+            "[upload] {0}: uploading {1:0.0} MB to Steam Cloud...", tag, totalBytes / mb));
+
         const int chunkSize = 1 << 20; // 1 MB
         std::vector<char> buffer(chunkSize);
         bool ok = true;
         size_t read = 0;
+        long long written = 0;
+        int lastPercent = -1;
         while ((read = fread(buffer.data(), 1, chunkSize, f)) > 0)
         {
             if (!rs->FileWriteStreamWriteChunk(stream, buffer.data(), static_cast<int32>(read)))
@@ -294,6 +311,15 @@ namespace {
                 break;
             }
             SteamAPI_RunCallbacks();
+
+            written += static_cast<long long>(read);
+            int percent = totalBytes > 0 ? static_cast<int>((written * 100) / totalBytes) : 100;
+            if (percent != lastPercent)
+            {
+                lastPercent = percent;
+                Console::Error->WriteLine(String::Format(
+                    "[upload] {0}: {1:0.0} / {2:0.0} MB ({3}%)", tag, written / mb, totalBytes / mb, percent));
+            }
         }
         fclose(f);
 
@@ -308,6 +334,7 @@ namespace {
             error = "FileWriteStreamClose failed.";
             return false;
         }
+        Console::Error->WriteLine(String::Format("[upload] {0}: upload complete.", tag));
         return true;
     }
 
@@ -377,7 +404,7 @@ BridgePublishResult^ SteamWorkshop::Publish(BridgeEdit^ edit)
         }
 
         std::string err;
-        if (!UploadToCloud(ToNative(edit->ContentFile), contentCloud, err))
+        if (!UploadToCloud(ToNative(edit->ContentFile), contentCloud, "content", err))
         {
             result->Error = gcnew String(err.c_str());
             return result;
@@ -396,7 +423,7 @@ BridgePublishResult^ SteamWorkshop::Publish(BridgeEdit^ edit)
     if (hasPreview)
     {
         std::string err;
-        if (!UploadToCloud(ToNative(edit->PreviewImagePath), previewCloud, err))
+        if (!UploadToCloud(ToNative(edit->PreviewImagePath), previewCloud, "preview", err))
         {
             result->Error = "Preview upload failed: " + gcnew String(err.c_str());
             return result;
@@ -408,6 +435,7 @@ BridgePublishResult^ SteamWorkshop::Publish(BridgeEdit^ edit)
     if (fileId == 0)
     {
         // --- Publish a brand-new item ---
+        Console::Error->WriteLine("[publish] creating new workshop item...");
         std::vector<std::string> tagStore;
         std::vector<const char*> tagPtrs;
         SteamParamStringArray_t tags;
@@ -440,6 +468,8 @@ BridgePublishResult^ SteamWorkshop::Publish(BridgeEdit^ edit)
     else
     {
         // --- Update an existing item ---
+        Console::Error->WriteLine(String::Format(
+            "[publish] committing update to item {0}...", static_cast<UInt64>(fileId)));
         result->PublishedFileId = static_cast<UInt64>(fileId);
         PublishedFileUpdateHandle_t handle = rs->CreatePublishedFileUpdateRequest(fileId);
 

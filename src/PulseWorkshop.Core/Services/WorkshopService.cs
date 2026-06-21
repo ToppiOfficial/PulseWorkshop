@@ -16,6 +16,16 @@ public sealed class WorkshopService : IAsyncDisposable
 
     public uint? ActiveAppId => _hosts.ActiveAppId;
 
+    /// <summary>
+    /// Raised for each line the Steam host emits (host log + bridge upload progress), so the App can
+    /// show a live console. Fires on a background thread - marshal to the UI thread before binding.
+    /// </summary>
+    public event Action<string>? HostOutput
+    {
+        add => _hosts.HostOutput += value;
+        remove => _hosts.HostOutput -= value;
+    }
+
     /// <summary>Selects the active game, (re)launching the Steam host as needed.</summary>
     public Task SelectGameAsync(uint appId, CancellationToken ct = default) =>
         _hosts.SwitchToAsync(appId, ct);

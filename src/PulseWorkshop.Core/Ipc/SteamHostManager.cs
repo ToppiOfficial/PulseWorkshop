@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text;
 
 namespace PulseWorkshop.Core.Ipc;
 
@@ -17,6 +18,12 @@ public sealed class SteamHostManager : IAsyncDisposable
     private SteamHostClient? _client;
 
     public uint? ActiveAppId { get; private set; }
+
+    /// <summary>
+    /// Raised for every line the host process writes to stdout/stderr (host log + C++ bridge upload
+    /// progress). Used by the App to drive a live console. Fires on a thread-pool thread.
+    /// </summary>
+    public event Action<string>? HostOutput;
 
     public SteamHostManager(string hostExePath) => _hostExePath = hostExePath;
 
@@ -43,14 +50,31 @@ public sealed class SteamHostManager : IAsyncDisposable
             FileName = _hostExePath,
             UseShellExecute = false,
             CreateNoWindow = true,
+            // Capture the host's log/progress output (it uses the named pipe for IPC, so redirecting
+            // stdio doesn't interfere) and forward it to subscribers for the App's live console.
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            StandardOutputEncoding = Encoding.UTF8,
+            StandardErrorEncoding = Encoding.UTF8,
         };
         psi.ArgumentList.Add(appId.ToString());
 
         _process = Process.Start(psi)
             ?? throw new InvalidOperationException("Failed to start SteamHost process.");
 
+        _process.OutputDataReceived += OnHostLine;
+        _process.ErrorDataReceived += OnHostLine;
+        _process.BeginOutputReadLine();
+        _process.BeginErrorReadLine();
+
         _client = await SteamHostClient.ConnectAsync(appId, ConnectTimeout, ct).ConfigureAwait(false);
         ActiveAppId = appId;
+    }
+
+    private void OnHostLine(object sender, DataReceivedEventArgs e)
+    {
+        if (e.Data is not null)
+            HostOutput?.Invoke(e.Data);
     }
 
     public async Task StopAsync()

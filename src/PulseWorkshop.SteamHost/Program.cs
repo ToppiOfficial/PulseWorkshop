@@ -14,6 +14,10 @@ internal static class Program
 {
     private static int Main(string[] args)
     {
+        // Log lines (host + C++ bridge) are written to stderr and captured by the App for its live
+        // console; force UTF-8 so item titles / file paths with non-ASCII characters survive the pipe.
+        try { Console.OutputEncoding = Encoding.UTF8; } catch { /* no console attached */ }
+
         if (args.Length < 1 || !uint.TryParse(args[0], out var appId))
         {
             Console.Error.WriteLine("Usage: PulseWorkshop.SteamHost <appId>");

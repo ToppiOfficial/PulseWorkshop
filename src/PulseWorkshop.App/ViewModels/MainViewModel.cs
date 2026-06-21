@@ -56,6 +56,11 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         SaveDraftCommand = new RelayCommand(SaveDraft, () => Editor is not null);
         RevertCommand = new RelayCommand(Revert, () => CanRevert);
         PublishCommand = new AsyncRelayCommand(PublishAsync, CanPublish);
+        ToggleConsoleCommand = new RelayCommand(() => IsConsoleVisible = !IsConsoleVisible);
+        ClearConsoleCommand = new RelayCommand(ClearConsole);
+
+        // Stream the Steam host's log + upload progress into the live console panel.
+        _service.HostOutput += OnHostOutput;
 
         // Live-filtered views over each list.
         PublishedView = CollectionViewSource.GetDefaultView(PublishedItems);
@@ -89,6 +94,8 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     public RelayCommand SaveDraftCommand { get; }
     public RelayCommand RevertCommand { get; }
     public AsyncRelayCommand PublishCommand { get; }
+    public RelayCommand ToggleConsoleCommand { get; }
+    public RelayCommand ClearConsoleCommand { get; }
 
     public GameConfig SelectedGame
     {
@@ -112,6 +119,44 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     {
         get => _statusMessage;
         private set => SetField(ref _statusMessage, value);
+    }
+
+    // --- Live console (streams the Steam host's log + upload progress) ----------------------
+
+    private const int MaxConsoleLines = 1000;
+    private bool _isConsoleVisible;
+
+    /// <summary>Lines shown in the bottom console drawer, oldest first.</summary>
+    public ObservableCollection<string> ConsoleLines { get; } = new();
+
+    /// <summary>Whether the console drawer is expanded.</summary>
+    public bool IsConsoleVisible
+    {
+        get => _isConsoleVisible;
+        set => SetField(ref _isConsoleVisible, value);
+    }
+
+    /// <summary>Appends a line authored by the App itself (host lines arrive via <see cref="OnHostOutput"/>).</summary>
+    private void ConsoleLog(string message) => AppendConsoleLine($"[{DateTime.Now:HH:mm:ss}] {message}");
+
+    private void ClearConsole() => ConsoleLines.Clear();
+
+    // Host output fires on a background (thread-pool) thread; marshal to the UI thread before
+    // touching the ObservableCollection bound to the console list.
+    private void OnHostOutput(string line)
+    {
+        var dispatcher = Application.Current?.Dispatcher;
+        if (dispatcher is null || dispatcher.CheckAccess())
+            AppendConsoleLine(line);
+        else
+            dispatcher.BeginInvoke(() => AppendConsoleLine(line));
+    }
+
+    private void AppendConsoleLine(string line)
+    {
+        ConsoleLines.Add(line);
+        while (ConsoleLines.Count > MaxConsoleLines)
+            ConsoleLines.RemoveAt(0);
     }
 
     // --- Logged-in Steam profile (top-right) -----------------------------------------------
@@ -814,6 +859,10 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
 
         var wasEditingPublished = Editor.IsEditingPublished;
         IsBusy = true;
+        IsConsoleVisible = true; // surface the live upload log so the user sees real progress
+        ConsoleLog(wasEditingPublished
+            ? $"Saving edit to \"{edit.Title}\"..."
+            : $"Publishing new item \"{edit.Title}\"...");
         try
         {
             // Publishing needs a live Steam host for this game. Auto-connect if the user hasn't yet.
@@ -839,6 +888,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
             if (!result.Success)
             {
                 StatusMessage = $"Publish failed: {result.Error ?? "the content upload did not complete."}";
+                ConsoleLog($"FAILED: {result.Error ?? "the content upload did not complete."}");
                 return;
             }
 
@@ -875,6 +925,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
             StatusMessage = wasEditingPublished
                 ? $"Saved edit to item {result.PublishedFileId}."
                 : $"Published item {result.PublishedFileId}.";
+            ConsoleLog($"Done. Item {result.PublishedFileId}.");
             await RefreshPublishedAsync();
 
             // Rebuild the editor from the refreshed item so the content box shows the just-uploaded
@@ -888,6 +939,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         catch (Exception ex)
         {
             StatusMessage = $"Publish failed: {ex.Message}";
+            ConsoleLog($"ERROR: {ex.Message}");
         }
         finally
         {
@@ -895,5 +947,9 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         }
     }
 
-    public ValueTask DisposeAsync() => _service.DisposeAsync();
+    public ValueTask DisposeAsync()
+    {
+        _service.HostOutput -= OnHostOutput;
+        return _service.DisposeAsync();
+    }
 }

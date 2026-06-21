@@ -1,3 +1,5 @@
+using System.Collections.Specialized;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
@@ -5,15 +7,23 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Interop;
+using System.Windows.Media;
 using Microsoft.Win32;
 using PulseWorkshop.App.ViewModels;
 using PulseWorkshop.Core.Models;
+using PulseWorkshop.Core.Storage;
 
 namespace PulseWorkshop.App;
 
 public partial class MainWindow : Window
 {
     private readonly MainViewModel _vm = new();
+
+    // Persisted UI preferences (console open state + height), loaded on startup, saved on close.
+    private readonly UiSettings _settings = UiSettings.Load();
+
+    // Remembered console drawer height (px) so toggling hide/show restores the user's drag size.
+    private double _consoleHeightPx = 180;
 
     public MainWindow()
     {
@@ -22,7 +32,87 @@ public partial class MainWindow : Window
         Title = $"PulseWorkshop - Steam Workshop Manager (v{AppVersion})";
         _vm.NavigateToDrafts += () => DraftsTab.IsSelected = true;
         _vm.NavigateToTemplates += () => TemplatesTab.IsSelected = true;
-        Closed += async (_, _) => await _vm.DisposeAsync();
+        _vm.PropertyChanged += OnViewModelPropertyChanged;
+        _vm.ConsoleLines.CollectionChanged += OnConsoleLinesChanged;
+
+        // Restore the console drawer state. Height must be set before IsConsoleVisible so the toggle
+        // expands the rows to the remembered size.
+        if (_settings.ConsoleHeight > 0)
+            _consoleHeightPx = _settings.ConsoleHeight;
+        _vm.IsConsoleVisible = _settings.ConsoleVisible;
+
+        Closed += async (_, _) =>
+        {
+            SaveUiSettings();
+            await _vm.DisposeAsync();
+        };
+    }
+
+    private void SaveUiSettings()
+    {
+        if (_vm.IsConsoleVisible && ConsoleRowDef.ActualHeight > 1)
+            _consoleHeightPx = ConsoleRowDef.ActualHeight;
+        _settings.ConsoleVisible = _vm.IsConsoleVisible;
+        _settings.ConsoleHeight = _consoleHeightPx;
+        _settings.Save();
+    }
+
+    // --- Console drawer ------------------------------------------------------------------------
+
+    private void OnViewModelPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(MainViewModel.IsConsoleVisible))
+            UpdateConsoleRowHeights();
+    }
+
+    /// <summary>
+    /// Expands/collapses the console rows. RowDefinition.Height can't bind cleanly to a bool, so the
+    /// toggle is driven here; the dragged height is remembered across hide/show.
+    /// </summary>
+    private void UpdateConsoleRowHeights()
+    {
+        if (_vm.IsConsoleVisible)
+        {
+            ConsoleSplitterRow.Height = new GridLength(6);
+            ConsoleRowDef.Height = new GridLength(_consoleHeightPx);
+            ConsoleRowDef.MinHeight = 80;
+            ScrollConsoleToEnd();
+        }
+        else
+        {
+            // Preserve the current (possibly dragged) height before collapsing.
+            if (ConsoleRowDef.ActualHeight > 1)
+                _consoleHeightPx = ConsoleRowDef.ActualHeight;
+            ConsoleRowDef.MinHeight = 0;
+            ConsoleRowDef.Height = new GridLength(0);
+            ConsoleSplitterRow.Height = new GridLength(0);
+        }
+    }
+
+    private void OnConsoleLinesChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    {
+        if (e.Action is NotifyCollectionChangedAction.Add)
+            ScrollConsoleToEnd();
+    }
+
+    private void ScrollConsoleToEnd()
+    {
+        // Scroll the ListBox's own ScrollViewer rather than ScrollIntoView - log lines can repeat,
+        // and ScrollIntoView would jump to the first equal item instead of the newest one.
+        if (FindScrollViewer(ConsoleList) is { } sv)
+            sv.ScrollToEnd();
+    }
+
+    private static ScrollViewer? FindScrollViewer(DependencyObject root)
+    {
+        if (root is ScrollViewer sv)
+            return sv;
+        for (var i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
+        {
+            if (FindScrollViewer(VisualTreeHelper.GetChild(root, i)) is { } found)
+                return found;
+        }
+        return null;
     }
 
     /// <summary>

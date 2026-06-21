@@ -19,7 +19,11 @@
     <Grid Margin="10">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
-            <RowDefinition Height="*" />
+            <RowDefinition Height="*" MinHeight="120" />
+            <!-- Console drawer: a drag handle and the log panel. Both rows collapse to 0 height
+                 when the console is hidden (toggled in MainWindow.xaml.cs). -->
+            <RowDefinition x:Name="ConsoleSplitterRow" Height="0" />
+            <RowDefinition x:Name="ConsoleRowDef" Height="0" MinHeight="0" />
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
@@ -72,8 +76,6 @@
                     <StackPanel Margin="8,0,0,0" VerticalAlignment="Center">
                         <TextBlock Text="{Binding PersonaName}" FontWeight="SemiBold"
                                    TextTrimming="CharacterEllipsis" MaxWidth="180" />
-                        <TextBlock Text="{Binding SteamIdDisplay}" Style="{StaticResource MutedText}"
-                                   FontSize="11" />
                     </StackPanel>
                 </StackPanel>
             </Grid>
@@ -482,8 +484,62 @@
             </Border>
         </Grid>
 
+        <!-- Console drawer: drag handle (resizes content vs console) -->
+        <GridSplitter Grid.Row="2" Height="6" HorizontalAlignment="Stretch"
+                      VerticalAlignment="Center" ResizeBehavior="PreviousAndNext"
+                      ResizeDirection="Rows" Background="Transparent" Cursor="SizeNS"
+                      Visibility="{Binding IsConsoleVisible, Converter={StaticResource BoolToVis}}" />
+
+        <!-- Console drawer: live log of the Steam host + upload progress -->
+        <Border Grid.Row="3" Background="{StaticResource BgBrush}"
+                BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
+                CornerRadius="3" Margin="0,2,0,0"
+                Visibility="{Binding IsConsoleVisible, Converter={StaticResource BoolToVis}}">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
+
+                <!-- Header strip: title + clear / hide -->
+                <Grid Grid.Row="0" Background="{StaticResource PanelAltBrush}">
+                    <TextBlock Text="Console" Margin="10,5" FontWeight="SemiBold"
+                               VerticalAlignment="Center" />
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right"
+                                VerticalAlignment="Center" Margin="0,2,6,2">
+                        <Button Content="Clear" Padding="10,2" Command="{Binding ClearConsoleCommand}"
+                                ToolTip="Clear the console output." />
+                        <Button Content="Hide" Padding="10,2" Margin="6,0,0,0"
+                                Command="{Binding ToggleConsoleCommand}"
+                                ToolTip="Hide the console (reopen with the Console button below)." />
+                    </StackPanel>
+                </Grid>
+
+                <!-- Log lines: monospace, auto-scrolled to the newest line (see code-behind). -->
+                <ListBox Grid.Row="1" x:Name="ConsoleList" ItemsSource="{Binding ConsoleLines}"
+                         Background="Transparent" BorderThickness="0"
+                         ScrollViewer.HorizontalScrollBarVisibility="Auto"
+                         VirtualizingStackPanel.IsVirtualizing="True">
+                    <ListBox.ItemContainerStyle>
+                        <Style TargetType="ListBoxItem">
+                            <Setter Property="Background" Value="Transparent" />
+                            <Setter Property="Padding" Value="0" />
+                            <Setter Property="Focusable" Value="False" />
+                        </Style>
+                    </ListBox.ItemContainerStyle>
+                    <ListBox.ItemTemplate>
+                        <DataTemplate>
+                            <TextBlock Text="{Binding}" FontFamily="Consolas" FontSize="12"
+                                       Foreground="{StaticResource TextBrush}" TextWrapping="NoWrap"
+                                       Margin="10,0" />
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+            </Grid>
+        </Border>
+
         <!-- Bottom action bar: indeterminate progress (while busy) on the left, actions on the right. -->
-        <Grid Grid.Row="2" Margin="0,8,0,0">
+        <Grid Grid.Row="4" Margin="0,8,0,0">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
@@ -500,6 +556,8 @@
                 <TextBlock Text="{Binding PublishRequirementsHint}" Style="{StaticResource MutedText}"
                            VerticalAlignment="Center" Margin="0,0,12,0"
                            Visibility="{Binding PublishRequirementsHint, Converter={StaticResource StringToVis}}" />
+                <Button Content="Console" Command="{Binding ToggleConsoleCommand}" Margin="0,0,8,0"
+                        ToolTip="Show/hide the live Steam host log and upload progress." />
                 <Button Content="New item" Command="{Binding NewItemCommand}" Margin="0,0,8,0" />
             <Button Content="Save as template" Click="SaveAsTemplate_Click" Margin="0,0,8,0"
                     ToolTip="Save the current tags / description / visibility as a reusable template."

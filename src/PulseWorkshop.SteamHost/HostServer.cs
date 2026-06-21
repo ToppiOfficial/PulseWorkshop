@@ -126,10 +126,15 @@ internal sealed class HostServer
 
     private static void Log(string message)
     {
+        var line = $"[{DateTime.Now:HH:mm:ss}] {message}";
+
+        // Mirror to stderr so the App can stream it into its live console (the bridge writes there too).
+        try { Console.Error.WriteLine(line); } catch { /* no console attached */ }
+
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(LogPath)!);
-            File.AppendAllText(LogPath, $"[{DateTime.Now:HH:mm:ss}] {message}{Environment.NewLine}");
+            File.AppendAllText(LogPath, line + Environment.NewLine);
         }
         catch { /* logging is best-effort */ }
     }

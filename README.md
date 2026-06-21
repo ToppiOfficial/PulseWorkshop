@@ -6,8 +6,6 @@ items (title, description, tags, content files, preview image).
 Ships configured for **Left 4 Dead 2** (App ID `550`) and **Garry's Mod** (App ID `4000`);
 the game list is config-driven, so more games can be added.
 
-This is *only* a Workshop tool — no model viewer, compile, or decompile.
-
 ## How it works
 
 PulseWorkshop hooks into your **already-running Steam client** and reuses that session, so it

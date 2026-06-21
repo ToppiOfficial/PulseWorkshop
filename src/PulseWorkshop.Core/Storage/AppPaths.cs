@@ -11,6 +11,9 @@ public static class AppPaths
 
     public static string TemplatesDir { get; } = Path.Combine(Root, "templates");
 
+    /// <summary>Single JSON file holding persisted UI preferences (see <see cref="UiSettings"/>).</summary>
+    public static string SettingsFile { get; } = Path.Combine(Root, "settings.json");
+
     /// <summary>Ensures the data directories exist; safe to call repeatedly.</summary>
     public static void EnsureCreated()
     {

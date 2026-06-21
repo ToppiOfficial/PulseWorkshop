@@ -1,19 +1,20 @@
 #requires -Version 5.1
 <#
 .SYNOPSIS
-    Builds PulseWorkshop and publishes a portable, ready-to-run drop into .\publish.
+    Builds PulseWorkshop and publishes a single, self-extracting exe into .\publish.
 
 .DESCRIPTION
-    Produces:
-        publish\PulseWorkshop.exe            - the WPF UI (run this)
-        publish\PulseWorkshop.SteamHost.exe    - per-game Steam host (launched by the App)
-        + PulseWorkshop.SteamBridge.dll, steam_api64.dll, Ijwhost.dll and app DLLs
+    Produces ONE file:
+        publish\PulseWorkshop.exe   - the WPF UI; everything else is bundled inside it
 
-    The builds are framework-dependent (no bundled .NET runtime, no single-file), so the
-    target machine needs the .NET 10 Desktop Runtime (x64). See README.md.
+    How the single file works:
+      - The SteamHost is published as its own self-extracting single exe, then embedded into the App
+        as a resource. At runtime HostLocator extracts it to %LocalAppData%\PulseWorkshop\host\ and
+        launches it. The host, in turn, unpacks its native + C++/CLI dependencies
+        (steam_api64.dll, PulseWorkshop.SteamBridge.dll, Ijwhost.dll) to a temp dir when it runs.
 
-    Both projects are published into the SAME folder because the App locates the host by the
-    filename PulseWorkshop.SteamHost.exe sitting next to it.
+    The build is framework-dependent (no bundled .NET runtime), so the target machine needs the
+    .NET 10 Desktop Runtime (x64). See README.md.
 
     The whole solution must be built with VS MSBuild, not the dotnet CLI: the C++/CLI
     SteamBridge needs MSBuild (the dotnet CLI cannot evaluate $(VCTargetsPath)).
@@ -57,7 +58,9 @@ $appProj  = Join-Path $PSScriptRoot 'src\PulseWorkshop.App\PulseWorkshop.App.csp
 $hostProj = Join-Path $PSScriptRoot 'src\PulseWorkshop.SteamHost\PulseWorkshop.SteamHost.csproj'
 
 # --- Clean output ------------------------------------------------------------
-if (Test-Path $OutDir) { Remove-Item $OutDir -Recurse -Force }
+$stageDir = Join-Path $PSScriptRoot '.hoststage'
+if (Test-Path $OutDir)   { Remove-Item $OutDir   -Recurse -Force }
+if (Test-Path $stageDir) { Remove-Item $stageDir -Recurse -Force }
 
 $common = @("/p:Configuration=$Configuration", "/p:Platform=$Platform", '/v:minimal', '/nologo')
 
@@ -68,26 +71,29 @@ if ($LASTEXITCODE -ne 0) { Fail "Restore failed ($LASTEXITCODE)." }
 & $msbuild $sln /t:Build @common
 if ($LASTEXITCODE -ne 0) { Fail "Solution build failed ($LASTEXITCODE)." }
 
-# 2) Publish the host first, then the App, both into the shared OutDir via their Folder profiles.
-Write-Host "`n=== Publishing SteamHost ===" -ForegroundColor Yellow
-& $msbuild $hostProj /t:Publish /p:PublishProfile=FolderProfile "/p:PublishDir=$OutDir\" @common
+# 2) Publish the host as its own self-extracting single exe into the staging folder.
+Write-Host "`n=== Publishing SteamHost (single-file) ===" -ForegroundColor Yellow
+& $msbuild $hostProj /t:Publish /p:PublishProfile=SingleFileProfile "/p:PublishDir=$stageDir\" @common
 if ($LASTEXITCODE -ne 0) { Fail "SteamHost publish failed ($LASTEXITCODE)." }
 
-Write-Host "`n=== Publishing App ===" -ForegroundColor Yellow
-& $msbuild $appProj /t:Publish /p:PublishProfile=FolderProfile "/p:PublishDir=$OutDir\" @common
+$stagedHost = Join-Path $stageDir 'PulseWorkshop.SteamHost.exe'
+if (-not (Test-Path $stagedHost)) { Fail "Staged host exe not found: $stagedHost" }
+
+# 3) Publish the App as a single exe, embedding the staged host (EmbeddedHostExe -> resource).
+Write-Host "`n=== Publishing App (single-file, host embedded) ===" -ForegroundColor Yellow
+& $msbuild $appProj /t:Publish /p:PublishProfile=SingleFileProfile "/p:PublishDir=$OutDir\" "/p:EmbeddedHostExe=$stagedHost" @common
 if ($LASTEXITCODE -ne 0) { Fail "App publish failed ($LASTEXITCODE)." }
 
-# 3) Trim debug symbols left by the build (the native bridge .pdb in particular).
+# 4) Trim any stray debug symbols and drop the staging folder.
 Get-ChildItem $OutDir -Include *.pdb -Recurse | Remove-Item -Force -ErrorAction SilentlyContinue
+Remove-Item $stageDir -Recurse -Force -ErrorAction SilentlyContinue
 
-# --- Sanity-check the drop has everything it needs ---------------------------
-$required = 'PulseWorkshop.exe', 'PulseWorkshop.SteamHost.exe', 'PulseWorkshop.SteamBridge.dll',
-           'steam_api64.dll', 'Ijwhost.dll'
-$missing = $required | Where-Object { -not (Test-Path (Join-Path $OutDir $_)) }
-if ($missing) { Fail "Publish is missing required files: $($missing -join ', ')" }
+# --- Sanity-check the drop has the single exe --------------------------------
+$appExe = Join-Path $OutDir 'PulseWorkshop.exe'
+if (-not (Test-Path $appExe)) { Fail "Publish is missing PulseWorkshop.exe." }
 
 # --- Summary -----------------------------------------------------------------
-Write-Host "`n=== Portable build ready: $OutDir ===" -ForegroundColor Green
-Write-Host "Run: $(Join-Path $OutDir 'PulseWorkshop.exe')  (needs .NET 10 Desktop Runtime + Steam)" -ForegroundColor Green
+Write-Host "`n=== Single-file build ready: $OutDir ===" -ForegroundColor Green
+Write-Host "Run: $appExe  (needs .NET 10 Desktop Runtime + Steam)" -ForegroundColor Green
 Get-ChildItem $OutDir -File | Sort-Object Name |
     Format-Table Name, @{N='KB';E={[math]::Round($_.Length/1KB,1)}} -AutoSize

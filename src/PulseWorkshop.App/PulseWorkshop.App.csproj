@@ -21,4 +21,16 @@
     <ProjectReference Include="..\PulseWorkshop.Core\PulseWorkshop.Core.csproj" />
   </ItemGroup>
 
+  <!-- Single-file distribution: the build passes EmbeddedHostExe pointing at a freshly published,
+       self-extracting PulseWorkshop.SteamHost.exe. We embed it under a fixed resource name so
+       HostLocator can extract and launch it at runtime (see build-portable.ps1). When the property
+       is not set (e.g. a plain `dotnet build`), nothing is embedded and the App falls back to
+       finding the host next to itself or in the dev build output. -->
+  <ItemGroup Condition="'$(EmbeddedHostExe)' != '' and Exists('$(EmbeddedHostExe)')">
+    <EmbeddedResource Include="$(EmbeddedHostExe)">
+      <LogicalName>PulseWorkshop.SteamHost.exe</LogicalName>
+      <Visible>false</Visible>
+    </EmbeddedResource>
+  </ItemGroup>
+
 </Project>

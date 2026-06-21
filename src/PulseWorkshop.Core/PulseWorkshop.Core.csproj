@@ -2,7 +2,7 @@
 
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
-    <RootNamespace>SrcWorkshop.Core</RootNamespace>
+    <RootNamespace>PulseWorkshop.Core</RootNamespace>
     <Platforms>x64</Platforms>
     <Platform>x64</Platform>
   </PropertyGroup>

@@ -1,9 +1,9 @@
 using System.Diagnostics;
 
-namespace SrcWorkshop.Core.Ipc;
+namespace PulseWorkshop.Core.Ipc;
 
 /// <summary>
-/// Owns the lifecycle of a single <c>SrcWorkshop.SteamHost</c> process for one App ID. Because
+/// Owns the lifecycle of a single <c>PulseWorkshop.SteamHost</c> process for one App ID. Because
 /// the Steamworks App ID is process-global, switching games means stopping the current host and
 /// starting a fresh one — exactly what <see cref="SwitchToAsync"/> does.
 /// </summary>

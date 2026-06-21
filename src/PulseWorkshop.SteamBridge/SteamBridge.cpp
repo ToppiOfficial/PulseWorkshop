@@ -18,7 +18,7 @@ using namespace System::Collections::Generic;
 using namespace System::Runtime::InteropServices;
 using namespace msclr::interop;
 
-namespace SrcWorkshop {
+namespace PulseWorkshop {
 namespace SteamBridge {
 
 namespace {

@@ -1,6 +1,6 @@
 using System.Text.Json;
 
-namespace SrcWorkshop.Core.Storage;
+namespace PulseWorkshop.Core.Storage;
 
 /// <summary>
 /// A minimal "directory of JSON files" store: one file per entity, named <c>{id}.json</c>.

@@ -1,7 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
-namespace SrcWorkshop.Core.Ipc;
+namespace PulseWorkshop.Core.Ipc;
 
 /// <summary>Single source of truth for JSON settings used on both ends of the pipe.</summary>
 public static class PipeJson

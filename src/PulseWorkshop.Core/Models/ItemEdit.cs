@@ -1,4 +1,4 @@
-namespace SrcWorkshop.Core.Models;
+namespace PulseWorkshop.Core.Models;
 
 /// <summary>
 /// The editable fields of a Workshop item. Used as the payload for creating a new item or

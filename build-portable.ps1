@@ -1,19 +1,19 @@
 #requires -Version 5.1
 <#
 .SYNOPSIS
-    Builds SrcWorkshop and publishes a portable, ready-to-run drop into .\publish.
+    Builds PulseWorkshop and publishes a portable, ready-to-run drop into .\publish.
 
 .DESCRIPTION
     Produces:
         publish\PulseWorkshop.exe            - the WPF UI (run this)
-        publish\SrcWorkshop.SteamHost.exe    - per-game Steam host (launched by the App)
-        + SrcWorkshop.SteamBridge.dll, steam_api64.dll, Ijwhost.dll and app DLLs
+        publish\PulseWorkshop.SteamHost.exe    - per-game Steam host (launched by the App)
+        + PulseWorkshop.SteamBridge.dll, steam_api64.dll, Ijwhost.dll and app DLLs
 
     The builds are framework-dependent (no bundled .NET runtime, no single-file), so the
     target machine needs the .NET 10 Desktop Runtime (x64). See README.md.
 
     Both projects are published into the SAME folder because the App locates the host by the
-    filename SrcWorkshop.SteamHost.exe sitting next to it.
+    filename PulseWorkshop.SteamHost.exe sitting next to it.
 
     The whole solution must be built with VS MSBuild, not the dotnet CLI: the C++/CLI
     SteamBridge needs MSBuild (the dotnet CLI cannot evaluate $(VCTargetsPath)).
@@ -24,7 +24,7 @@
 
 .EXAMPLE
     .\build-portable.ps1
-    .\build-portable.ps1 -Configuration Release -OutDir C:\drops\SrcWorkshop
+    .\build-portable.ps1 -Configuration Release -OutDir C:\drops\PulseWorkshop
 #>
 [CmdletBinding()]
 param(
@@ -52,9 +52,9 @@ if (-not (Test-Path $steamDll)) {
     Fail "Steamworks SDK missing: $steamDll`n      See external\steamworks_sdk\PLACEMENT.md."
 }
 
-$sln      = Join-Path $PSScriptRoot 'SrcWorkshop.sln'
+$sln      = Join-Path $PSScriptRoot 'PulseWorkshop.sln'
 $appProj  = Join-Path $PSScriptRoot 'src\PulseWorkshop.App\PulseWorkshop.App.csproj'
-$hostProj = Join-Path $PSScriptRoot 'src\SrcWorkshop.SteamHost\SrcWorkshop.SteamHost.csproj'
+$hostProj = Join-Path $PSScriptRoot 'src\PulseWorkshop.SteamHost\PulseWorkshop.SteamHost.csproj'
 
 # --- Clean output ------------------------------------------------------------
 if (Test-Path $OutDir) { Remove-Item $OutDir -Recurse -Force }
@@ -81,7 +81,7 @@ if ($LASTEXITCODE -ne 0) { Fail "App publish failed ($LASTEXITCODE)." }
 Get-ChildItem $OutDir -Include *.pdb -Recurse | Remove-Item -Force -ErrorAction SilentlyContinue
 
 # --- Sanity-check the drop has everything it needs ---------------------------
-$required = 'PulseWorkshop.exe', 'SrcWorkshop.SteamHost.exe', 'SrcWorkshop.SteamBridge.dll',
+$required = 'PulseWorkshop.exe', 'PulseWorkshop.SteamHost.exe', 'PulseWorkshop.SteamBridge.dll',
            'steam_api64.dll', 'Ijwhost.dll'
 $missing = $required | Where-Object { -not (Test-Path (Join-Path $OutDir $_)) }
 if ($missing) { Fail "Publish is missing required files: $($missing -join ', ')" }

@@ -1,11 +1,11 @@
-namespace SrcWorkshop.Core.Storage;
+namespace PulseWorkshop.Core.Storage;
 
 /// <summary>Resolves the per-user data locations used for drafts and templates.</summary>
 public static class AppPaths
 {
     public static string Root { get; } = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-        "SrcWorkshop");
+        "PulseWorkshop");
 
     public static string DraftsDir { get; } = Path.Combine(Root, "drafts");
 

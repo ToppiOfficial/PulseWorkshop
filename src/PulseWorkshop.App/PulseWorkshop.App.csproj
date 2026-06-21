@@ -18,7 +18,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\SrcWorkshop.Core\SrcWorkshop.Core.csproj" />
+    <ProjectReference Include="..\PulseWorkshop.Core\PulseWorkshop.Core.csproj" />
   </ItemGroup>
 
 </Project>

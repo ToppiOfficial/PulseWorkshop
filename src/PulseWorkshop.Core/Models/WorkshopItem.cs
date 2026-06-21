@@ -1,4 +1,4 @@
-namespace SrcWorkshop.Core.Models;
+namespace PulseWorkshop.Core.Models;
 
 /// <summary>
 /// A published Workshop item owned by the logged-in user, as returned by an ISteamUGC query.

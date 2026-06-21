@@ -1,14 +1,14 @@
-namespace SrcWorkshop.Core.Ipc;
+namespace PulseWorkshop.Core.Ipc;
 
 /// <summary>
 /// Shared wire contract between the App (via Core's <c>SteamHostClient</c>) and the
-/// <c>SrcWorkshop.SteamHost</c> process. Messages are newline-delimited JSON; one request gets
+/// <c>PulseWorkshop.SteamHost</c> process. Messages are newline-delimited JSON; one request gets
 /// exactly one response.
 /// </summary>
 public static class PipeProtocol
 {
     /// <summary>Base name for the named pipe; the active App ID is appended for per-game hosts.</summary>
-    public const string PipeBaseName = "SrcWorkshop.SteamHost";
+    public const string PipeBaseName = "PulseWorkshop.SteamHost";
 
     public static string PipeNameFor(uint appId) => $"{PipeBaseName}.{appId}";
 }

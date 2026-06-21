@@ -1,10 +1,10 @@
 using System.IO.Pipes;
 using System.Text;
-using SrcWorkshop.Core.Ipc;
-using SrcWorkshop.Core.Models;
-using SrcWorkshop.SteamBridge;
+using PulseWorkshop.Core.Ipc;
+using PulseWorkshop.Core.Models;
+using PulseWorkshop.SteamBridge;
 
-namespace SrcWorkshop.SteamHost;
+namespace PulseWorkshop.SteamHost;
 
 /// <summary>
 /// Named-pipe JSON server. Handles one client (the App) at a time over a persistent connection,
@@ -122,7 +122,7 @@ internal sealed class HostServer
     }
 
     private static readonly string LogPath = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "SrcWorkshop", "host.log");
+        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "PulseWorkshop", "host.log");
 
     private static void Log(string message)
     {

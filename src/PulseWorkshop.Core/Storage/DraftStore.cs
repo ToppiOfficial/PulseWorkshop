@@ -1,6 +1,6 @@
-using SrcWorkshop.Core.Models;
+using PulseWorkshop.Core.Models;
 
-namespace SrcWorkshop.Core.Storage;
+namespace PulseWorkshop.Core.Storage;
 
 /// <summary>Persists <see cref="Draft"/>s under <see cref="AppPaths.DraftsDir"/>.</summary>
 public sealed class DraftStore

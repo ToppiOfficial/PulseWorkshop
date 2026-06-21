@@ -1,4 +1,4 @@
-namespace SrcWorkshop.Core.Models;
+namespace PulseWorkshop.Core.Models;
 
 /// <summary>
 /// A locally saved, not-yet-published (or in-progress) item edit. Drafts are stored separately

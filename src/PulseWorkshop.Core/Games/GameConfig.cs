@@ -1,4 +1,4 @@
-namespace SrcWorkshop.Core.Games;
+namespace PulseWorkshop.Core.Games;
 
 /// <summary>How a <see cref="TagCategory"/>'s tags may be selected.</summary>
 public enum TagSelectionMode

@@ -1,6 +1,6 @@
-using SrcWorkshop.Core.Models;
+using PulseWorkshop.Core.Models;
 
-namespace SrcWorkshop.Core.Storage;
+namespace PulseWorkshop.Core.Storage;
 
 /// <summary>Persists <see cref="Template"/>s under <see cref="AppPaths.TemplatesDir"/>.</summary>
 public sealed class TemplateStore

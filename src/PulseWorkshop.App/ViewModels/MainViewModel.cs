@@ -6,11 +6,11 @@ using System.Windows.Data;
 using System.Windows.Threading;
 using PulseWorkshop.App.Mvvm;
 using PulseWorkshop.App.Services;
-using SrcWorkshop.Core.Games;
-using SrcWorkshop.Core.Ipc;
-using SrcWorkshop.Core.Models;
-using SrcWorkshop.Core.Services;
-using SrcWorkshop.Core.Storage;
+using PulseWorkshop.Core.Games;
+using PulseWorkshop.Core.Ipc;
+using PulseWorkshop.Core.Models;
+using PulseWorkshop.Core.Services;
+using PulseWorkshop.Core.Storage;
 
 namespace PulseWorkshop.App.ViewModels;
 
@@ -546,6 +546,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         if (!RequireConnected())
             return;
         Editor = new EditorViewModel(SelectedGame);
+        NavigateToDrafts?.Invoke();
     }
 
     public void EditPublished(WorkshopItem item)
@@ -663,8 +664,12 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         NavigateToDrafts?.Invoke();
     }
 
-    /// <summary>Raised when the UI should switch to the Drafts tab (e.g. after using a template).</summary>
+    /// <summary>Raised when the UI should switch to the Drafts tab (e.g. after using a template,
+    /// creating a new item, or saving a draft).</summary>
     public event Action? NavigateToDrafts;
+
+    /// <summary>Raised when the UI should switch to the Templates tab (e.g. after saving a template).</summary>
+    public event Action? NavigateToTemplates;
 
     /// <summary>Open a template for editing (template mode: name + presets, no publish).</summary>
     public void EditTemplate(Template template)
@@ -713,11 +718,19 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         StatusMessage = $"Deleted template \"{template.Name}\".";
     }
 
-    /// <summary>Create a reusable template from the current editor's presets.</summary>
-    public void SaveAsTemplate(string name)
+    /// <summary>Create a reusable template from the current editor's presets, named after the
+    /// item's title. Requires a non-empty title.</summary>
+    public void SaveAsTemplate()
     {
         if (Editor is null)
             return;
+
+        var name = Editor.Title?.Trim();
+        if (string.IsNullOrWhiteSpace(name))
+        {
+            StatusMessage = "Enter a title before saving as a template - the title is used as the template name.";
+            return;
+        }
 
         var edit = Editor.ToItemEdit();
         var template = _templates.Create(name, SelectedGame.AppId);
@@ -730,6 +743,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         _templates.Save(template);
         LoadLocalLists();
         StatusMessage = $"Saved template \"{name}\".";
+        NavigateToTemplates?.Invoke();
     }
 
     private void SaveDraft()
@@ -762,6 +776,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
 
         LoadLocalLists();
         StatusMessage = $"Saved draft \"{name}\".";
+        NavigateToDrafts?.Invoke();
     }
 
     private void SaveEditedTemplate(Guid templateId)
@@ -781,6 +796,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         _templates.Save(existing);
         LoadLocalLists();
         StatusMessage = $"Saved template \"{existing.Name}\".";
+        NavigateToTemplates?.Invoke();
     }
 
     private async Task PublishAsync()

@@ -14,7 +14,7 @@
   <PropertyGroup Label="Globals">
     <VCProjectVersion>17.0</VCProjectVersion>
     <ProjectGuid>{B2C3D4E5-F6A7-4B8C-9D0E-1F2A3B4C5D6E}</ProjectGuid>
-    <RootNamespace>SrcWorkshop.SteamBridge</RootNamespace>
+    <RootNamespace>PulseWorkshop.SteamBridge</RootNamespace>
     <Keyword>ManagedCProj</Keyword>
     <!-- Steamworks SDK root; override on the command line or in a .props if relocated. -->
     <SteamSdkDir Condition="'$(SteamSdkDir)' == ''">$(MSBuildThisFileDirectory)..\..\external\steamworks_sdk\</SteamSdkDir>

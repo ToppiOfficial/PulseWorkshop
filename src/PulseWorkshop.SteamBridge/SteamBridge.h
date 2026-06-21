@@ -1,7 +1,7 @@
 #pragma once
 
 // Managed (C++/CLI) surface over the native Steamworks ISteamUGC API. Referenced by
-// SrcWorkshop.SteamHost. Keeps the native SDK isolated from the rest of the (pure C#) solution.
+// PulseWorkshop.SteamHost. Keeps the native SDK isolated from the rest of the (pure C#) solution.
 //
 // Requires the Steamworks SDK headers at external/steamworks_sdk/public (see README).
 //
@@ -9,7 +9,7 @@
 // NOT do `using namespace System;`. The Win32 COM headers pulled in by steam_api.h define their
 // own IServiceProvider, which collides with System::IServiceProvider when System is in scope.
 
-namespace SrcWorkshop {
+namespace PulseWorkshop {
 namespace SteamBridge {
 
     public enum class BridgeVisibility

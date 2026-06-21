@@ -5,7 +5,7 @@ namespace PulseWorkshop.App.Services;
 /// <summary>Resolves the path to the SteamHost helper executable next to the App.</summary>
 public static class HostLocator
 {
-    public const string HostExeName = "SrcWorkshop.SteamHost.exe";
+    public const string HostExeName = "PulseWorkshop.SteamHost.exe";
 
     /// <summary>
     /// Locates the SteamHost executable. In a packaged build it sits next to the App; during local
@@ -20,7 +20,7 @@ public static class HostLocator
             return packaged;
 
         // Dev fallback: ...\PulseWorkshop.App\bin\<plat>\<cfg>\net10.0-windows\ ->
-        //               ...\SrcWorkshop.SteamHost\bin\<plat>\<cfg>\net10.0\win-x64\
+        //               ...\PulseWorkshop.SteamHost\bin\<plat>\<cfg>\net10.0\win-x64\
         foreach (var devCandidate in EnumerateDevCandidates(baseDir))
         {
             if (File.Exists(devCandidate))
@@ -41,7 +41,7 @@ public static class HostLocator
         if (dir is null)
             yield break;
 
-        var hostBin = Path.Combine(dir.FullName, "SrcWorkshop.SteamHost", "bin");
+        var hostBin = Path.Combine(dir.FullName, "PulseWorkshop.SteamHost", "bin");
         if (!Directory.Exists(hostBin))
             yield break;
 

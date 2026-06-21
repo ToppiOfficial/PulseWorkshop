@@ -3,7 +3,7 @@
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <TargetFramework>net10.0</TargetFramework>
-    <RootNamespace>SrcWorkshop.SteamHost</RootNamespace>
+    <RootNamespace>PulseWorkshop.SteamHost</RootNamespace>
     <!-- Steamworks is x64-native; the host must be a 64-bit process. -->
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <SelfContained>false</SelfContained>
@@ -12,13 +12,13 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\SrcWorkshop.Core\SrcWorkshop.Core.csproj" />
+    <ProjectReference Include="..\PulseWorkshop.Core\PulseWorkshop.Core.csproj" />
     <!-- C++/CLI bridge. Referenced as a project so the build ordering and DLL copy are handled.
          Requires the Steamworks SDK present (see external/steamworks_sdk/PLACEMENT.md). -->
-    <ProjectReference Include="..\SrcWorkshop.SteamBridge\SrcWorkshop.SteamBridge.vcxproj" />
+    <ProjectReference Include="..\PulseWorkshop.SteamBridge\PulseWorkshop.SteamBridge.vcxproj" />
   </ItemGroup>
 
-  <!-- The host process loads steam_api64.dll at runtime, so it must sit next to SrcWorkshop.SteamHost.exe.
+  <!-- The host process loads steam_api64.dll at runtime, so it must sit next to PulseWorkshop.SteamHost.exe.
        Copy it straight from the SDK (the bridge copies it only to its own output). -->
   <PropertyGroup>
     <SteamSdkDir Condition="'$(SteamSdkDir)' == ''">$(MSBuildThisFileDirectory)..\..\external\steamworks_sdk\</SteamSdkDir>

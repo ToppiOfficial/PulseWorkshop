@@ -7,7 +7,7 @@ using System.Windows.Input;
 using System.Windows.Interop;
 using Microsoft.Win32;
 using PulseWorkshop.App.ViewModels;
-using SrcWorkshop.Core.Models;
+using PulseWorkshop.Core.Models;
 
 namespace PulseWorkshop.App;
 
@@ -21,6 +21,7 @@ public partial class MainWindow : Window
         DataContext = _vm;
         Title = $"PulseWorkshop - Steam Workshop Manager (v{AppVersion})";
         _vm.NavigateToDrafts += () => DraftsTab.IsSelected = true;
+        _vm.NavigateToTemplates += () => TemplatesTab.IsSelected = true;
         Closed += async (_, _) => await _vm.DisposeAsync();
     }
 
@@ -231,16 +232,7 @@ public partial class MainWindow : Window
         MessageBox.Show(this, message, title, MessageBoxButton.YesNo, MessageBoxImage.Warning)
             == MessageBoxResult.Yes;
 
-    private void SaveAsTemplate_Click(object sender, RoutedEventArgs e)
-    {
-        if (_vm.Editor is null)
-            return;
-
-        var suggested = string.IsNullOrWhiteSpace(_vm.Editor.Title) ? "New template" : _vm.Editor.Title;
-        var name = Views.TextPromptWindow.Ask(this, "Save as template", "Template name", suggested);
-        if (name is not null)
-            _vm.SaveAsTemplate(name);
-    }
+    private void SaveAsTemplate_Click(object sender, RoutedEventArgs e) => _vm.SaveAsTemplate();
 
     // --- Content file zone ---------------------------------------------------------------------
 

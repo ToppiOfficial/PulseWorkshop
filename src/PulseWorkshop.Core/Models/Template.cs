@@ -1,4 +1,4 @@
-namespace SrcWorkshop.Core.Models;
+namespace PulseWorkshop.Core.Models;
 
 /// <summary>
 /// A reusable starting point (preset tags / description / visibility) for new items. Kept on a

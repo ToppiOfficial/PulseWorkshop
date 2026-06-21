@@ -1,10 +1,10 @@
 using System.IO.Pipes;
 using System.Text;
 
-namespace SrcWorkshop.Core.Ipc;
+namespace PulseWorkshop.Core.Ipc;
 
 /// <summary>
-/// Client end of the named pipe to a running <c>SrcWorkshop.SteamHost</c>. Sends one request and
+/// Client end of the named pipe to a running <c>PulseWorkshop.SteamHost</c>. Sends one request and
 /// awaits its correlated response. A single connection is held open for the host's lifetime.
 /// </summary>
 public sealed class SteamHostClient : IAsyncDisposable

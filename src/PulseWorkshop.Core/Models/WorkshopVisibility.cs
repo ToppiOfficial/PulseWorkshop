@@ -1,4 +1,4 @@
-namespace SrcWorkshop.Core.Models;
+namespace PulseWorkshop.Core.Models;
 
 /// <summary>
 /// Mirrors Steam's <c>ERemoteStoragePublishedFileVisibility</c>. New items default to

@@ -10,12 +10,12 @@ contents here so the following paths resolve:
 external/steamworks_sdk/
 ├── public/
 │   └── steam/
-│       └── steam_api.h            <- headers (used by SrcWorkshop.SteamBridge)
+│       └── steam_api.h            <- headers (used by PulseWorkshop.SteamBridge)
 └── redistributable_bin/
     └── win64/
-        ├── steam_api64.lib        <- linked by SrcWorkshop.SteamBridge
-        └── steam_api64.dll        <- copied next to SrcWorkshop.SteamHost.exe at build
+        ├── steam_api64.lib        <- linked by PulseWorkshop.SteamBridge
+        └── steam_api64.dll        <- copied next to PulseWorkshop.SteamHost.exe at build
 ```
 
 The build reads this location via the `SteamSdkDir` MSBuild property
-(defined in `SrcWorkshop.SteamBridge.vcxproj`); override it if you keep the SDK elsewhere.
+(defined in `PulseWorkshop.SteamBridge.vcxproj`); override it if you keep the SDK elsewhere.

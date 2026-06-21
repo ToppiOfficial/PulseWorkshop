@@ -1,5 +1,5 @@
 using System.IO;
-using SrcWorkshop.Core.Models;
+using PulseWorkshop.Core.Models;
 
 namespace PulseWorkshop.App.ViewModels;
 

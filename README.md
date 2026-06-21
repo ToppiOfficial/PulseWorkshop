@@ -1,4 +1,4 @@
-# SrcWorkshop
+# PulseWorkshop
 
 A **Steam Workshop manager** — Browse, create, and edit your own Workshop
 items (title, description, tags, content files, preview image).
@@ -10,16 +10,16 @@ This is *only* a Workshop tool — no model viewer, compile, or decompile.
 
 ## How it works
 
-SrcWorkshop hooks into your **already-running Steam client** and reuses that session, so it
+PulseWorkshop hooks into your **already-running Steam client** and reuses that session, so it
 **never prompts a separate Steam login**. (`SteamAPI_Init` only succeeds for games owned by
 the currently logged-in account, with Steam running.)
 
 ```
-SrcWorkshop.sln
+PulseWorkshop.sln
 ├── PulseWorkshop.App       WPF (net10.0-windows)   UI: game picker, published/drafts/templates lists, item editor
-├── SrcWorkshop.Core        classlib (net10.0)      models, game config, pipe client, draft/template stores, services
-├── SrcWorkshop.SteamHost   console exe (net10.0)   owns the Steam session for one App ID; named-pipe JSON server
-└── SrcWorkshop.SteamBridge C++/CLI (net10.0)       thin managed wrapper over steam_api64.dll (Steamworks SDK)
+├── PulseWorkshop.Core        classlib (net10.0)      models, game config, pipe client, draft/template stores, services
+├── PulseWorkshop.SteamHost   console exe (net10.0)   owns the Steam session for one App ID; named-pipe JSON server
+└── PulseWorkshop.SteamBridge C++/CLI (net10.0)       thin managed wrapper over steam_api64.dll (Steamworks SDK)
 ```
 
 The App talks to `Core`; `Core` launches one `SteamHost` process per active game (App ID is
@@ -55,14 +55,14 @@ to this repo (the `.gitignore` excludes `*.dll` / `*.lib`).
 2. Copy its contents into `external/steamworks_sdk/` so that the headers resolve as
    `external/steamworks_sdk/public/steam/steam_api.h`.
 3. The build copies `external/steamworks_sdk/redistributable_bin/win64/steam_api64.dll` next to
-   `SrcWorkshop.SteamHost.exe`.
+   `PulseWorkshop.SteamHost.exe`.
 
 > **Note:** A `steam_appid.txt` file is used only for local testing and must **not** ship to
 > end users. Released builds rely on running alongside the Steam client.
 
 ## Building
 
-Open `SrcWorkshop.sln` in Visual Studio 2026 and build the `x64` Debug (or Release)
+Open `PulseWorkshop.sln` in Visual Studio 2026 and build the `x64` Debug (or Release)
 configuration.
 
 The whole solution must be built with **Visual Studio / MSBuild**, not the `dotnet` CLI: the
@@ -73,7 +73,7 @@ C++/CLI `SteamBridge` needs MSBuild (the `dotnet` CLI cannot evaluate `$(VCTarge
 
 The repo ships **Folder publish profiles** that drop the App and the SteamHost into a single
 shared `publish/` folder, ready to run side by side. The App is published as `PulseWorkshop.exe`,
-with `SrcWorkshop.SteamHost.exe` next to it (the App locates the host by that filename).
+with `PulseWorkshop.SteamHost.exe` next to it (the App locates the host by that filename).
 
 **Easiest - one command** (builds the solution and publishes both projects into `publish/`):
 
@@ -84,10 +84,10 @@ with `SrcWorkshop.SteamHost.exe` next to it (the App locates the host by that fi
 **Or from Visual Studio:**
 
 1. **Build the solution once** (Release | x64) so the C++/CLI `SteamBridge` is built.
-2. Right-click **`SrcWorkshop.SteamHost`** -> **Publish** -> **FolderProfile**.
+2. Right-click **`PulseWorkshop.SteamHost`** -> **Publish** -> **FolderProfile**.
 3. Right-click **`PulseWorkshop.App`** -> **Publish** -> **FolderProfile**.
 
-Both projects publish into `publish/` (the App needs `SrcWorkshop.SteamHost.exe` next to it).
+Both projects publish into `publish/` (the App needs `PulseWorkshop.SteamHost.exe` next to it).
 The profiles are **framework-dependent** (no bundled runtime, no single-file), so the target
 machine needs the **.NET 10 Desktop Runtime** installed - see [Prerequisites](#to-run-a-published-build).
 

@@ -1,7 +1,7 @@
-using SrcWorkshop.Core.Ipc;
-using SrcWorkshop.Core.Models;
+using PulseWorkshop.Core.Ipc;
+using PulseWorkshop.Core.Models;
 
-namespace SrcWorkshop.Core.Services;
+namespace PulseWorkshop.Core.Services;
 
 /// <summary>
 /// High-level API the UI talks to. Orchestrates the per-game Steam host and exposes typed

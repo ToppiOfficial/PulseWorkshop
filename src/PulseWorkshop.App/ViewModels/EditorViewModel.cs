@@ -1,8 +1,8 @@
 using System.Collections.ObjectModel;
 using System.IO;
 using PulseWorkshop.App.Mvvm;
-using SrcWorkshop.Core.Games;
-using SrcWorkshop.Core.Models;
+using PulseWorkshop.Core.Games;
+using PulseWorkshop.Core.Models;
 
 namespace PulseWorkshop.App.ViewModels;
 

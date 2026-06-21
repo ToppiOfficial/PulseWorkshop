@@ -1,9 +1,9 @@
 using System.IO.Pipes;
 using System.Text;
-using SrcWorkshop.Core.Ipc;
-using SrcWorkshop.SteamBridge;
+using PulseWorkshop.Core.Ipc;
+using PulseWorkshop.SteamBridge;
 
-namespace SrcWorkshop.SteamHost;
+namespace PulseWorkshop.SteamHost;
 
 /// <summary>
 /// Per-game Steam helper process. Launched by the App with a single argument: the App ID.
@@ -16,7 +16,7 @@ internal static class Program
     {
         if (args.Length < 1 || !uint.TryParse(args[0], out var appId))
         {
-            Console.Error.WriteLine("Usage: SrcWorkshop.SteamHost <appId>");
+            Console.Error.WriteLine("Usage: PulseWorkshop.SteamHost <appId>");
             return 2;
         }
 

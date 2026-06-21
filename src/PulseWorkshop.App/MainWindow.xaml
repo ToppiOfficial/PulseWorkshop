@@ -207,7 +207,7 @@
                         </Grid>
                     </TabItem>
 
-                    <TabItem Header="Templates">
+                    <TabItem Header="Templates" x:Name="TemplatesTab">
                         <Grid Margin="4,8,4,4">
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto" />

@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.IO;
+using System.Windows.Media.Imaging;
 using PulseWorkshop.App.Mvvm;
 using PulseWorkshop.Core.Games;
 using PulseWorkshop.Core.Models;
@@ -121,6 +122,7 @@ public sealed class EditorViewModel : ObservableObject
             if (SetField(ref _contentFile, value))
             {
                 OnPropertyChanged(nameof(HasContentFile));
+                OnPropertyChanged(nameof(ContentFileName));
                 OnPropertyChanged(nameof(ContentFileSizeDisplay));
                 OnPropertyChanged(nameof(ShowPublishedContentInfo));
                 OnPropertyChanged(nameof(ShowContentPlaceholder));
@@ -130,6 +132,10 @@ public sealed class EditorViewModel : ObservableObject
     }
 
     public bool HasContentFile => !string.IsNullOrWhiteSpace(_contentFile);
+
+    /// <summary>Just the file name of the chosen content file, e.g. "bill.vpk" (empty if none).</summary>
+    public string ContentFileName =>
+        string.IsNullOrWhiteSpace(_contentFile) ? string.Empty : Path.GetFileName(_contentFile);
 
     /// <summary>Size of the chosen content file, e.g. "307.9 MB" (empty if none/missing).</summary>
     public string ContentFileSizeDisplay => FileSizeOf(_contentFile);
@@ -156,6 +162,7 @@ public sealed class EditorViewModel : ObservableObject
                 OnPropertyChanged(nameof(PreviewDisplaySource));
                 OnPropertyChanged(nameof(HasPreviewDisplay));
                 OnPropertyChanged(nameof(PreviewImageSizeDisplay));
+                OnPropertyChanged(nameof(PreviewImageResolution));
                 RaiseChanged();
             }
         }
@@ -177,6 +184,9 @@ public sealed class EditorViewModel : ObservableObject
     /// <summary>Size of the chosen preview image (empty if none/missing).</summary>
     public string PreviewImageSizeDisplay => FileSizeOf(_previewImagePath);
 
+    /// <summary>Pixel resolution of the chosen preview image, e.g. "256x256" (empty if none/unreadable).</summary>
+    public string PreviewImageResolution => ResolutionOf(_previewImagePath);
+
     private static string FileSizeOf(string? path)
     {
         if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
@@ -184,6 +194,24 @@ public sealed class EditorViewModel : ObservableObject
         try
         {
             return WorkshopItem.FormatBytes((ulong)new FileInfo(path).Length);
+        }
+        catch
+        {
+            return string.Empty;
+        }
+    }
+
+    /// <summary>Reads an image's pixel dimensions as "WxH" without fully decoding it (empty on failure).</summary>
+    private static string ResolutionOf(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+            return string.Empty;
+        try
+        {
+            using var stream = File.OpenRead(path);
+            var decoder = BitmapDecoder.Create(stream, BitmapCreateOptions.DelayCreation, BitmapCacheOption.None);
+            var frame = decoder.Frames[0];
+            return $"{frame.PixelWidth}x{frame.PixelHeight}";
         }
         catch
         {
@@ -229,6 +257,7 @@ public sealed class EditorViewModel : ObservableObject
         _previewImagePath = null;
         OnPropertyChanged(nameof(ContentFile));
         OnPropertyChanged(nameof(HasContentFile));
+        OnPropertyChanged(nameof(ContentFileName));
         OnPropertyChanged(nameof(ContentFileSizeDisplay));
         OnPropertyChanged(nameof(ShowPublishedContentInfo));
         OnPropertyChanged(nameof(ShowContentPlaceholder));
@@ -237,6 +266,7 @@ public sealed class EditorViewModel : ObservableObject
         OnPropertyChanged(nameof(PreviewDisplaySource));
         OnPropertyChanged(nameof(HasPreviewDisplay));
         OnPropertyChanged(nameof(PreviewImageSizeDisplay));
+        OnPropertyChanged(nameof(PreviewImageResolution));
 
         _original = ToItemEdit(); // current state is now the clean baseline
         OnPropertyChanged(nameof(IsDirty));

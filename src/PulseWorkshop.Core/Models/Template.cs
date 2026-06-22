@@ -10,6 +10,10 @@ public sealed class Template
 
     public required string Name { get; set; }
 
+    public DateTimeOffset Created { get; init; } = DateTimeOffset.Now;
+
+    public DateTimeOffset Modified { get; set; } = DateTimeOffset.Now;
+
     /// <summary>Optional: a template can target a specific game, or be game-agnostic when 0.</summary>
     public uint AppId { get; set; }
 

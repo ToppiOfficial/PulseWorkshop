@@ -19,12 +19,12 @@
     <Grid Margin="10">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
-            <RowDefinition Height="*" MinHeight="120" />
-            <!-- Console drawer: a drag handle and the log panel. Both rows collapse to 0 height
-                 when the console is hidden (toggled in MainWindow.xaml.cs). -->
+            <RowDefinition Height="*" />
+            <!-- Terminal drawer (at the very bottom, below the action bar): a drag handle and the log
+                 panel. Both rows collapse to 0 height when the terminal is hidden (toggled in
+                 MainWindow.xaml.cs). -->
             <RowDefinition x:Name="ConsoleSplitterRow" Height="0" />
             <RowDefinition x:Name="ConsoleRowDef" Height="0" MinHeight="0" />
-            <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
         <!-- Top bar: game picker + connect -->
@@ -81,8 +81,15 @@
             </Grid>
         </Border>
 
-        <!-- Main content: lists on the left, editor on the right -->
+        <!-- Resizable top block: main content + action bar share it; the terminal drawer sits below. -->
         <Grid Grid.Row="1">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="*" MinHeight="120" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+
+            <!-- Main content: lists on the left, editor on the right -->
+            <Grid Grid.Row="0">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="2*" />
                 <ColumnDefinition Width="8" />
@@ -192,6 +199,8 @@
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*" />
                                     <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="Auto" />
                                 </Grid.ColumnDefinitions>
                                 <TextBox Grid.Column="0" x:Name="DraftsSearchBox"
                                          Text="{Binding DraftsSearch, UpdateSourceTrigger=PropertyChanged}"
@@ -199,6 +208,13 @@
                                          Tag="Search drafts..." />
                                 <ToggleButton Grid.Column="1" Content=".*" Margin="6,0,0,0" Padding="8,4"
                                               IsChecked="{Binding DraftsRegex}" ToolTip="Regex" />
+                                <ComboBox Grid.Column="2" Width="120" Margin="6,0,0,0"
+                                          ItemsSource="{Binding DraftSortOptions}"
+                                          SelectedItem="{Binding SelectedDraftSort}"
+                                          ToolTip="Sort the drafts list." />
+                                <ToggleButton Grid.Column="3" Content="Reverse" Margin="6,0,0,0" Padding="8,4"
+                                              IsChecked="{Binding DraftSortReversed}"
+                                              ToolTip="Reverse the chosen sort order." />
                             </Grid>
                             <ListBox Grid.Row="1" ItemsSource="{Binding DraftsView}"
                                  BorderThickness="0" Background="Transparent"
@@ -246,6 +262,8 @@
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*" />
                                     <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="Auto" />
                                 </Grid.ColumnDefinitions>
                                 <TextBox Grid.Column="0" x:Name="TemplatesSearchBox"
                                          Text="{Binding TemplatesSearch, UpdateSourceTrigger=PropertyChanged}"
@@ -253,6 +271,13 @@
                                          Tag="Search templates..." />
                                 <ToggleButton Grid.Column="1" Content=".*" Margin="6,0,0,0" Padding="8,4"
                                               IsChecked="{Binding TemplatesRegex}" ToolTip="Regex" />
+                                <ComboBox Grid.Column="2" Width="120" Margin="6,0,0,0"
+                                          ItemsSource="{Binding TemplateSortOptions}"
+                                          SelectedItem="{Binding SelectedTemplateSort}"
+                                          ToolTip="Sort the templates list." />
+                                <ToggleButton Grid.Column="3" Content="Reverse" Margin="6,0,0,0" Padding="8,4"
+                                              IsChecked="{Binding TemplateSortReversed}"
+                                              ToolTip="Reverse the chosen sort order." />
                             </Grid>
                             <ListBox Grid.Row="1" ItemsSource="{Binding TemplatesView}"
                                  BorderThickness="0" Background="Transparent"
@@ -276,7 +301,9 @@
                                         <StackPanel Grid.Column="1" Margin="10,0,0,0" VerticalAlignment="Center">
                                             <TextBlock Text="{Binding Name}" FontWeight="SemiBold"
                                                        TextTrimming="CharacterEllipsis" />
-                                            <TextBlock Text="{Binding Description}" Style="{StaticResource MutedText}"
+                                            <TextBlock Text="{Binding Modified, StringFormat='Edited {0:g}'}"
+                                                       Style="{StaticResource MutedText}" Margin="0,0,0,2" />
+                                            <TextBlock Text="{Binding DescriptionPreview}" Style="{StaticResource MutedText}"
                                                        TextTrimming="CharacterEllipsis" />
                                         </StackPanel>
                                         <Button Grid.Column="2" Content="Use" Padding="8,2" Margin="0,0,4,0"
@@ -300,7 +327,7 @@
             <!-- Right: editor. The panel's own border turns Steam blue while a draft or template
                  has unsaved changes (see EditorViewModel.HasUnsavedChanges). -->
             <Border Grid.Column="2" Background="{StaticResource PanelGradientBrush}"
-                    BorderThickness="2" CornerRadius="3" Padding="15">
+                    BorderThickness="2" CornerRadius="3" Padding="15,7,15,15">
                 <Border.Style>
                     <Style TargetType="Border">
                         <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}" />
@@ -317,11 +344,13 @@
                                VerticalAlignment="Center" HorizontalAlignment="Center"
                                Visibility="{Binding Editor, Converter={StaticResource NullToVis}, ConverterParameter=invert}" />
 
-                    <!-- Whole editor scrolls so nothing (e.g. Visibility) is cut off on a small window. -->
-                    <ScrollViewer DataContext="{Binding Editor}" VerticalScrollBarVisibility="Auto"
-                                  Padding="0,0,8,0"
-                                  Visibility="{Binding DataContext.Editor, RelativeSource={RelativeSource AncestorType=Border}, Converter={StaticResource NullToVis}}">
-                      <StackPanel>
+                    <!-- Editor split into Details + Tags tabs (Tags live on their own tab). -->
+                    <TabControl DataContext="{Binding Editor}" Background="Transparent" BorderThickness="0" Padding="0"
+                                Visibility="{Binding DataContext.Editor, RelativeSource={RelativeSource AncestorType=Border}, Converter={StaticResource NullToVis}}">
+                      <TabItem Header="Details">
+                        <!-- This tab scrolls so nothing (e.g. Visibility) is cut off on a small window. -->
+                        <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="0,8,8,0">
+                          <StackPanel>
 
                         <!-- Title (doubles as the template name in template mode), larger font -->
                         <StackPanel>
@@ -367,6 +396,31 @@
                                           Cursor="SizeNS" Margin="0,2,0,0" />
                         </Grid>
 
+                        <!-- Visibility + "manage on Steam" shortcuts (placed above Content/Preview so the
+                             preview zone has room to scale). Gallery images/videos and required items have
+                             no SDK API for these legacy RemoteStorage games, so we deep-link instead. -->
+                        <Grid Margin="0,12,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Grid.Column="0">
+                                <TextBlock Text="Visibility" Style="{StaticResource MutedText}" Margin="0,0,0,4" />
+                                <ComboBox ItemsSource="{Binding VisibilityOptions}"
+                                          SelectedItem="{Binding Visibility}" Width="180" HorizontalAlignment="Left" />
+                            </StackPanel>
+
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Bottom"
+                                        HorizontalAlignment="Right"
+                                        Visibility="{Binding IsEditingPublished, Converter={StaticResource BoolToVis}}">
+                                <Button Content="Images &amp; Videos" Click="OpenManagePreviews_Click"
+                                        Margin="0,0,8,0"
+                                        ToolTip="Add/edit gallery images and videos for this item on Steam (no SDK API for these games)." />
+                                <Button Content="Required Items" Click="OpenManageRequiredItems_Click"
+                                        ToolTip="Manage required items for this item on Steam (no SDK API for these games)." />
+                            </StackPanel>
+                        </Grid>
+
                         <!-- Content file + Preview image: drag-drop / click-to-browse zones
                              (also shown in template mode - templates can hold content/preview). -->
                         <Grid Margin="0,12,0,0">
@@ -381,7 +435,10 @@
                                 <TextBlock Style="{StaticResource MutedText}" Margin="0,0,0,4">
                                     <Run Text="Content file (" /><Run Text="{Binding ContentFileExtension, Mode=OneWay}" /><Run Text=")" />
                                 </TextBlock>
-                                <Border x:Name="ContentDrop" Height="96" CornerRadius="3" AllowDrop="True"
+                                <!-- Manual path entry; two-way synced with the drop zone and browse dialog. -->
+                                <TextBox Text="{Binding ContentFile, UpdateSourceTrigger=PropertyChanged}"
+                                         Tag="Type or paste a file path" Margin="0,0,0,6" />
+                                <Border x:Name="ContentDrop" Height="250" CornerRadius="3" AllowDrop="True"
                                         Background="{StaticResource BgBrush}" BorderBrush="{StaticResource BorderBrush}"
                                         BorderThickness="1" Cursor="Hand"
                                         MouseLeftButtonUp="ContentDrop_Click"
@@ -408,6 +465,9 @@
                                             <TextBlock Text="{Binding ContentFile, Converter={StaticResource PathEllipsis}}"
                                                        ToolTip="{Binding ContentFile}"
                                                        TextAlignment="Center" />
+                                            <TextBlock Text="{Binding ContentFileName, StringFormat='({0})'}"
+                                                       Style="{StaticResource MutedText}"
+                                                       TextAlignment="Center" Margin="0,2,0,0" />
                                             <TextBlock Text="{Binding ContentFileSizeDisplay}" Style="{StaticResource MutedText}"
                                                        TextAlignment="Center" Margin="0,4,0,0" />
                                         </StackPanel>
@@ -418,7 +478,10 @@
                             <!-- Preview image -->
                             <StackPanel Grid.Column="2">
                                 <TextBlock Text="Preview image" Style="{StaticResource MutedText}" Margin="0,0,0,4" />
-                                <Border x:Name="PreviewImageDrop" Height="96" CornerRadius="3" AllowDrop="True"
+                                <!-- Manual path entry; two-way synced with the drop zone and browse dialog. -->
+                                <TextBox Text="{Binding PreviewImagePath, UpdateSourceTrigger=PropertyChanged}"
+                                         Tag="Type or paste an image path" Margin="0,0,0,6" />
+                                <Border x:Name="PreviewImageDrop" Height="250" CornerRadius="3" AllowDrop="True"
                                         Background="{StaticResource BgBrush}" BorderBrush="{StaticResource BorderBrush}"
                                         BorderThickness="1" Cursor="Hand"
                                         MouseLeftButtonUp="PreviewDrop_Click"
@@ -433,41 +496,26 @@
                                         <Border VerticalAlignment="Bottom" HorizontalAlignment="Right" Margin="6"
                                                 Background="#AA000000" CornerRadius="3" Padding="6,2"
                                                 Visibility="{Binding HasPreviewImage, Converter={StaticResource BoolToVis}}">
-                                            <TextBlock Text="{Binding PreviewImageSizeDisplay}" Foreground="White" FontSize="11" />
+                                            <StackPanel>
+                                                <TextBlock Text="{Binding PreviewImageResolution}" Foreground="White" FontSize="11"
+                                                           TextAlignment="Right"
+                                                           Visibility="{Binding PreviewImageResolution, Converter={StaticResource StringToVis}}" />
+                                                <TextBlock Text="{Binding PreviewImageSizeDisplay}" Foreground="White" FontSize="11"
+                                                           TextAlignment="Right" />
+                                            </StackPanel>
                                         </Border>
                                     </Grid>
                                 </Border>
                             </StackPanel>
                         </Grid>
+                          </StackPanel>
+                        </ScrollViewer>
+                      </TabItem>
 
-                        <!-- Visibility (before tags), with "manage on Steam" shortcuts on the right.
-                             Gallery images/videos and contributors have no SDK API for these legacy
-                             RemoteStorage games, so we deep-link to the official Steam pages instead. -->
-                        <Grid Margin="0,12,0,0">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="Auto" />
-                                <ColumnDefinition Width="*" />
-                            </Grid.ColumnDefinitions>
-                            <StackPanel Grid.Column="0">
-                                <TextBlock Text="Visibility" Style="{StaticResource MutedText}" Margin="0,0,0,4" />
-                                <ComboBox ItemsSource="{Binding VisibilityOptions}"
-                                          SelectedItem="{Binding Visibility}" Width="180" HorizontalAlignment="Left" />
-                            </StackPanel>
-
-                            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Bottom"
-                                        HorizontalAlignment="Right"
-                                        Visibility="{Binding IsEditingPublished, Converter={StaticResource BoolToVis}}">
-                                <Button Content="Images &amp; Videos" Click="OpenManagePreviews_Click"
-                                        Margin="0,0,8,0"
-                                        ToolTip="Add/edit gallery images and videos for this item on Steam (no SDK API for these games)." />
-                                <Button Content="Required Items" Click="OpenManageRequiredItems_Click"
-                                        ToolTip="Manage required items for this item on Steam (no SDK API for these games)." />
-                            </StackPanel>
-                        </Grid>
-
-                        <!-- Categorized tags (Crowbar-style columns). No inner scroll - the whole
-                             editor scrolls instead. -->
-                        <DockPanel Margin="0,12,0,0">
+                      <TabItem Header="Tags">
+                        <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="0,8,8,0">
+                        <!-- Categorized tags (Crowbar-style columns). -->
+                        <DockPanel>
                             <TextBlock DockPanel.Dock="Top" Text="Tags" Style="{StaticResource MutedText}" Margin="0,0,0,6" />
                                 <ItemsControl ItemsSource="{Binding TagGroups}">
                                     <ItemsControl.ItemsPanel>
@@ -517,13 +565,48 @@
                                     </ItemsControl.ItemTemplate>
                                 </ItemsControl>
                         </DockPanel>
-                      </StackPanel>
-                    </ScrollViewer>
+                        </ScrollViewer>
+                      </TabItem>
+                    </TabControl>
                 </Grid>
             </Border>
+            </Grid>
+
+            <!-- Action bar: sits directly under the editor (terminal drawer is below this block).
+                 Indeterminate progress (while busy) on the left, actions on the right. -->
+            <Grid Grid.Row="1" Margin="0,8,0,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+
+                <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="2,0,16,0"
+                            Visibility="{Binding IsBusy, Converter={StaticResource BoolToVis}}">
+                    <TextBlock Text="{Binding StatusMessage}" Style="{StaticResource MutedText}"
+                               TextTrimming="CharacterEllipsis" Margin="0,0,0,4" />
+                    <ProgressBar IsIndeterminate="True" />
+                </StackPanel>
+
+                <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right">
+                    <TextBlock Text="{Binding PublishRequirementsHint}" Style="{StaticResource MutedText}"
+                               VerticalAlignment="Center" Margin="0,0,12,0"
+                               Visibility="{Binding PublishRequirementsHint, Converter={StaticResource StringToVis}}" />
+                    <Button Content="Terminal" Command="{Binding ToggleConsoleCommand}" Margin="0,0,8,0"
+                            ToolTip="Show/hide the live Steam host log and upload progress." />
+                    <Button Content="Save as template" Click="SaveAsTemplate_Click" Margin="0,0,8,0"
+                            ToolTip="Save the current tags / description / visibility as a reusable template."
+                            Visibility="{Binding CanSaveAsTemplate, Converter={StaticResource BoolToVis}}" />
+                    <Button Content="Revert" Command="{Binding RevertCommand}" Margin="0,0,8,0"
+                            ToolTip="Discard this draft and reset to the published item's current state."
+                            Visibility="{Binding CanRevert, Converter={StaticResource BoolToVis}}" />
+                    <Button Content="{Binding PrimaryActionText}" Style="{StaticResource AccentButton}"
+                            Command="{Binding PublishCommand}"
+                            Visibility="{Binding ShowItemActions, Converter={StaticResource BoolToVis}}" />
+                </StackPanel>
+            </Grid>
         </Grid>
 
-        <!-- Console drawer: drag handle (resizes content vs console) -->
+        <!-- Terminal drawer: drag handle (resizes the top block vs the terminal) -->
         <GridSplitter Grid.Row="2" Height="6" HorizontalAlignment="Stretch"
                       VerticalAlignment="Center" ResizeBehavior="PreviousAndNext"
                       ResizeDirection="Rows" Background="Transparent" Cursor="SizeNS"
@@ -542,7 +625,7 @@
 
                 <!-- Header strip: title + clear -->
                 <Grid Grid.Row="0" Background="{StaticResource PanelAltBrush}">
-                    <TextBlock Text="Console" Margin="10,5" FontWeight="SemiBold"
+                    <TextBlock Text="Terminal" Margin="10,5" FontWeight="SemiBold"
                                VerticalAlignment="Center" />
                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Right"
                                 VerticalAlignment="Center" Margin="0,2,6,2">
@@ -573,38 +656,5 @@
                 </ListBox>
             </Grid>
         </Border>
-
-        <!-- Bottom action bar: indeterminate progress (while busy) on the left, actions on the right. -->
-        <Grid Grid.Row="4" Margin="0,8,0,0">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="Auto" />
-            </Grid.ColumnDefinitions>
-
-            <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="2,0,16,0"
-                        Visibility="{Binding IsBusy, Converter={StaticResource BoolToVis}}">
-                <TextBlock Text="{Binding StatusMessage}" Style="{StaticResource MutedText}"
-                           TextTrimming="CharacterEllipsis" Margin="0,0,0,4" />
-                <ProgressBar IsIndeterminate="True" />
-            </StackPanel>
-
-            <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right">
-                <TextBlock Text="{Binding PublishRequirementsHint}" Style="{StaticResource MutedText}"
-                           VerticalAlignment="Center" Margin="0,0,12,0"
-                           Visibility="{Binding PublishRequirementsHint, Converter={StaticResource StringToVis}}" />
-                <Button Content="Console" Command="{Binding ToggleConsoleCommand}" Margin="0,0,8,0"
-                        ToolTip="Show/hide the live Steam host log and upload progress." />
-            <Button Content="Save as template" Click="SaveAsTemplate_Click" Margin="0,0,8,0"
-                    ToolTip="Save the current tags / description / visibility as a reusable template."
-                    Visibility="{Binding CanSaveAsTemplate, Converter={StaticResource BoolToVis}}" />
-            <Button Content="{Binding SaveActionText}" Command="{Binding SaveDraftCommand}" Margin="0,0,8,0" />
-            <Button Content="Revert" Command="{Binding RevertCommand}" Margin="0,0,8,0"
-                    ToolTip="Discard this draft and reset to the published item's current state."
-                    Visibility="{Binding CanRevert, Converter={StaticResource BoolToVis}}" />
-            <Button Content="{Binding PrimaryActionText}" Style="{StaticResource AccentButton}"
-                    Command="{Binding PublishCommand}"
-                    Visibility="{Binding ShowItemActions, Converter={StaticResource BoolToVis}}" />
-            </StackPanel>
-        </Grid>
     </Grid>
 </Window>

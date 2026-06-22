@@ -53,7 +53,6 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         ConnectCommand = new AsyncRelayCommand(ConnectAsync, () => !IsBusy);
         RefreshPublishedCommand = new AsyncRelayCommand(LoadAllPublishedAsync, () => !IsBusy);
         NewItemCommand = new RelayCommand(NewItem, () => !IsBusy && IsConnected);
-        SaveDraftCommand = new RelayCommand(SaveDraft, () => Editor is not null);
         RevertCommand = new RelayCommand(Revert, () => CanRevert);
         PublishCommand = new AsyncRelayCommand(PublishAsync, CanPublish);
         ToggleConsoleCommand = new RelayCommand(() => IsConsoleVisible = !IsConsoleVisible);
@@ -78,6 +77,12 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         _selectedPublishedSort = PublishedSortOptions[0];
         ApplyPublishedSort();
 
+        // Drafts and Templates both default to name A-Z.
+        _selectedDraftSort = DraftSortOptions[0];
+        ApplyDraftSort();
+        _selectedTemplateSort = TemplateSortOptions[0];
+        ApplyTemplateSort();
+
         // Drafts/Templates are populated only after a successful Connect (see LoadLocalLists), so the
         // lists start empty until the user connects.
     }
@@ -95,22 +100,85 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     // --- Published list sorting (Published tab only) ---------------------------------------
 
     /// <summary>The sort options offered for the Published list (label + field + natural direction).</summary>
-    public IReadOnlyList<PublishedSortOption> PublishedSortOptions { get; } = new[]
+    public IReadOnlyList<ListSortOption> PublishedSortOptions { get; } = new[]
     {
-        new PublishedSortOption("Published date", nameof(WorkshopItem.Created), ListSortDirection.Descending),
-        new PublishedSortOption("Last updated", nameof(WorkshopItem.Updated), ListSortDirection.Descending),
-        new PublishedSortOption("Title (A-Z)", nameof(WorkshopItem.Title), ListSortDirection.Ascending),
-        new PublishedSortOption("Steam ID", nameof(WorkshopItem.PublishedFileId), ListSortDirection.Ascending),
+        new ListSortOption("Published date", nameof(WorkshopItem.Created), ListSortDirection.Descending),
+        new ListSortOption("Last updated", nameof(WorkshopItem.Updated), ListSortDirection.Descending),
+        new ListSortOption("Title (A-Z)", nameof(WorkshopItem.Title), ListSortDirection.Ascending),
+        new ListSortOption("Steam ID", nameof(WorkshopItem.PublishedFileId), ListSortDirection.Ascending),
     };
 
-    private PublishedSortOption _selectedPublishedSort = null!; // set in the constructor
+    private ListSortOption _selectedPublishedSort = null!; // set in the constructor
     private bool _publishedSortReversed;
 
     /// <summary>Selected Published sort field. Default is published date (newest first).</summary>
-    public PublishedSortOption SelectedPublishedSort
+    public ListSortOption SelectedPublishedSort
     {
         get => _selectedPublishedSort;
         set { if (SetField(ref _selectedPublishedSort, value)) ApplyPublishedSort(); }
+    }
+
+    // --- Drafts / Templates sorting (name A-Z or edited date only) -------------------------
+
+    /// <summary>Sort options for the Drafts list. Defaults to name A-Z.</summary>
+    public IReadOnlyList<ListSortOption> DraftSortOptions { get; } = new[]
+    {
+        new ListSortOption("Name (A-Z)", nameof(DraftListItemViewModel.Name), ListSortDirection.Ascending),
+        new ListSortOption("Edited date", nameof(DraftListItemViewModel.Modified), ListSortDirection.Descending),
+    };
+
+    /// <summary>Sort options for the Templates list. Defaults to name A-Z.</summary>
+    public IReadOnlyList<ListSortOption> TemplateSortOptions { get; } = new[]
+    {
+        new ListSortOption("Name (A-Z)", nameof(TemplateListItemViewModel.Name), ListSortDirection.Ascending),
+        new ListSortOption("Edited date", nameof(TemplateListItemViewModel.Modified), ListSortDirection.Descending),
+    };
+
+    private ListSortOption _selectedDraftSort = null!;    // set in the constructor
+    private ListSortOption _selectedTemplateSort = null!; // set in the constructor
+    private bool _draftSortReversed;
+    private bool _templateSortReversed;
+
+    public ListSortOption SelectedDraftSort
+    {
+        get => _selectedDraftSort;
+        set { if (SetField(ref _selectedDraftSort, value)) ApplyDraftSort(); }
+    }
+
+    public ListSortOption SelectedTemplateSort
+    {
+        get => _selectedTemplateSort;
+        set { if (SetField(ref _selectedTemplateSort, value)) ApplyTemplateSort(); }
+    }
+
+    /// <summary>Reverses the chosen Drafts sort's natural direction.</summary>
+    public bool DraftSortReversed
+    {
+        get => _draftSortReversed;
+        set { if (SetField(ref _draftSortReversed, value)) ApplyDraftSort(); }
+    }
+
+    /// <summary>Reverses the chosen Templates sort's natural direction.</summary>
+    public bool TemplateSortReversed
+    {
+        get => _templateSortReversed;
+        set { if (SetField(ref _templateSortReversed, value)) ApplyTemplateSort(); }
+    }
+
+    private void ApplyDraftSort() => ApplyListSort(DraftsView, _selectedDraftSort, _draftSortReversed);
+    private void ApplyTemplateSort() => ApplyListSort(TemplatesView, _selectedTemplateSort, _templateSortReversed);
+
+    private static void ApplyListSort(ICollectionView view, ListSortOption option, bool reversed)
+    {
+        var dir = option.Direction;
+        if (reversed)
+            dir = dir == ListSortDirection.Ascending ? ListSortDirection.Descending : ListSortDirection.Ascending;
+
+        using (view.DeferRefresh())
+        {
+            view.SortDescriptions.Clear();
+            view.SortDescriptions.Add(new SortDescription(option.Property, dir));
+        }
     }
 
     /// <summary>Reverses the chosen sort's natural direction.</summary>
@@ -138,7 +206,6 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     public AsyncRelayCommand ConnectCommand { get; }
     public AsyncRelayCommand RefreshPublishedCommand { get; }
     public RelayCommand NewItemCommand { get; }
-    public RelayCommand SaveDraftCommand { get; }
     public RelayCommand RevertCommand { get; }
     public AsyncRelayCommand PublishCommand { get; }
     public RelayCommand ToggleConsoleCommand { get; }
@@ -299,11 +366,9 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
                 if (_editor is not null)
                     _editor.Changed += OnEditorChanged;
 
-                SaveDraftCommand.RaiseCanExecuteChanged();
                 PublishCommand.RaiseCanExecuteChanged();
                 RevertCommand.RaiseCanExecuteChanged();
                 OnPropertyChanged(nameof(PrimaryActionText));
-                OnPropertyChanged(nameof(SaveActionText));
                 OnPropertyChanged(nameof(ShowItemActions));
                 OnPropertyChanged(nameof(CanSaveAsTemplate));
                 OnPropertyChanged(nameof(CanRevert));
@@ -317,10 +382,6 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     public string PrimaryActionText =>
         Editor?.IsEditingPublished == true ? "Save edit" : "Publish";
 
-    /// <summary>Label for the secondary save button: "Save template" in template mode else "Save draft".</summary>
-    public string SaveActionText =>
-        Editor?.IsTemplateMode == true ? "Save template" : "Save draft";
-
     /// <summary>Publish/Revert only apply to real items, not templates.</summary>
     public bool ShowItemActions => Editor is not null && !Editor.IsTemplateMode;
 
@@ -329,15 +390,37 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
 
     private void OnEditorChanged()
     {
-        // Persist edits to a published item into its linked draft so progress survives app exit.
-        if (Editor is { IsEditingPublished: true, PublishedFileId: { } pubId })
-            UpsertLinkedDraft(Editor, pubId);
+        // Everything is auto-saved on every change - there is no manual "Save draft" step.
+        AutoSave();
 
         PublishCommand.RaiseCanExecuteChanged();
         RevertCommand.RaiseCanExecuteChanged();
         OnPropertyChanged(nameof(PrimaryActionText));
         OnPropertyChanged(nameof(CanRevert));
         OnPropertyChanged(nameof(PublishRequirementsHint));
+    }
+
+    /// <summary>
+    /// Persists the open editor on every change so nothing is ever lost and there is no manual save:
+    /// a published-item edit goes to its linked draft, a template writes back to itself, and a
+    /// new/unpublished draft updates the draft it is bound to.
+    /// </summary>
+    private void AutoSave()
+    {
+        switch (Editor)
+        {
+            case null:
+                return;
+            case { IsEditingPublished: true, PublishedFileId: { } pubId }:
+                UpsertLinkedDraft(Editor, pubId);
+                return;
+            case { IsTemplateMode: true, TemplateId: { } templateId }:
+                PersistTemplate(templateId);
+                return;
+            default:
+                PersistDraft();
+                return;
+        }
     }
 
     /// <summary>Create or update the one draft that tracks edits to a published item.</summary>
@@ -349,14 +432,110 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         if (existing is null)
         {
             _drafts.Create(name, editor.ToItemEdit());
+            LoadLocalLists();
         }
         else
         {
             existing.Name = name;
             existing.Edit = editor.ToItemEdit();
             _drafts.Save(existing);
+            SyncDraftRow(existing);
         }
-        LoadLocalLists();
+        // The linked draft keeps the published baseline, so dirtiness (which enables "Save edit")
+        // is deliberately NOT cleared here - unlike PersistDraft/PersistTemplate.
+    }
+
+    /// <summary>
+    /// Auto-saves the new/unpublished draft the editor is bound to (creating it on first edit if
+    /// somehow unbound), then rebaselines so the "unsaved changes" indicator clears.
+    /// </summary>
+    private void PersistDraft()
+    {
+        if (Editor is null)
+            return;
+
+        var name = string.IsNullOrWhiteSpace(Editor.Title) ? "Untitled draft" : Editor.Title;
+
+        // Prefer mutating the list row's own draft instance so the save and the visible row stay in
+        // sync (Get/LoadAll hand back fresh deserialized copies, which would otherwise diverge).
+        var row = Editor.SourceDraftId is { } id ? FindDraftRow(id) : null;
+        if (row is not null)
+        {
+            row.Draft.Name = name;
+            row.Draft.Edit = Editor.ToItemEdit();
+            _drafts.Save(row.Draft);
+            row.RaiseDisplayChanged();
+        }
+        else
+        {
+            var existing = Editor.SourceDraftId is { } draftId ? _drafts.Get(draftId) : null;
+            if (existing is not null)
+            {
+                existing.Name = name;
+                existing.Edit = Editor.ToItemEdit();
+                _drafts.Save(existing);
+            }
+            else
+            {
+                var created = _drafts.Create(name, Editor.ToItemEdit());
+                Editor.SourceDraftId = created.Id; // subsequent edits update this same draft
+            }
+            LoadLocalLists();
+        }
+
+        Editor.MarkSaved();
+    }
+
+    /// <summary>Auto-saves the open template back to its stored definition, then rebaselines.</summary>
+    private void PersistTemplate(Guid templateId)
+    {
+        var existing = _templates.GetAll().FirstOrDefault(t => t.Id == templateId);
+        if (existing is null || Editor is null)
+            return;
+
+        var edit = Editor.ToItemEdit();
+        existing.Name = string.IsNullOrWhiteSpace(Editor.Title) ? existing.Name : Editor.Title;
+        existing.Description = edit.Description;
+        existing.ChangeNote = edit.ChangeNote;
+        existing.Tags = edit.Tags.ToList();
+        existing.DefaultVisibility = edit.Visibility;
+        existing.ContentFile = edit.ContentFile;
+        existing.PreviewImagePath = edit.PreviewImagePath;
+        _templates.Save(existing);
+
+        if (Templates.FirstOrDefault(t => t.Template.Id == templateId) is { } row)
+        {
+            row.Template.Name = existing.Name;
+            row.Template.Description = existing.Description;
+            row.Template.PreviewImagePath = existing.PreviewImagePath;
+            row.Template.Modified = existing.Modified;
+            row.RaiseDisplayChanged();
+        }
+        else
+        {
+            LoadLocalLists();
+        }
+
+        Editor.MarkSaved();
+    }
+
+    private DraftListItemViewModel? FindDraftRow(Guid draftId) =>
+        Drafts.FirstOrDefault(d => d.Draft.Id == draftId);
+
+    /// <summary>Copies a just-saved draft's name and edit onto its list row (so the label and
+    /// thumbnail track live), falling back to a full rebuild if the row isn't listed.</summary>
+    private void SyncDraftRow(Draft saved)
+    {
+        if (FindDraftRow(saved.Id) is { } row)
+        {
+            row.Draft.Name = saved.Name;
+            row.Draft.Edit = saved.Edit;
+            row.RaiseDisplayChanged();
+        }
+        else
+        {
+            LoadLocalLists();
+        }
     }
 
     // --- Search / filter -------------------------------------------------------------------
@@ -518,33 +697,39 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         LoadLocalLists();
     }
 
-    private async Task RefreshPublishedAsync()
+    /// <summary>
+    /// After a publish, refresh only the affected item instead of reloading (and collapsing) the
+    /// whole catalog. The host sorts published items by last-updated-desc, so the just-published or
+    /// just-edited item is on the first page; we pull that page and update the matching row in place,
+    /// or insert it when it's a brand-new item. Returns the fresh item, or null if it wasn't found.
+    /// </summary>
+    private async Task<WorkshopItem?> SyncPublishedItemAsync(ulong publishedFileId)
     {
-        if (_service.ActiveAppId is null)
-        {
-            StatusMessage = "Connect to a game first.";
-            return;
-        }
+        if (publishedFileId == 0)
+            return null;
 
-        IsBusy = true;
-        try
+        var page = await _service.GetPublishedAsync(page: 1);
+        var fresh = page.Items.FirstOrDefault(i => i.PublishedFileId == publishedFileId);
+        if (fresh is null)
+            return null;
+
+        var index = IndexOfPublished(publishedFileId);
+        if (index >= 0)
+            PublishedItems[index] = fresh; // edited item: replace in place (the view re-sorts)
+        else
+            PublishedItems.Insert(0, fresh); // newly published: append without touching the rest
+
+        return fresh;
+    }
+
+    private int IndexOfPublished(ulong publishedFileId)
+    {
+        for (var i = 0; i < PublishedItems.Count; i++)
         {
-            var result = await _service.GetPublishedAsync(page: 1);
-            PublishedItems.Clear();
-            foreach (var item in result.Items)
-                PublishedItems.Add(item);
-            StatusMessage = result.TotalResults > result.Items.Count
-                ? $"Loaded {result.Items.Count} of {result.TotalResults}. Click Refresh to load the full catalog."
-                : $"Loaded {result.Items.Count} published item(s).";
+            if (PublishedItems[i].PublishedFileId == publishedFileId)
+                return i;
         }
-        catch (Exception ex)
-        {
-            StatusMessage = $"Failed to load items: {ex.Message}";
-        }
-        finally
-        {
-            IsBusy = false;
-        }
+        return -1;
     }
 
     /// <summary>
@@ -766,6 +951,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
 
         Editor = new EditorViewModel(SelectedGame, edit) { SourceDraftId = draft.Id };
         NavigateToDrafts?.Invoke();
+        SelectDraftRequested?.Invoke(draft.Id); // make the template-seeded draft the active selection
     }
 
     /// <summary>Raised when the UI should switch to the Drafts tab (e.g. after using a template,
@@ -774,6 +960,12 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
 
     /// <summary>Raised when the UI should switch to the Templates tab (e.g. after saving a template).</summary>
     public event Action? NavigateToTemplates;
+
+    /// <summary>Raised to select (and thereby open) a specific draft row by id, e.g. a just-made clone.</summary>
+    public event Action<Guid>? SelectDraftRequested;
+
+    /// <summary>Raised to select (and thereby open) a specific template row by id, e.g. a just-saved template.</summary>
+    public event Action<Guid>? SelectTemplateRequested;
 
     /// <summary>Open a template for editing (template mode: name + presets, no publish).</summary>
     public void EditTemplate(Template template)
@@ -834,11 +1026,12 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
 
         var clone = draft.Edit.Clone();
         clone.PublishedFileId = null; // a clone is a new item, not a second edit of the same one
-        _drafts.Create(draft.Name, clone);
+        var created = _drafts.Create(draft.Name, clone);
 
         LoadLocalLists();
         StatusMessage = $"Cloned draft \"{draft.Name}\".";
         NavigateToDrafts?.Invoke();
+        SelectDraftRequested?.Invoke(created.Id); // make the clone the active selection
     }
 
     public void DeleteTemplate(Template template)
@@ -885,61 +1078,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         LoadLocalLists();
         StatusMessage = $"Saved template \"{name}\".";
         NavigateToTemplates?.Invoke();
-    }
-
-    private void SaveDraft()
-    {
-        if (Editor is null)
-            return;
-
-        // In template mode, "Save" persists the template instead of creating a draft.
-        if (Editor is { IsTemplateMode: true, TemplateId: { } tid })
-        {
-            SaveEditedTemplate(tid);
-            return;
-        }
-
-        var name = string.IsNullOrWhiteSpace(Editor.Title) ? "Untitled draft" : Editor.Title;
-
-        // Update the draft this editor is already bound to; only create a new one the first time.
-        var existing = Editor.SourceDraftId is { } id ? _drafts.Get(id) : null;
-        if (existing is not null)
-        {
-            existing.Name = name;
-            existing.Edit = Editor.ToItemEdit();
-            _drafts.Save(existing);
-        }
-        else
-        {
-            var created = _drafts.Create(name, Editor.ToItemEdit());
-            Editor.SourceDraftId = created.Id; // subsequent saves update this same draft
-        }
-
-        Editor.MarkSaved(); // clears the editor's unsaved-changes indicator
-        LoadLocalLists();
-        StatusMessage = $"Saved draft \"{name}\".";
-        NavigateToDrafts?.Invoke();
-    }
-
-    private void SaveEditedTemplate(Guid templateId)
-    {
-        var existing = _templates.GetAll().FirstOrDefault(t => t.Id == templateId);
-        if (existing is null || Editor is null)
-            return;
-
-        var edit = Editor.ToItemEdit();
-        existing.Name = string.IsNullOrWhiteSpace(Editor.Title) ? existing.Name : Editor.Title;
-        existing.Description = edit.Description;
-        existing.ChangeNote = edit.ChangeNote;
-        existing.Tags = edit.Tags.ToList();
-        existing.DefaultVisibility = edit.Visibility;
-        existing.ContentFile = edit.ContentFile;
-        existing.PreviewImagePath = edit.PreviewImagePath;
-        _templates.Save(existing);
-        Editor.MarkSaved(); // clears the editor's unsaved-changes indicator
-        LoadLocalLists();
-        StatusMessage = $"Saved template \"{existing.Name}\".";
-        NavigateToTemplates?.Invoke();
+        SelectTemplateRequested?.Invoke(template.Id); // make the new template the active selection
     }
 
     private async Task PublishAsync()
@@ -957,7 +1096,6 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
 
         var wasEditingPublished = Editor.IsEditingPublished;
         IsBusy = true;
-        IsConsoleVisible = true; // surface the live upload log so the user sees real progress
         ConsoleLog(wasEditingPublished
             ? $"Saving edit to \"{edit.Title}\"..."
             : $"Publishing new item \"{edit.Title}\"...");
@@ -1024,15 +1162,15 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
                 ? $"Saved edit to item {result.PublishedFileId}."
                 : $"Published item {result.PublishedFileId}.";
             ConsoleLog($"Done. Item {result.PublishedFileId}.");
-            await RefreshPublishedAsync();
+
+            // Refresh just this item in the list (update in place, or append if new) instead of
+            // reloading the whole catalog - the rest of the loaded items are left untouched.
+            var refreshed = await SyncPublishedItemAsync(result.PublishedFileId);
 
             // Rebuild the editor from the refreshed item so the content box shows the just-uploaded
             // file's name/size (and the preview/baseline) rather than stale construction-time values.
-            if (result.PublishedFileId != 0 &&
-                PublishedItems.FirstOrDefault(i => i.PublishedFileId == result.PublishedFileId) is { } refreshed)
-            {
+            if (refreshed is not null)
                 Editor = BuildPublishedEditor(refreshed, ignoreLinkedDraft: true);
-            }
         }
         catch (Exception ex)
         {
@@ -1052,9 +1190,9 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     }
 }
 
-/// <summary>A Published-list sort choice: its menu label, the item property to sort on, and the
-/// natural direction (which the reverse toggle flips).</summary>
-public sealed record PublishedSortOption(string Label, string Property, ListSortDirection Direction)
+/// <summary>A list sort choice: its menu label, the item property to sort on, and the natural
+/// direction. Shared by the Published, Drafts and Templates lists.</summary>
+public sealed record ListSortOption(string Label, string Property, ListSortDirection Direction)
 {
     // Shown directly in the ComboBox (the themed combo's selection box ignores DisplayMemberPath).
     public override string ToString() => Label;

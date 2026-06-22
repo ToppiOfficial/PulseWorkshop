@@ -16,7 +16,11 @@ public sealed class TemplateStore
         return template;
     }
 
-    public void Save(Template template) => _store.Save(template);
+    public void Save(Template template)
+    {
+        template.Modified = DateTimeOffset.Now;
+        _store.Save(template);
+    }
 
     public void Delete(Guid id) => _store.Delete(id);
 }

@@ -32,6 +32,8 @@ public partial class MainWindow : Window
         Title = $"PulseWorkshop - Steam Workshop Manager (v{AppVersion})";
         _vm.NavigateToDrafts += () => DraftsTab.IsSelected = true;
         _vm.NavigateToTemplates += () => TemplatesTab.IsSelected = true;
+        _vm.SelectDraftRequested += id => SelectRow(DraftsList, _vm.Drafts.FirstOrDefault(d => d.Draft.Id == id));
+        _vm.SelectTemplateRequested += id => SelectRow(TemplatesList, _vm.Templates.FirstOrDefault(t => t.Template.Id == id));
         _vm.PropertyChanged += OnViewModelPropertyChanged;
         _vm.ConsoleLines.CollectionChanged += OnConsoleLinesChanged;
 
@@ -260,6 +262,23 @@ public partial class MainWindow : Window
     /// lingers, and re-clicking that still-selected row is a no-op (SelectionChanged never fires),
     /// leaving the editor (and its template-vs-draft buttons) showing the wrong mode.
     /// </summary>
+    /// <summary>
+    /// Selects a row in one of the lists (which opens it via the list's SelectionChanged handler) and
+    /// scrolls it into view. Deferred to Background priority so a tab that was just switched to has
+    /// realized its ListBox before we select/scroll.
+    /// </summary>
+    private void SelectRow(ListBox list, object? item)
+    {
+        if (item is null)
+            return;
+
+        Dispatcher.BeginInvoke(new Action(() =>
+        {
+            list.SelectedItem = item;
+            list.ScrollIntoView(item);
+        }), System.Windows.Threading.DispatcherPriority.Background);
+    }
+
     private void ClearOtherSelections(ListBox keep)
     {
         foreach (var list in new[] { PublishedList, DraftsList, TemplatesList })

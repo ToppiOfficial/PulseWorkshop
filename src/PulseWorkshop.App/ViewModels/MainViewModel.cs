@@ -834,7 +834,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
 
         var clone = draft.Edit.Clone();
         clone.PublishedFileId = null; // a clone is a new item, not a second edit of the same one
-        _drafts.Create($"{draft.Name} (copy)", clone);
+        _drafts.Create(draft.Name, clone);
 
         LoadLocalLists();
         StatusMessage = $"Cloned draft \"{draft.Name}\".";

@@ -1,7 +1,8 @@
+<!-- No StartupUri: the main window is created in App.OnStartup so the single-instance lock can
+     veto launch before any window appears (see App.xaml.cs / SingleInstanceLock). -->
 <Application x:Class="PulseWorkshop.App.App"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             StartupUri="MainWindow.xaml">
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
     <Application.Resources>
         <ResourceDictionary>
             <ResourceDictionary.MergedDictionaries>

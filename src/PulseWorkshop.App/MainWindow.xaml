@@ -139,6 +139,8 @@
                                                 <TextBlock Text="{Binding Title}" FontWeight="SemiBold"
                                                            TextTrimming="CharacterEllipsis" />
                                                 <StackPanel Orientation="Horizontal">
+                                                    <TextBlock Text="{Binding PublishedFileId}" Style="{StaticResource MutedText}" />
+                                                    <TextBlock Text="  |  " Style="{StaticResource MutedText}" />
                                                     <TextBlock Text="{Binding Visibility}" Style="{StaticResource MutedText}" />
                                                     <TextBlock Text="  |  " Style="{StaticResource MutedText}" />
                                                     <TextBlock Text="{Binding FileSizeDisplay}" Style="{StaticResource MutedText}" />
@@ -501,7 +503,7 @@
                     <RowDefinition Height="*" />
                 </Grid.RowDefinitions>
 
-                <!-- Header strip: title + clear / hide -->
+                <!-- Header strip: title + clear -->
                 <Grid Grid.Row="0" Background="{StaticResource PanelAltBrush}">
                     <TextBlock Text="Console" Margin="10,5" FontWeight="SemiBold"
                                VerticalAlignment="Center" />
@@ -509,9 +511,6 @@
                                 VerticalAlignment="Center" Margin="0,2,6,2">
                         <Button Content="Clear" Padding="10,2" Command="{Binding ClearConsoleCommand}"
                                 ToolTip="Clear the console output." />
-                        <Button Content="Hide" Padding="10,2" Margin="6,0,0,0"
-                                Command="{Binding ToggleConsoleCommand}"
-                                ToolTip="Hide the console (reopen with the Console button below)." />
                     </StackPanel>
                 </Grid>
 

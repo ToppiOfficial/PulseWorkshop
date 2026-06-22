@@ -97,7 +97,8 @@ internal sealed class HostServer
             items.Add(new WorkshopItem
             {
                 PublishedFileId = b.PublishedFileId,
-                Title = b.Title ?? string.Empty,
+                // Trim so a stray trailing newline in the Steam title doesn't render as a blank line in the list.
+                Title = (b.Title ?? string.Empty).Trim(),
                 Description = b.Description ?? string.Empty,
                 Tags = b.Tags is null ? Array.Empty<string>() : b.Tags.ToArray(),
                 Visibility = (WorkshopVisibility)(int)b.Visibility,

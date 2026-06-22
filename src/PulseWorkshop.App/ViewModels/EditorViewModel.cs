@@ -210,6 +210,13 @@ public sealed class EditorViewModel : ObservableObject
     public bool IsDirty => !EditEquals(ToItemEdit(), _original);
 
     /// <summary>
+    /// True when a draft/template/new item has edits not yet saved locally - drives the editor's
+    /// "unsaved changes" inner border. Excludes published-item edits (those use the "Save edit"
+    /// button / Revert flow instead).
+    /// </summary>
+    public bool HasUnsavedChanges => !IsEditingPublished && IsDirty;
+
+    /// <summary>
     /// Called after a successful publish/save-edit. Clears the chosen content file and preview image
     /// (so a follow-up minor metadata edit won't re-upload the same large content), and rebaselines
     /// "dirty" to the just-published state.
@@ -233,6 +240,19 @@ public sealed class EditorViewModel : ObservableObject
 
         _original = ToItemEdit(); // current state is now the clean baseline
         OnPropertyChanged(nameof(IsDirty));
+        OnPropertyChanged(nameof(HasUnsavedChanges));
+    }
+
+    /// <summary>
+    /// Called after the open draft/template is saved locally. Re-baselines "dirty" to the current
+    /// state so the unsaved-changes indicator clears. Unlike <see cref="MarkPublished"/> this keeps
+    /// the chosen content file and preview image (saving a draft doesn't upload them).
+    /// </summary>
+    public void MarkSaved()
+    {
+        _original = ToItemEdit();
+        OnPropertyChanged(nameof(IsDirty));
+        OnPropertyChanged(nameof(HasUnsavedChanges));
     }
 
     /// <summary>
@@ -265,6 +285,7 @@ public sealed class EditorViewModel : ObservableObject
     private void RaiseChanged()
     {
         OnPropertyChanged(nameof(IsDirty));
+        OnPropertyChanged(nameof(HasUnsavedChanges));
         OnPropertyChanged(nameof(MeetsPublishRequirements));
         OnPropertyChanged(nameof(MissingRequirementsHint));
         Changed?.Invoke();

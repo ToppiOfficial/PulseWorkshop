@@ -294,6 +294,12 @@ public partial class MainWindow : Window
             _vm.DeleteDraft(item.Draft);
     }
 
+    private void DraftClone_Click(object sender, RoutedEventArgs e)
+    {
+        if (RowData<DraftListItemViewModel>(sender) is { } item)
+            _vm.CloneDraft(item.Draft);
+    }
+
     private void TemplateUse_Click(object sender, RoutedEventArgs e)
     {
         if (_vm.IsBusy || RowData<TemplateListItemViewModel>(sender) is not { } item)

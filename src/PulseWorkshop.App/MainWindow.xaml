@@ -93,16 +93,30 @@
             <Border Grid.Column="0" Background="{StaticResource PanelGradientBrush}"
                     BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
                     CornerRadius="3" Padding="8">
+              <Grid>
+                <!-- Tab-strip actions, aligned to the right of the tab headers: Refresh (shown only
+                     on the Published tab) + the "+" New item button. -->
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Top"
+                            Margin="0,0,2,0" Panel.ZIndex="1">
+                    <Button Content="Refresh" Padding="8,2" Margin="0,0,6,0" VerticalAlignment="Center"
+                            Command="{Binding RefreshPublishedCommand}"
+                            Visibility="{Binding IsSelected, ElementName=PublishedTab, Converter={StaticResource BoolToVis}}"
+                            ToolTip="Reload the published items from Steam." />
+                    <Button Content="+" FontSize="18" FontWeight="Bold" Width="26" Height="26" Padding="0"
+                            Command="{Binding NewItemCommand}" ToolTip="New item (creates a draft)" />
+                </StackPanel>
                 <TabControl x:Name="LeftTabs" Background="Transparent" BorderThickness="0">
-                    <TabItem Header="Published">
+                    <TabItem Header="Published" x:Name="PublishedTab">
                         <Grid Margin="4,8,4,4">
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto" />
                                 <RowDefinition Height="*" />
                             </Grid.RowDefinitions>
+                            <!-- Search + sort, inline on one row. -->
                             <Grid Margin="0,0,0,8">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
                                     <ColumnDefinition Width="Auto" />
                                     <ColumnDefinition Width="Auto" />
                                 </Grid.ColumnDefinitions>
@@ -112,9 +126,15 @@
                                          Tag="Search title, tags, description, id..." />
                                 <ToggleButton Grid.Column="1" Content=".*" Margin="6,0,0,0" Padding="8,4"
                                               IsChecked="{Binding PublishedRegex}" ToolTip="Regex" />
-                                <Button Grid.Column="2" Content="Refresh" Margin="6,0,0,0"
-                                        Command="{Binding RefreshPublishedCommand}" />
+                                <ComboBox Grid.Column="2" Width="150" Margin="6,0,0,0"
+                                          ItemsSource="{Binding PublishedSortOptions}"
+                                          SelectedItem="{Binding SelectedPublishedSort}"
+                                          ToolTip="Sort the published list." />
+                                <ToggleButton Grid.Column="3" Content="Reverse" Margin="6,0,0,0" Padding="8,4"
+                                              IsChecked="{Binding PublishedSortReversed}"
+                                              ToolTip="Reverse the chosen sort order." />
                             </Grid>
+
                             <ListBox Grid.Row="1" ItemsSource="{Binding PublishedView}"
                                      BorderThickness="0" Background="Transparent"
                                      SelectionChanged="PublishedList_SelectionChanged"
@@ -202,8 +222,11 @@
                                             <TextBlock Text="{Binding Modified, StringFormat='Modified {0:g}'}"
                                                        Style="{StaticResource MutedText}" />
                                         </StackPanel>
-                                        <Button Grid.Column="2" Style="{StaticResource TrashButton}"
-                                                VerticalAlignment="Center" Click="DraftDelete_Click" />
+                                        <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                                            <Button Style="{StaticResource CloneButton}" Click="DraftClone_Click"
+                                                    ToolTip="Clone this draft (saves it first, so unsaved edits are copied)." />
+                                            <Button Style="{StaticResource TrashButton}" Click="DraftDelete_Click" />
+                                        </StackPanel>
                                     </Grid>
                                 </DataTemplate>
                             </ListBox.ItemTemplate>
@@ -265,15 +288,26 @@
                         </Grid>
                     </TabItem>
                 </TabControl>
+              </Grid>
             </Border>
 
             <GridSplitter Grid.Column="1" Width="8" HorizontalAlignment="Stretch"
                           Background="Transparent" />
 
-            <!-- Right: editor -->
+            <!-- Right: editor. The panel's own border turns Steam blue while a draft or template
+                 has unsaved changes (see EditorViewModel.HasUnsavedChanges). -->
             <Border Grid.Column="2" Background="{StaticResource PanelGradientBrush}"
-                    BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
-                    CornerRadius="3" Padding="16">
+                    BorderThickness="2" CornerRadius="3" Padding="15">
+                <Border.Style>
+                    <Style TargetType="Border">
+                        <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}" />
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding Editor.HasUnsavedChanges}" Value="True">
+                                <Setter Property="BorderBrush" Value="{StaticResource UnsavedBrush}" />
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </Border.Style>
                 <Grid>
                     <TextBlock Text="Select an item, draft, or template - or click New item."
                                Style="{StaticResource MutedText}"
@@ -557,7 +591,6 @@
                            Visibility="{Binding PublishRequirementsHint, Converter={StaticResource StringToVis}}" />
                 <Button Content="Console" Command="{Binding ToggleConsoleCommand}" Margin="0,0,8,0"
                         ToolTip="Show/hide the live Steam host log and upload progress." />
-                <Button Content="New item" Command="{Binding NewItemCommand}" Margin="0,0,8,0" />
             <Button Content="Save as template" Click="SaveAsTemplate_Click" Margin="0,0,8,0"
                     ToolTip="Save the current tags / description / visibility as a reusable template."
                     Visibility="{Binding CanSaveAsTemplate, Converter={StaticResource BoolToVis}}" />

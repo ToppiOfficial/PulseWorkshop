@@ -74,6 +74,10 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         _draftsSearchTimer = CreateSearchTimer(DraftsView);
         _templatesSearchTimer = CreateSearchTimer(TemplatesView);
 
+        // Default the Published list to "published date, newest first".
+        _selectedPublishedSort = PublishedSortOptions[0];
+        ApplyPublishedSort();
+
         // Drafts/Templates are populated only after a successful Connect (see LoadLocalLists), so the
         // lists start empty until the user connects.
     }
@@ -87,6 +91,49 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     public ICollectionView PublishedView { get; }
     public ICollectionView DraftsView { get; }
     public ICollectionView TemplatesView { get; }
+
+    // --- Published list sorting (Published tab only) ---------------------------------------
+
+    /// <summary>The sort options offered for the Published list (label + field + natural direction).</summary>
+    public IReadOnlyList<PublishedSortOption> PublishedSortOptions { get; } = new[]
+    {
+        new PublishedSortOption("Published date", nameof(WorkshopItem.Created), ListSortDirection.Descending),
+        new PublishedSortOption("Last updated", nameof(WorkshopItem.Updated), ListSortDirection.Descending),
+        new PublishedSortOption("Title (A-Z)", nameof(WorkshopItem.Title), ListSortDirection.Ascending),
+        new PublishedSortOption("Steam ID", nameof(WorkshopItem.PublishedFileId), ListSortDirection.Ascending),
+    };
+
+    private PublishedSortOption _selectedPublishedSort = null!; // set in the constructor
+    private bool _publishedSortReversed;
+
+    /// <summary>Selected Published sort field. Default is published date (newest first).</summary>
+    public PublishedSortOption SelectedPublishedSort
+    {
+        get => _selectedPublishedSort;
+        set { if (SetField(ref _selectedPublishedSort, value)) ApplyPublishedSort(); }
+    }
+
+    /// <summary>Reverses the chosen sort's natural direction.</summary>
+    public bool PublishedSortReversed
+    {
+        get => _publishedSortReversed;
+        set { if (SetField(ref _publishedSortReversed, value)) ApplyPublishedSort(); }
+    }
+
+    private void ApplyPublishedSort()
+    {
+        // Each option has a natural direction (e.g. dates newest-first, titles A-Z); the reverse
+        // toggle flips it.
+        var dir = _selectedPublishedSort.Direction;
+        if (_publishedSortReversed)
+            dir = dir == ListSortDirection.Ascending ? ListSortDirection.Descending : ListSortDirection.Ascending;
+
+        using (PublishedView.DeferRefresh())
+        {
+            PublishedView.SortDescriptions.Clear();
+            PublishedView.SortDescriptions.Add(new SortDescription(_selectedPublishedSort.Property, dir));
+        }
+    }
 
     public AsyncRelayCommand ConnectCommand { get; }
     public AsyncRelayCommand RefreshPublishedCommand { get; }
@@ -412,7 +459,11 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         if (!IsConnected)
             return;
 
-        foreach (var d in _drafts.GetAll().OrderByDescending(d => d.Modified))
+        // Drafts and templates are strictly per-game: only surface those belonging to the selected
+        // game so another game's drafts/templates never leak into this game's lists.
+        foreach (var d in _drafts.GetAll()
+                     .Where(d => d.Edit.AppId == SelectedGame.AppId)
+                     .OrderByDescending(d => d.Modified))
         {
             // For a published-linked draft with no local image, fall back to the item's Steam preview.
             string? fallback = d.Edit.PublishedFileId is { } id
@@ -421,7 +472,9 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
             Drafts.Add(new DraftListItemViewModel(d, fallback));
         }
 
-        foreach (var t in _templates.GetAll().OrderBy(t => t.Name))
+        foreach (var t in _templates.GetAll()
+                     .Where(t => t.AppId == SelectedGame.AppId)
+                     .OrderBy(t => t.Name))
             Templates.Add(new TemplateListItemViewModel(t));
     }
 
@@ -590,7 +643,13 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     {
         if (!RequireConnected())
             return;
+
+        // A new item immediately becomes a draft so the work is tracked from the start; the editor
+        // is bound to that draft (subsequent Save draft updates it) and the UI jumps to Drafts.
         Editor = new EditorViewModel(SelectedGame);
+        var draft = _drafts.Create("Untitled draft", Editor.ToItemEdit());
+        Editor.SourceDraftId = draft.Id;
+        LoadLocalLists();
         NavigateToDrafts?.Invoke();
     }
 
@@ -754,6 +813,34 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         RevertCommand.RaiseCanExecuteChanged();
     }
 
+    /// <summary>
+    /// Duplicates a draft. If the draft is the one currently open in the editor, its in-editor
+    /// (possibly unsaved) state is persisted first so the clone captures those edits too. The clone
+    /// is always a fresh standalone draft - any published-item link is dropped so we never end up
+    /// with two drafts tracking the same published item.
+    /// </summary>
+    public void CloneDraft(Draft draft)
+    {
+        // Save the editor into its source draft first so unsaved changes are part of the clone.
+        // (Published-linked drafts are already auto-persisted on every edit, so this only matters
+        // for an open unpublished draft.)
+        if (Editor is { IsTemplateMode: false } e && e.SourceDraftId == draft.Id)
+        {
+            draft.Name = string.IsNullOrWhiteSpace(e.Title) ? draft.Name : e.Title;
+            draft.Edit = e.ToItemEdit();
+            _drafts.Save(draft);
+            e.MarkSaved(); // editor is now in sync with the saved source draft
+        }
+
+        var clone = draft.Edit.Clone();
+        clone.PublishedFileId = null; // a clone is a new item, not a second edit of the same one
+        _drafts.Create($"{draft.Name} (copy)", clone);
+
+        LoadLocalLists();
+        StatusMessage = $"Cloned draft \"{draft.Name}\".";
+        NavigateToDrafts?.Invoke();
+    }
+
     public void DeleteTemplate(Template template)
     {
         _templates.Delete(template.Id);
@@ -786,6 +873,15 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         template.ContentFile = edit.ContentFile;
         template.PreviewImagePath = edit.PreviewImagePath;
         _templates.Save(template);
+
+        // Converting a non-published draft into a template consumes the draft (it now lives on as the
+        // template). Published-item edits keep their linked draft - they're not being converted.
+        if (!Editor.IsEditingPublished && Editor.SourceDraftId is { } draftId)
+        {
+            _drafts.Delete(draftId);
+            Editor = null;
+        }
+
         LoadLocalLists();
         StatusMessage = $"Saved template \"{name}\".";
         NavigateToTemplates?.Invoke();
@@ -819,6 +915,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
             Editor.SourceDraftId = created.Id; // subsequent saves update this same draft
         }
 
+        Editor.MarkSaved(); // clears the editor's unsaved-changes indicator
         LoadLocalLists();
         StatusMessage = $"Saved draft \"{name}\".";
         NavigateToDrafts?.Invoke();
@@ -839,6 +936,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         existing.ContentFile = edit.ContentFile;
         existing.PreviewImagePath = edit.PreviewImagePath;
         _templates.Save(existing);
+        Editor.MarkSaved(); // clears the editor's unsaved-changes indicator
         LoadLocalLists();
         StatusMessage = $"Saved template \"{existing.Name}\".";
         NavigateToTemplates?.Invoke();
@@ -952,4 +1050,12 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         _service.HostOutput -= OnHostOutput;
         return _service.DisposeAsync();
     }
+}
+
+/// <summary>A Published-list sort choice: its menu label, the item property to sort on, and the
+/// natural direction (which the reverse toggle flips).</summary>
+public sealed record PublishedSortOption(string Label, string Property, ListSortDirection Direction)
+{
+    // Shown directly in the ComboBox (the themed combo's selection box ignores DisplayMemberPath).
+    public override string ToString() => Label;
 }

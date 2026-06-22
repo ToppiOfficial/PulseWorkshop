@@ -26,6 +26,10 @@
     <SolidColorBrush x:Key="AccentBrush" Color="{StaticResource AccentColor}" />
     <SolidColorBrush x:Key="AccentHoverBrush" Color="{StaticResource AccentHoverColor}" />
 
+    <!-- Steam-blue accent used to flag unsaved changes (editor's inner border). -->
+    <Color x:Key="UnsavedColor">#5B86C5</Color>
+    <SolidColorBrush x:Key="UnsavedBrush" Color="{StaticResource UnsavedColor}" />
+
     <!-- Semi-opaque panel gradient (faint top light -> darker bottom), Steam-web style. -->
     <LinearGradientBrush x:Key="PanelGradientBrush" StartPoint="0,0" EndPoint="0,1">
         <GradientStop Color="{StaticResource PanelTopColor}" Offset="0" />
@@ -347,6 +351,34 @@
                               Stretch="Uniform" Width="14" Height="14"
                               Fill="{StaticResource MutedTextBrush}"
                               Data="M14 3V5H17.59L7.76 14.83L9.17 16.24L19 6.41V10H21V3M19 19H5V5H12V3H5C3.89 3 3 3.9 3 5V19A2 2 0 0 0 5 21H19A2 2 0 0 0 21 19V12H19V19Z" />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Bd" Property="Background" Value="{StaticResource PanelAltBrush}" />
+                            <Setter TargetName="Icon" Property="Fill" Value="{StaticResource AccentHoverBrush}" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- Clone/duplicate button: icon-only, matches the TrashButton footprint. -->
+    <Style x:Key="CloneButton" TargetType="Button">
+        <Setter Property="Width" Value="28" />
+        <Setter Property="Height" Value="28" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="ToolTip" Value="Clone" />
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border x:Name="Bd" Background="{TemplateBinding Background}" CornerRadius="3">
+                        <!-- "Content copy" / duplicate glyph. -->
+                        <Path x:Name="Icon" HorizontalAlignment="Center" VerticalAlignment="Center"
+                              Stretch="Uniform" Width="14" Height="14"
+                              Fill="{StaticResource MutedTextBrush}"
+                              Data="M19,21H8V7H19M19,5H8A2,2 0 0,0 6,7V21A2,2 0 0,0 8,23H19A2,2 0 0,0 21,21V7A2,2 0 0,0 19,5M16,1H4A2,2 0 0,0 2,3V17H4V3H16V1Z" />
                     </Border>
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsMouseOver" Value="True">

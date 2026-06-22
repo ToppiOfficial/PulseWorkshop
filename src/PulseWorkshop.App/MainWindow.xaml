@@ -137,6 +137,7 @@
 
                             <ListBox Grid.Row="1" ItemsSource="{Binding PublishedView}"
                                      BorderThickness="0" Background="Transparent"
+                                     ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                                      SelectionChanged="PublishedList_SelectionChanged"
                                      x:Name="PublishedList">
                                 <ListBox.ItemTemplate>
@@ -201,6 +202,7 @@
                             </Grid>
                             <ListBox Grid.Row="1" ItemsSource="{Binding DraftsView}"
                                  BorderThickness="0" Background="Transparent"
+                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                                  SelectionChanged="DraftsList_SelectionChanged" x:Name="DraftsList">
                             <ListBox.ItemTemplate>
                                 <DataTemplate>
@@ -254,6 +256,7 @@
                             </Grid>
                             <ListBox Grid.Row="1" ItemsSource="{Binding TemplatesView}"
                                  BorderThickness="0" Background="Transparent"
+                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                                  SelectionChanged="TemplatesList_SelectionChanged" x:Name="TemplatesList">
                             <ListBox.ItemTemplate>
                                 <DataTemplate>

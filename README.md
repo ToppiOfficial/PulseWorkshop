@@ -76,7 +76,7 @@ with `PulseWorkshop.SteamHost.exe` next to it (the App locates the host by that 
 **Easiest - one command** (builds the solution and publishes both projects into `publish/`):
 
 ```powershell
-.\build-portable.ps1
+.\buildportable.ps1
 ```
 
 **Or from Visual Studio:**

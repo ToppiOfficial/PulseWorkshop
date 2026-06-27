@@ -517,6 +517,43 @@ BridgePublishResult^ SteamWorkshop::Publish(BridgeEdit^ edit)
     return result;
 }
 
+BridgeDeleteResult^ SteamWorkshop::DeletePublishedFile(System::UInt64 publishedFileId)
+{
+    BridgeDeleteResult^ result = gcnew BridgeDeleteResult();
+    result->Success = false;
+    if (!_initialized)
+    {
+        result->Error = "Steam is not initialized.";
+        return result;
+    }
+    if (publishedFileId == 0)
+    {
+        result->Error = "No published file id supplied.";
+        return result;
+    }
+
+    // L4D2 / GMod are legacy RemoteStorage Workshop items, so deletion goes through
+    // ISteamRemoteStorage::DeletePublishedFile (the same interface that published them).
+    ISteamRemoteStorage* rs = SteamRemoteStorage();
+    PublishedFileId_t fileId = static_cast<PublishedFileId_t>(publishedFileId);
+
+    Console::Error->WriteLine(String::Format(
+        "[delete] deleting workshop item {0}...", static_cast<UInt64>(fileId)));
+
+    SteamAPICall_t call = rs->DeletePublishedFile(fileId);
+    RemoteStorageDeletePublishedFileResult_t deleted;
+    if (!WaitForCall(call, deleted))
+    {
+        result->Error = "Timed out deleting the workshop file.";
+        return result;
+    }
+
+    result->Success = (deleted.m_eResult == k_EResultOK);
+    if (!result->Success)
+        result->Error = "Delete failed (EResult " + (static_cast<int>(deleted.m_eResult)).ToString() + ").";
+    return result;
+}
+
 BridgeProgress^ SteamWorkshop::GetProgress()
 {
     // The RemoteStorage upload runs synchronously inside Publish(), so there is no separate

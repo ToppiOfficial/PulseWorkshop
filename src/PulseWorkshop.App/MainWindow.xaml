@@ -3,7 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vm="clr-namespace:PulseWorkshop.App.ViewModels"
         xmlns:local="clr-namespace:PulseWorkshop.App"
-        Title="PulseWorkshop - Steam Workshop Manager"
+        Title="PulseWorkshop"
         Height="720" Width="1180" MinHeight="560" MinWidth="900"
         Background="{StaticResource BgBrush}"
         WindowStartupLocation="CenterScreen">
@@ -16,9 +16,8 @@
         <local:PathEllipsisConverter x:Key="PathEllipsis" />
     </Window.Resources>
 
-    <Grid Margin="10">
+    <Grid Margin="10,2,10,10">
         <Grid.RowDefinitions>
-            <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
             <!-- Terminal drawer (at the very bottom, below the action bar): a drag handle and the log
                  panel. Both rows collapse to 0 height when the terminal is hidden (toggled in
@@ -27,8 +26,14 @@
             <RowDefinition x:Name="ConsoleRowDef" Height="0" MinHeight="0" />
         </Grid.RowDefinitions>
 
-        <!-- Top bar: game picker + connect -->
-        <Border Grid.Row="0" Background="{StaticResource HeaderGradientBrush}"
+        <!-- Top-level tabs (the outer container): the Workshop tool, and an About page. The
+             Game picker + Connect live inside the Workshop tab - they're Workshop-only; other
+             tabs are for tools unrelated to the Steam Workshop connection. -->
+        <TabControl Grid.Row="0" x:Name="MainTabs" Background="Transparent" BorderThickness="0" Padding="0">
+          <TabItem Header="Workshop">
+            <DockPanel Margin="0,8,0,0">
+            <!-- Connection bar: game picker + connect (Workshop-only). -->
+            <Border DockPanel.Dock="Top" Background="{StaticResource HeaderGradientBrush}"
                 BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
                 CornerRadius="3" Padding="12,10" Margin="0,0,0,8">
             <Grid>
@@ -46,12 +51,13 @@
                           SelectedItem="{Binding SelectedGame}" DisplayMemberPath="DisplayName"
                           VerticalAlignment="Center" />
 
-                <Button Grid.Column="2" Content="Connect" Margin="12,0,0,0"
-                        Style="{StaticResource AccentButton}" Command="{Binding ConnectCommand}" />
-
-                <TextBlock Grid.Column="3" Text="{Binding StatusMessage}" Margin="16,0,12,0"
-                           VerticalAlignment="Center" TextTrimming="CharacterEllipsis"
-                           Style="{StaticResource MutedText}" />
+                <!-- Connect / Disconnect occupy the same slot; only one is visible at a time. -->
+                <Button Grid.Column="2" Content="Connect" Margin="12,0,0,0" MinWidth="110"
+                        Style="{StaticResource AccentButton}" Command="{Binding ConnectCommand}"
+                        Visibility="{Binding IsConnected, Converter={StaticResource BoolToVis}, ConverterParameter=invert}" />
+                <Button Grid.Column="2" Content="Disconnect" Margin="12,0,0,0" MinWidth="110"
+                        Style="{StaticResource DisconnectButton}" Command="{Binding DisconnectCommand}"
+                        Visibility="{Binding IsConnected, Converter={StaticResource BoolToVis}}" />
 
                 <!-- Logged-in Steam user: avatar + persona name + SteamID64, far right. -->
                 <StackPanel Grid.Column="4" Orientation="Horizontal" VerticalAlignment="Center"
@@ -79,10 +85,10 @@
                     </StackPanel>
                 </StackPanel>
             </Grid>
-        </Border>
+            </Border>
 
-        <!-- Resizable top block: main content + action bar share it; the terminal drawer sits below. -->
-        <Grid Grid.Row="1">
+            <!-- Resizable top block: main content + action bar share it; the terminal drawer sits below. -->
+            <Grid>
             <Grid.RowDefinitions>
                 <RowDefinition Height="*" MinHeight="120" />
                 <RowDefinition Height="Auto" />
@@ -345,7 +351,7 @@
                                Visibility="{Binding Editor, Converter={StaticResource NullToVis}, ConverterParameter=invert}" />
 
                     <!-- Editor split into Details + Tags tabs (Tags live on their own tab). -->
-                    <TabControl DataContext="{Binding Editor}" Background="Transparent" BorderThickness="0" Padding="0"
+                    <TabControl x:Name="EditorTabs" DataContext="{Binding Editor}" Background="Transparent" BorderThickness="0" Padding="0"
                                 Visibility="{Binding DataContext.Editor, RelativeSource={RelativeSource AncestorType=Border}, Converter={StaticResource NullToVis}}">
                       <TabItem Header="Details">
                         <!-- This tab scrolls so nothing (e.g. Visibility) is cut off on a small window. -->
@@ -567,6 +573,33 @@
                         </DockPanel>
                         </ScrollViewer>
                       </TabItem>
+
+                      <!-- Danger zone: destructive, irreversible actions. Only shown when editing an
+                           existing published item (a new item / draft / template has nothing on Steam
+                           to delete). -->
+                      <TabItem Header="Danger zone"
+                               Visibility="{Binding IsEditingPublished, Converter={StaticResource BoolToVis}}">
+                        <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="0,8,8,0">
+                          <Border BorderBrush="{StaticResource DangerBrush}" BorderThickness="1"
+                                  CornerRadius="3" Padding="16" Margin="0,4,0,0">
+                            <StackPanel>
+                                <TextBlock Text="Delete this item" FontWeight="SemiBold" FontSize="15"
+                                           Foreground="{StaticResource DangerBrush}" Margin="0,0,0,6" />
+                                <TextBlock TextWrapping="Wrap" Foreground="{StaticResource TextBrush}"
+                                           Text="Permanently removes this item from the Steam Workshop. This cannot be undone - subscribers lose access and the Workshop ID is gone for good." />
+                                <TextBlock TextWrapping="Wrap" Style="{StaticResource MutedText}" Margin="0,8,0,0">
+                                    <Run Text="Item: " /><Run Text="{Binding Title, Mode=OneWay}" FontWeight="SemiBold" />
+                                    <Run Text="  -  ID " /><Run Text="{Binding PublishedFileId, Mode=OneWay}" />
+                                </TextBlock>
+                                <Button Content="Delete item permanently" Style="{StaticResource DangerButton}"
+                                        HorizontalAlignment="Left" Margin="0,14,0,0" Padding="16,8"
+                                        Click="DeletePublished_Click"
+                                        IsEnabled="{Binding DataContext.CanDeletePublished, RelativeSource={RelativeSource AncestorType=Window}}"
+                                        ToolTip="Permanently delete this item from the Steam Workshop." />
+                            </StackPanel>
+                          </Border>
+                        </ScrollViewer>
+                      </TabItem>
                     </TabControl>
                 </Grid>
             </Border>
@@ -580,11 +613,11 @@
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
 
-                <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="2,0,16,0"
-                            Visibility="{Binding IsBusy, Converter={StaticResource BoolToVis}}">
+                <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="2,0,16,0">
                     <TextBlock Text="{Binding StatusMessage}" Style="{StaticResource MutedText}"
                                TextTrimming="CharacterEllipsis" Margin="0,0,0,4" />
-                    <ProgressBar IsIndeterminate="True" />
+                    <ProgressBar IsIndeterminate="True"
+                                 Visibility="{Binding IsBusy, Converter={StaticResource BoolToVis}}" />
                 </StackPanel>
 
                 <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right">
@@ -604,16 +637,70 @@
                             Visibility="{Binding ShowItemActions, Converter={StaticResource BoolToVis}}" />
                 </StackPanel>
             </Grid>
-        </Grid>
+            </Grid>
+            </DockPanel>
+          </TabItem>
+
+          <!-- About: developer + app info, Steam-style profile card. -->
+          <TabItem Header="About">
+            <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="0,12,8,0">
+              <Border Background="{StaticResource PanelGradientBrush}"
+                      BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
+                      CornerRadius="3" Padding="24" HorizontalAlignment="Center"
+                      VerticalAlignment="Top" MaxWidth="640" Margin="0,8,0,0">
+                <StackPanel>
+                    <!-- Developer: circular avatar + name + SteamID, like the Steam profile header. -->
+                    <StackPanel Orientation="Horizontal">
+                        <Border Width="96" Height="96" CornerRadius="48"
+                                Background="{StaticResource PanelAltBrush}"
+                                BorderBrush="{StaticResource BorderBrush}" BorderThickness="1">
+                            <Border.Clip>
+                                <EllipseGeometry Center="48,48" RadiusX="48" RadiusY="48" />
+                            </Border.Clip>
+                            <Grid>
+                                <!-- Placeholder initial behind the image (shows until/if the avatar loads). -->
+                                <TextBlock Text="{Binding DeveloperName, Converter={StaticResource FirstLetter}}"
+                                           Foreground="{StaticResource MutedTextBrush}" FontSize="40"
+                                           FontWeight="SemiBold" HorizontalAlignment="Center"
+                                           VerticalAlignment="Center" />
+                                <Image Stretch="UniformToFill"
+                                       Source="{Binding DeveloperAvatarUrl, TargetNullValue={x:Null}}"
+                                       Visibility="{Binding DeveloperAvatarUrl, Converter={StaticResource StringToVis}}" />
+                            </Grid>
+                        </Border>
+                        <StackPanel Margin="18,0,0,0" VerticalAlignment="Center">
+                            <TextBlock Text="Developer" Style="{StaticResource MutedText}" />
+                            <TextBlock Text="{Binding DeveloperName}" FontSize="26" FontWeight="SemiBold"
+                                       Margin="0,2,0,0" />
+                            <Button Content="GitHub" HorizontalAlignment="Left" Margin="0,10,0,0"
+                                    Padding="12,4" Click="OpenDeveloperGitHub_Click"
+                                    ToolTip="Open the developer's GitHub." />
+                        </StackPanel>
+                    </StackPanel>
+
+                    <!-- Divider -->
+                    <Border Height="1" Background="{StaticResource BorderBrush}" Margin="0,22,0,18" />
+
+                    <!-- App description + version -->
+                    <TextBlock Text="PulseWorkshop" FontSize="20" FontWeight="SemiBold" />
+                    <TextBlock Text="{Binding AppVersionDisplay}" Style="{StaticResource MutedText}"
+                               Margin="0,2,0,0" />
+                    <TextBlock Text="{Binding AppDescription}" TextWrapping="Wrap"
+                               Foreground="{StaticResource TextBrush}" Margin="0,14,0,0" LineHeight="20" />
+                </StackPanel>
+              </Border>
+            </ScrollViewer>
+          </TabItem>
+        </TabControl>
 
         <!-- Terminal drawer: drag handle (resizes the top block vs the terminal) -->
-        <GridSplitter Grid.Row="2" Height="6" HorizontalAlignment="Stretch"
+        <GridSplitter Grid.Row="1" Height="6" HorizontalAlignment="Stretch"
                       VerticalAlignment="Center" ResizeBehavior="PreviousAndNext"
                       ResizeDirection="Rows" Background="Transparent" Cursor="SizeNS"
                       Visibility="{Binding IsConsoleVisible, Converter={StaticResource BoolToVis}}" />
 
         <!-- Console drawer: live log of the Steam host + upload progress -->
-        <Border Grid.Row="3" Background="{StaticResource BgBrush}"
+        <Border Grid.Row="2" Background="{StaticResource BgBrush}"
                 BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
                 CornerRadius="3" Margin="0,2,0,0"
                 Visibility="{Binding IsConsoleVisible, Converter={StaticResource BoolToVis}}">

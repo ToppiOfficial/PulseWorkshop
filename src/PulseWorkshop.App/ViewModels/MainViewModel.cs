@@ -50,7 +50,11 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         AppPaths.EnsureCreated();
         _service = new WorkshopService(HostLocator.ResolveHostExePath());
 
-        ConnectCommand = new AsyncRelayCommand(ConnectAsync, () => !IsBusy);
+        // Resolve the developer's public Steam avatar for the About tab (best-effort, no API key).
+        _ = ResolveDeveloperAvatarAsync();
+
+        ConnectCommand = new AsyncRelayCommand(ConnectAsync, () => !IsBusy && !IsConnected);
+        DisconnectCommand = new AsyncRelayCommand(DisconnectAsync, () => !IsBusy && IsConnected);
         RefreshPublishedCommand = new AsyncRelayCommand(LoadAllPublishedAsync, () => !IsBusy);
         NewItemCommand = new RelayCommand(NewItem, () => !IsBusy && IsConnected);
         RevertCommand = new RelayCommand(Revert, () => CanRevert);
@@ -204,6 +208,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     }
 
     public AsyncRelayCommand ConnectCommand { get; }
+    public AsyncRelayCommand DisconnectCommand { get; }
     public AsyncRelayCommand RefreshPublishedCommand { get; }
     public RelayCommand NewItemCommand { get; }
     public RelayCommand RevertCommand { get; }
@@ -221,8 +226,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
                 // Switching games invalidates the loaded list and the open editor.
                 Editor = null;
                 PublishedItems.Clear();
-                OnPropertyChanged(nameof(IsConnected)); // host is for the previous game now
-                NewItemCommand.RaiseCanExecuteChanged();
+                NotifyConnectionChanged(); // host is for the previous game now
                 LoadLocalLists(); // clears Drafts/Templates (not connected to the new game yet)
                 StatusMessage = $"Selected {value.DisplayName}. Click Connect to load items.";
             }
@@ -336,6 +340,60 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         }
     }
 
+    // --- About tab (developer + app info) --------------------------------------------------
+
+    /// <summary>The developer's SteamID64 (used for the About card and its avatar/profile link).</summary>
+    public const ulong DeveloperSteamId = 76561198279098225;
+
+    private string? _developerAvatarUrl;
+
+    /// <summary>Developer display name shown on the About tab.</summary>
+    public string DeveloperName => "Toppi";
+
+    /// <summary>Developer's GitHub URL (opened from the About tab).</summary>
+    public string DeveloperGitHubUrl => "https://github.com/ToppiOfficial";
+
+    /// <summary>Developer's avatar image URL, resolved in the background (null until/if it loads).</summary>
+    public string? DeveloperAvatarUrl
+    {
+        get => _developerAvatarUrl;
+        private set => SetField(ref _developerAvatarUrl, value);
+    }
+
+    /// <summary>One-line description of the app shown on the About tab.</summary>
+    public string AppDescription =>
+        "A friendly Steam Workshop manager for Left 4 Dead 2 and Garry's Mod. " +
+        "Browse, create, and edit your own Workshop items - title, description, tags, " +
+        "content file, and preview image - all in one window, reusing your running Steam session.";
+
+    /// <summary>App version (from the assembly version), shown as "v1.2.3" on the About tab.</summary>
+    public string AppVersionDisplay
+    {
+        get
+        {
+            var v = System.Reflection.Assembly.GetExecutingAssembly().GetName().Version;
+            return v is null ? "v0.0.0" : $"v{v.Major}.{v.Minor}.{v.Build}";
+        }
+    }
+
+    /// <summary>
+    /// Fetches the developer's avatar from the public Steam Community profile XML (best-effort).
+    /// Leaves the avatar empty (placeholder initial shows) on any failure.
+    /// </summary>
+    private async Task ResolveDeveloperAvatarAsync()
+    {
+        try
+        {
+            var url = await SteamProfile.GetAvatarUrlAsync(DeveloperSteamId);
+            if (!string.IsNullOrEmpty(url))
+                Application.Current.Dispatcher.Invoke(() => DeveloperAvatarUrl = url);
+        }
+        catch
+        {
+            // Best-effort: a missing avatar is not an error worth surfacing.
+        }
+    }
+
     public bool IsBusy
     {
         get => _isBusy;
@@ -344,11 +402,13 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
             if (SetField(ref _isBusy, value))
             {
                 ConnectCommand.RaiseCanExecuteChanged();
+                DisconnectCommand.RaiseCanExecuteChanged();
                 RefreshPublishedCommand.RaiseCanExecuteChanged();
                 NewItemCommand.RaiseCanExecuteChanged();
                 RevertCommand.RaiseCanExecuteChanged();
                 PublishCommand.RaiseCanExecuteChanged();
                 OnPropertyChanged(nameof(CanRevert));
+                OnPropertyChanged(nameof(CanDeletePublished));
             }
         }
     }
@@ -373,6 +433,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
                 OnPropertyChanged(nameof(CanSaveAsTemplate));
                 OnPropertyChanged(nameof(CanRevert));
                 OnPropertyChanged(nameof(PublishRequirementsHint));
+                OnPropertyChanged(nameof(CanDeletePublished));
             }
         }
     }
@@ -673,8 +734,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
             }
 
             UpdateProfile(ping);
-            OnPropertyChanged(nameof(IsConnected));
-            NewItemCommand.RaiseCanExecuteChanged();
+            NotifyConnectionChanged();
             StatusMessage = $"Connected as {ping.PersonaName} - {SelectedGame.DisplayName}. Loading items...";
         }
         catch (Exception ex)
@@ -695,6 +755,49 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         // Now that Published items are loaded, populate Drafts/Templates (their preview fallbacks
         // resolve against the published list).
         LoadLocalLists();
+    }
+
+    /// <summary>
+    /// Tears down the active Steam host and clears the connected-session UI (lists, editor, profile),
+    /// returning to the pre-Connect state for the selected game.
+    /// </summary>
+    private async Task DisconnectAsync()
+    {
+        IsBusy = true;
+        try
+        {
+            await _service.DisconnectAsync();
+
+            Editor = null;
+            PublishedItems.Clear();
+            PersonaName = null;
+            SteamIdDisplay = null;
+            AvatarUrl = null;
+            StatusMessage = $"Disconnected from {SelectedGame.DisplayName}. Click Connect to reconnect.";
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"Disconnect failed: {ex.Message}";
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+
+        NotifyConnectionChanged();
+        LoadLocalLists(); // not connected -> clears Drafts/Templates
+    }
+
+    /// <summary>
+    /// Raises change notifications for everything that keys off <see cref="IsConnected"/>: the
+    /// computed property itself plus the commands whose availability depends on it.
+    /// </summary>
+    private void NotifyConnectionChanged()
+    {
+        OnPropertyChanged(nameof(IsConnected));
+        ConnectCommand.RaiseCanExecuteChanged();
+        DisconnectCommand.RaiseCanExecuteChanged();
+        NewItemCommand.RaiseCanExecuteChanged();
     }
 
     /// <summary>
@@ -1175,6 +1278,79 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         catch (Exception ex)
         {
             StatusMessage = $"Publish failed: {ex.Message}";
+            ConsoleLog($"ERROR: {ex.Message}");
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
+
+    /// <summary>
+    /// True when the open editor targets a published item that can be deleted (and we're idle).
+    /// Drives the Danger zone delete button's enablement.
+    /// </summary>
+    public bool CanDeletePublished =>
+        !IsBusy && Editor is { IsTemplateMode: false, PublishedFileId: not null };
+
+    /// <summary>
+    /// Permanently deletes the published item currently open in the editor from the Steam Workshop.
+    /// Irreversible. Also drops any linked draft and removes the item from the Published list. The
+    /// caller (code-behind) is responsible for confirming with the user first.
+    /// </summary>
+    public async Task DeleteCurrentPublishedAsync()
+    {
+        if (Editor is not { IsTemplateMode: false, PublishedFileId: { } publishedFileId })
+            return;
+
+        var title = Editor.Title;
+        IsBusy = true;
+        ConsoleLog($"Deleting \"{title}\" ({publishedFileId})...");
+        try
+        {
+            // Deletion needs a live Steam host for this game. Auto-connect if the user hasn't yet.
+            if (_service.ActiveAppId != SelectedGame.AppId)
+            {
+                StatusMessage = $"Connecting to Steam for {SelectedGame.DisplayName}...";
+                await _service.SelectGameAsync(SelectedGame.AppId);
+            }
+
+            var ping = await _service.PingAsync();
+            if (!ping.SteamRunning)
+            {
+                StatusMessage = "Steam is not running, or you do not own this game. Start Steam and click Connect.";
+                return;
+            }
+
+            StatusMessage = $"Deleting item {publishedFileId} from Steam Workshop...";
+            var result = await _service.DeleteAsync(publishedFileId);
+
+            if (!result.Success)
+            {
+                StatusMessage = $"Delete failed: {result.Error ?? "the item could not be deleted."}";
+                ConsoleLog($"FAILED: {result.Error ?? "the item could not be deleted."}");
+                return;
+            }
+
+            // Drop any draft that was tracking edits to this now-deleted item.
+            var linked = _drafts.FindByPublishedFileId(publishedFileId);
+            if (linked is not null)
+                _drafts.Delete(linked.Id);
+
+            // Remove the item from the loaded Published list and close the editor.
+            var index = IndexOfPublished(publishedFileId);
+            if (index >= 0)
+                PublishedItems.RemoveAt(index);
+
+            Editor = null;
+            LoadLocalLists();
+
+            StatusMessage = $"Deleted item {publishedFileId} (\"{title}\") from the Workshop.";
+            ConsoleLog($"Done. Deleted item {publishedFileId}.");
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"Delete failed: {ex.Message}";
             ConsoleLog($"ERROR: {ex.Message}");
         }
         finally

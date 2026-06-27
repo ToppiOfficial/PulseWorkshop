@@ -30,6 +30,9 @@ public sealed class WorkshopService : IAsyncDisposable
     public Task SelectGameAsync(uint appId, CancellationToken ct = default) =>
         _hosts.SwitchToAsync(appId, ct);
 
+    /// <summary>Stops the active Steam host (if any), ending the session for the current game.</summary>
+    public Task DisconnectAsync() => _hosts.StopAsync();
+
     /// <summary>Confirms Steam is running and the session is hooked for the active game.</summary>
     public async Task<PingResult> PingAsync(CancellationToken ct = default)
     {
@@ -81,6 +84,14 @@ public sealed class WorkshopService : IAsyncDisposable
         var payload = PipeJson.Serialize(edit);
         var response = await SendAsync(RequestKind.Publish, payload, ct).ConfigureAwait(false);
         return PipeJson.Deserialize<PublishResult>(response)!;
+    }
+
+    /// <summary>Permanently deletes the user's published item from the Workshop. Irreversible.</summary>
+    public async Task<DeleteResult> DeleteAsync(ulong publishedFileId, CancellationToken ct = default)
+    {
+        var payload = PipeJson.Serialize(new DeleteRequest { PublishedFileId = publishedFileId });
+        var response = await SendAsync(RequestKind.Delete, payload, ct).ConfigureAwait(false);
+        return PipeJson.Deserialize<DeleteResult>(response)!;
     }
 
     public async Task<ProgressResult> GetProgressAsync(CancellationToken ct = default)

@@ -54,6 +54,14 @@ namespace SteamBridge {
         property System::String^ Error;  // populated when Success is false
     };
 
+    /// <summary>Result of deleting a published item.</summary>
+    public ref class BridgeDeleteResult
+    {
+    public:
+        property bool Success;
+        property System::String^ Error;  // populated when Success is false
+    };
+
     /// <summary>The fields to write when creating or updating an item.</summary>
     public ref class BridgeEdit
     {
@@ -113,6 +121,9 @@ namespace SteamBridge {
 
         /// <summary>Creates (if PublishedFileId==0) or updates an item and starts the upload.</summary>
         BridgePublishResult^ Publish(BridgeEdit^ edit);
+
+        /// <summary>Permanently deletes the user's published Workshop item. Irreversible.</summary>
+        BridgeDeleteResult^ DeletePublishedFile(System::UInt64 publishedFileId);
 
         /// <summary>Progress of the most recent <see cref="Publish"/> upload.</summary>
         BridgeProgress^ GetProgress();

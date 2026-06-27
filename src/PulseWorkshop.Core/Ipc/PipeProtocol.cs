@@ -19,6 +19,7 @@ public enum RequestKind
     Ping,
     QueryPublished,
     Publish,
+    Delete,
     GetProgress,
     Shutdown,
 }
@@ -79,6 +80,17 @@ public sealed class PublishResult
     /// <summary>False when the content upload failed (see <see cref="Error"/>).</summary>
     public bool Success { get; init; } = true;
 
+    public string? Error { get; init; }
+}
+
+public sealed class DeleteRequest
+{
+    public ulong PublishedFileId { get; init; }
+}
+
+public sealed class DeleteResult
+{
+    public bool Success { get; init; }
     public string? Error { get; init; }
 }
 

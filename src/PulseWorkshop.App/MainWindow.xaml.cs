@@ -29,7 +29,7 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
         DataContext = _vm;
-        Title = $"PulseWorkshop - Steam Workshop Manager (v{AppVersion})";
+        Title = $"PulseWorkshop v{AppVersion}";
         _vm.NavigateToDrafts += () => DraftsTab.IsSelected = true;
         _vm.NavigateToTemplates += () => TemplatesTab.IsSelected = true;
         _vm.SelectDraftRequested += id => SelectRow(DraftsList, _vm.Drafts.FirstOrDefault(d => d.Draft.Id == id));
@@ -65,6 +65,11 @@ public partial class MainWindow : Window
     {
         if (e.PropertyName == nameof(MainViewModel.IsConsoleVisible))
             UpdateConsoleRowHeights();
+        else if (e.PropertyName == nameof(MainViewModel.Editor))
+            // Reset to the first tab when the open editor changes. The TabControl otherwise keeps its
+            // SelectedIndex, so leaving it on "Danger zone" then opening a template/draft (where that
+            // tab is collapsed) would leave a hidden tab selected with no matching header.
+            EditorTabs.SelectedIndex = 0;
     }
 
     /// <summary>
@@ -347,7 +352,31 @@ public partial class MainWindow : Window
         MessageBox.Show(this, message, title, MessageBoxButton.YesNo, MessageBoxImage.Warning)
             == MessageBoxResult.Yes;
 
+    /// <summary>
+    /// Danger zone: permanently delete the published item open in the editor. Confirms first
+    /// (defaulting to "No") because the deletion is irreversible.
+    /// </summary>
+    private async void DeletePublished_Click(object sender, RoutedEventArgs e)
+    {
+        if (_vm.Editor is not { IsTemplateMode: false, PublishedFileId: { } id })
+            return;
+
+        var title = string.IsNullOrWhiteSpace(_vm.Editor.Title) ? id.ToString() : _vm.Editor.Title;
+        var confirmed = MessageBox.Show(this,
+            $"Permanently delete \"{title}\" (ID {id}) from the Steam Workshop?\n\n" +
+            "This CANNOT be undone. Subscribers will lose access and the Workshop ID is gone for good.",
+            "Delete published item", MessageBoxButton.YesNo, MessageBoxImage.Warning,
+            MessageBoxResult.No) == MessageBoxResult.Yes;
+
+        if (confirmed)
+            await _vm.DeleteCurrentPublishedAsync();
+    }
+
     private void SaveAsTemplate_Click(object sender, RoutedEventArgs e) => _vm.SaveAsTemplate();
+
+    /// <summary>Opens the developer's GitHub (About tab) in the default browser.</summary>
+    private void OpenDeveloperGitHub_Click(object sender, RoutedEventArgs e) =>
+        TryOpen(_vm.DeveloperGitHubUrl);
 
     // --- Content file zone ---------------------------------------------------------------------
 

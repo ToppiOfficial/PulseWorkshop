@@ -59,6 +59,7 @@ internal sealed class HostServer
                 RequestKind.Ping => PipeJson.Serialize(HandlePing()),
                 RequestKind.QueryPublished => PipeJson.Serialize(HandleQuery(request.PayloadJson)),
                 RequestKind.Publish => PipeJson.Serialize(HandlePublish(request.PayloadJson)),
+                RequestKind.Delete => PipeJson.Serialize(HandleDelete(request.PayloadJson)),
                 RequestKind.GetProgress => PipeJson.Serialize(HandleProgress()),
                 _ => null,
             };
@@ -178,6 +179,20 @@ internal sealed class HostServer
             Success = result.Success,
             Error = result.Error,
         };
+    }
+
+    private DeleteResult HandleDelete(string? payloadJson)
+    {
+        var req = PipeJson.Deserialize<DeleteRequest>(payloadJson ?? "null")
+            ?? throw new InvalidOperationException("Missing delete payload.");
+
+        if (req.PublishedFileId == 0)
+            return new DeleteResult { Success = false, Error = "No published file id supplied." };
+
+        Log($"Delete: id={req.PublishedFileId}");
+        var result = _workshop.DeletePublishedFile(req.PublishedFileId);
+        Log($"Delete result: id={req.PublishedFileId} success={result.Success} error='{result.Error}'");
+        return new DeleteResult { Success = result.Success, Error = result.Error };
     }
 
     private ProgressResult HandleProgress()

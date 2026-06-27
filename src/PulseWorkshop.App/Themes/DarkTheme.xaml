@@ -30,6 +30,18 @@
     <Color x:Key="UnsavedColor">#5B86C5</Color>
     <SolidColorBrush x:Key="UnsavedBrush" Color="{StaticResource UnsavedColor}" />
 
+    <!-- Danger (destructive actions, e.g. deleting a published item) -->
+    <Color x:Key="DangerColor">#C0392B</Color>
+    <Color x:Key="DangerHoverColor">#D64636</Color>
+    <SolidColorBrush x:Key="DangerBrush" Color="{StaticResource DangerColor}" />
+    <SolidColorBrush x:Key="DangerHoverBrush" Color="{StaticResource DangerHoverColor}" />
+
+    <!-- Light red used for the Disconnect button (softer than the destructive Danger red). -->
+    <Color x:Key="LightDangerColor">#E2706A</Color>
+    <Color x:Key="LightDangerHoverColor">#EC847E</Color>
+    <SolidColorBrush x:Key="LightDangerBrush" Color="{StaticResource LightDangerColor}" />
+    <SolidColorBrush x:Key="LightDangerHoverBrush" Color="{StaticResource LightDangerHoverColor}" />
+
     <!-- Semi-opaque panel gradient (faint top light -> darker bottom), Steam-web style. -->
     <LinearGradientBrush x:Key="PanelGradientBrush" StartPoint="0,0" EndPoint="0,1">
         <GradientStop Color="{StaticResource PanelTopColor}" Offset="0" />
@@ -106,6 +118,58 @@
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsMouseOver" Value="True">
                             <Setter TargetName="Bd" Property="Background" Value="{StaticResource AccentHoverBrush}" />
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter Property="Opacity" Value="0.5" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- Disconnect button: same shape as AccentButton (Connect), in a softer light red. -->
+    <Style x:Key="DisconnectButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+        <Setter Property="Background" Value="{StaticResource LightDangerBrush}" />
+        <Setter Property="BorderBrush" Value="{StaticResource LightDangerBrush}" />
+        <Setter Property="Foreground" Value="White" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border x:Name="Bd" Background="{TemplateBinding Background}" CornerRadius="3">
+                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"
+                                          Margin="{TemplateBinding Padding}" />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Bd" Property="Background" Value="{StaticResource LightDangerHoverBrush}" />
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter Property="Opacity" Value="0.5" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- Destructive action button (red): irreversible operations like deleting a published item. -->
+    <Style x:Key="DangerButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+        <Setter Property="Background" Value="{StaticResource DangerBrush}" />
+        <Setter Property="BorderBrush" Value="{StaticResource DangerBrush}" />
+        <Setter Property="Foreground" Value="White" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border x:Name="Bd" Background="{TemplateBinding Background}" CornerRadius="3">
+                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"
+                                          Margin="{TemplateBinding Padding}" />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Bd" Property="Background" Value="{StaticResource DangerHoverBrush}" />
                         </Trigger>
                         <Trigger Property="IsEnabled" Value="False">
                             <Setter Property="Opacity" Value="0.5" />

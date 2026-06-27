@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
@@ -14,7 +14,7 @@
     <Platform>x64</Platform>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <!-- App version. Shown in the window title at runtime (see MainWindow ctor). -->
-    <Version>0.2.5</Version>
+    <Version>0.2.6</Version>
   </PropertyGroup>
 
   <ItemGroup>
@@ -29,6 +29,15 @@
   <ItemGroup Condition="'$(EmbeddedHostExe)' != '' and Exists('$(EmbeddedHostExe)')">
     <EmbeddedResource Include="$(EmbeddedHostExe)">
       <LogicalName>PulseWorkshop.SteamHost.exe</LogicalName>
+      <Visible>false</Visible>
+    </EmbeddedResource>
+  </ItemGroup>
+
+  <!-- ModelTool (C++ native CLI) is embedded alongside the SteamHost when publishing.
+       ToolLocator extracts it to %LocalAppData%\PulseWorkshop\tools\ at runtime. -->
+  <ItemGroup Condition="'$(EmbeddedModelToolExe)' != '' and Exists('$(EmbeddedModelToolExe)')">
+    <EmbeddedResource Include="$(EmbeddedModelToolExe)">
+      <LogicalName>PulseWorkshop.ModelTool.exe</LogicalName>
       <Visible>false</Visible>
     </EmbeddedResource>
   </ItemGroup>

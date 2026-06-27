@@ -14,6 +14,12 @@ public static class AppPaths
     /// <summary>Single JSON file holding persisted UI preferences (see <see cref="UiSettings"/>).</summary>
     public static string SettingsFile { get; } = Path.Combine(Root, "settings.json");
 
+    /// <summary>Single JSON file holding the Game Setup config (see <c>GameSetupConfig</c>).</summary>
+    public static string GameSetupFile { get; } = Path.Combine(Root, "gamesetup.json");
+
+    /// <summary>Single JSON file holding the Compile tab state (see <c>CompileConfig</c>).</summary>
+    public static string CompileFile { get; } = Path.Combine(Root, "compile.json");
+
     /// <summary>Ensures the data directories exist; safe to call repeatedly.</summary>
     public static void EnsureCreated()
     {

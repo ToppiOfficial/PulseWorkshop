@@ -53,9 +53,10 @@ if (-not (Test-Path $steamDll)) {
     Fail "Steamworks SDK missing: $steamDll`n      See external\steamworks_sdk\PLACEMENT.md."
 }
 
-$sln      = Join-Path $PSScriptRoot 'PulseWorkshop.sln'
-$appProj  = Join-Path $PSScriptRoot 'src\PulseWorkshop.App\PulseWorkshop.App.csproj'
-$hostProj = Join-Path $PSScriptRoot 'src\PulseWorkshop.SteamHost\PulseWorkshop.SteamHost.csproj'
+$sln          = Join-Path $PSScriptRoot 'PulseWorkshop.sln'
+$appProj      = Join-Path $PSScriptRoot 'src\PulseWorkshop.App\PulseWorkshop.App.csproj'
+$hostProj     = Join-Path $PSScriptRoot 'src\PulseWorkshop.SteamHost\PulseWorkshop.SteamHost.csproj'
+$modelToolExe = Join-Path $PSScriptRoot "src\PulseWorkshop.ModelTool\bin\x64\$Configuration\PulseWorkshop.ModelTool.exe"
 
 # --- Clean output ------------------------------------------------------------
 $stageDir = Join-Path $PSScriptRoot '.hoststage'
@@ -79,12 +80,17 @@ if ($LASTEXITCODE -ne 0) { Fail "SteamHost publish failed ($LASTEXITCODE)." }
 $stagedHost = Join-Path $stageDir 'PulseWorkshop.SteamHost.exe'
 if (-not (Test-Path $stagedHost)) { Fail "Staged host exe not found: $stagedHost" }
 
-# 3) Publish the App as a single exe, embedding the staged host (EmbeddedHostExe -> resource).
-Write-Host "`n=== Publishing App (single-file, host embedded) ===" -ForegroundColor Yellow
-& $msbuild $appProj /t:Publish /p:PublishProfile=SingleFileProfile "/p:PublishDir=$OutDir\" "/p:EmbeddedHostExe=$stagedHost" @common
+# 3) Verify the ModelTool native exe was produced by the solution build in step 1.
+Write-Host "`n=== Locating ModelTool (built in step 1) ===" -ForegroundColor Yellow
+if (-not (Test-Path $modelToolExe)) { Fail "ModelTool exe not found after solution build: $modelToolExe" }
+Write-Host "ModelTool: $modelToolExe" -ForegroundColor Cyan
+
+# 4) Publish the App as a single exe, embedding both the host and the model tool.
+Write-Host "`n=== Publishing App (single-file, host + ModelTool embedded) ===" -ForegroundColor Yellow
+& $msbuild $appProj /t:Publish /p:PublishProfile=SingleFileProfile "/p:PublishDir=$OutDir\" "/p:EmbeddedHostExe=$stagedHost" "/p:EmbeddedModelToolExe=$modelToolExe" @common
 if ($LASTEXITCODE -ne 0) { Fail "App publish failed ($LASTEXITCODE)." }
 
-# 4) Trim any stray debug symbols and drop the staging folder.
+# 5) Trim any stray debug symbols and drop the staging folder.
 Get-ChildItem $OutDir -Include *.pdb -Recurse | Remove-Item -Force -ErrorAction SilentlyContinue
 Remove-Item $stageDir -Recurse -Force -ErrorAction SilentlyContinue
 

@@ -62,8 +62,12 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         ToggleConsoleCommand = new RelayCommand(() => IsConsoleVisible = !IsConsoleVisible);
         ClearConsoleCommand = new RelayCommand(ClearConsole);
 
-        // Stream the Steam host's log + upload progress into the live console panel.
+        // Stream the Steam host's log + upload progress into the Workshop terminal.
         _service.HostOutput += OnHostOutput;
+
+        // The Compile tab reuses Game Setup's tool paths. It owns its own embedded terminal for
+        // studiomdl's output, kept separate from this Workshop terminal.
+        Compile = new CompileViewModel(GameSetup);
 
         // Live-filtered views over each list.
         PublishedView = CollectionViewSource.GetDefaultView(PublishedItems);
@@ -92,6 +96,12 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     }
 
     public IReadOnlyList<GameConfig> Games { get; } = KnownGames.All;
+
+    /// <summary>The Game Setup panel (standalone, Crowbar-style game/tool path config).</summary>
+    public GameSetupViewModel GameSetup { get; } = new();
+
+    /// <summary>The Compile panel (runs studiomdl on a .qc; reuses Game Setup's tool paths).</summary>
+    public CompileViewModel Compile { get; }
 
     public ObservableCollection<WorkshopItem> PublishedItems { get; } = new();
     public ObservableCollection<DraftListItemViewModel> Drafts { get; } = new();
@@ -243,11 +253,20 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
 
     private const int MaxConsoleLines = 1000;
     private bool _isConsoleVisible;
+    private string _consoleText = string.Empty;
 
-    /// <summary>Lines shown in the bottom console drawer, oldest first.</summary>
-    public ObservableCollection<string> ConsoleLines { get; } = new();
+    // Backing line buffer (oldest first). Kept so the line cap can be enforced; the UI binds to
+    // ConsoleText, a plain multi-line string, so the terminal is fully selectable for copy/paste.
+    private readonly List<string> _consoleLines = new();
 
-    /// <summary>Whether the console drawer is expanded.</summary>
+    /// <summary>The console drawer's full text, one log line per row, oldest first.</summary>
+    public string ConsoleText
+    {
+        get => _consoleText;
+        private set => SetField(ref _consoleText, value);
+    }
+
+    /// <summary>Whether the Workshop terminal drawer is expanded.</summary>
     public bool IsConsoleVisible
     {
         get => _isConsoleVisible;
@@ -257,10 +276,14 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     /// <summary>Appends a line authored by the App itself (host lines arrive via <see cref="OnHostOutput"/>).</summary>
     private void ConsoleLog(string message) => AppendConsoleLine($"[{DateTime.Now:HH:mm:ss}] {message}");
 
-    private void ClearConsole() => ConsoleLines.Clear();
+    private void ClearConsole()
+    {
+        _consoleLines.Clear();
+        ConsoleText = string.Empty;
+    }
 
     // Host output fires on a background (thread-pool) thread; marshal to the UI thread before
-    // touching the ObservableCollection bound to the console list.
+    // touching the line buffer bound to the console.
     private void OnHostOutput(string line)
     {
         var dispatcher = Application.Current?.Dispatcher;
@@ -272,9 +295,10 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
 
     private void AppendConsoleLine(string line)
     {
-        ConsoleLines.Add(line);
-        while (ConsoleLines.Count > MaxConsoleLines)
-            ConsoleLines.RemoveAt(0);
+        _consoleLines.Add(line);
+        while (_consoleLines.Count > MaxConsoleLines)
+            _consoleLines.RemoveAt(0);
+        ConsoleText = string.Join(Environment.NewLine, _consoleLines);
     }
 
     // --- Logged-in Steam profile (top-right) -----------------------------------------------
@@ -360,11 +384,14 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         private set => SetField(ref _developerAvatarUrl, value);
     }
 
-    /// <summary>One-line description of the app shown on the About tab.</summary>
+    /// <summary>Description of the app shown on the About tab.</summary>
     public string AppDescription =>
         "A friendly Steam Workshop manager for Left 4 Dead 2 and Garry's Mod. " +
         "Browse, create, and edit your own Workshop items - title, description, tags, " +
-        "content file, and preview image - all in one window, reusing your running Steam session.";
+        "content file, and preview image - all in one window, reusing your running Steam session. " +
+        "PulseWorkshop is the successor to KitsuneResource.";
+
+    public string KitsuneResourceUrl => "https://github.com/ToppiOfficial/KitsuneResource";
 
     /// <summary>App version (from the assembly version), shown as "v1.2.3" on the About tab.</summary>
     public string AppVersionDisplay

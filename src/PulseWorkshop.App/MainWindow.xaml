@@ -19,18 +19,22 @@
     <Grid Margin="10,2,10,10">
         <Grid.RowDefinitions>
             <RowDefinition Height="*" />
-            <!-- Terminal drawer (at the very bottom, below the action bar): a drag handle and the log
-                 panel. Both rows collapse to 0 height when the terminal is hidden (toggled in
-                 MainWindow.xaml.cs). -->
-            <RowDefinition x:Name="ConsoleSplitterRow" Height="0" />
+            <!-- Drag-handle row: the GridSplitter that resizes the top block (editor) vs the terminal
+                 drawer. Its own dedicated row directly between them, so PreviousAndNext resizes the
+                 editor (Row 0) and the drawer (Row 2) and the splitter reliably grabs the mouse.
+                 Collapses to 0 with the drawer (driven in MainWindow.xaml.cs). The Terminal toggle
+                 button overlays the editor's bottom-right corner so it stays visible when collapsed. -->
+            <RowDefinition x:Name="ConsoleSplitterRowDef" Height="0" />
+            <!-- Terminal drawer: collapses to 0 height when the terminal is hidden. -->
             <RowDefinition x:Name="ConsoleRowDef" Height="0" MinHeight="0" />
         </Grid.RowDefinitions>
 
         <!-- Top-level tabs (the outer container): the Workshop tool, and an About page. The
              Game picker + Connect live inside the Workshop tab - they're Workshop-only; other
              tabs are for tools unrelated to the Steam Workshop connection. -->
-        <TabControl Grid.Row="0" x:Name="MainTabs" Background="Transparent" BorderThickness="0" Padding="0">
-          <TabItem Header="Workshop">
+        <TabControl Grid.Row="0" x:Name="MainTabs" Background="Transparent" BorderThickness="0" Padding="0"
+                    SelectionChanged="MainTabs_SelectionChanged">
+          <TabItem Header="Workshop" x:Name="WorkshopTab">
             <DockPanel Margin="0,8,0,0">
             <!-- Connection bar: game picker + connect (Workshop-only). -->
             <Border DockPanel.Dock="Top" Background="{StaticResource HeaderGradientBrush}"
@@ -621,11 +625,13 @@
                 </StackPanel>
 
                 <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right">
+                    <!-- Terminal toggle: lives in the Workshop action bar so it's always visible and
+                         inherently Workshop-only. Toggles the drawer at the window bottom. -->
+                    <Button Content="Terminal" Command="{Binding ToggleConsoleCommand}" Margin="0,0,8,0"
+                            ToolTip="Show/hide the live Steam host log and upload progress. Shortcut: ~" />
                     <TextBlock Text="{Binding PublishRequirementsHint}" Style="{StaticResource MutedText}"
                                VerticalAlignment="Center" Margin="0,0,12,0"
                                Visibility="{Binding PublishRequirementsHint, Converter={StaticResource StringToVis}}" />
-                    <Button Content="Terminal" Command="{Binding ToggleConsoleCommand}" Margin="0,0,8,0"
-                            ToolTip="Show/hide the live Steam host log and upload progress." />
                     <Button Content="Save as template" Click="SaveAsTemplate_Click" Margin="0,0,8,0"
                             ToolTip="Save the current tags / description / visibility as a reusable template."
                             Visibility="{Binding CanSaveAsTemplate, Converter={StaticResource BoolToVis}}" />
@@ -641,13 +647,498 @@
             </DockPanel>
           </TabItem>
 
+          <!-- Game Setup: standalone config of user-defined games (name, engine, exe/tool paths)
+               + shared Steam library folders. Master-detail: a games list on the left, a card-based
+               editor on the right. Does not affect the Workshop connection - it's persisted config
+               for future tooling. -->
+          <TabItem Header="Game Setup">
+            <Grid DataContext="{Binding GameSetup}" Margin="0,8,0,0">
+              <Grid.Resources>
+                <!-- A flat titled section (no own background): the right side is a single gradient
+                     panel like the Workshop editor, so sections sit directly on it and just use
+                     spacing + a heading to group fields. -->
+                <Style x:Key="Card" TargetType="Border">
+                    <Setter Property="Background" Value="Transparent" />
+                    <Setter Property="Padding" Value="0" />
+                    <Setter Property="Margin" Value="0,0,0,20" />
+                </Style>
+                <Style x:Key="CardTitle" TargetType="TextBlock">
+                    <Setter Property="FontSize" Value="14" />
+                    <Setter Property="FontWeight" Value="SemiBold" />
+                    <Setter Property="Margin" Value="0,0,0,12" />
+                </Style>
+
+                <!-- One reusable row for every tool-path field: label | base dropdown | path |
+                     Browse | "missing" warning. Bound to a PathFieldViewModel. -->
+                <DataTemplate x:Key="PathFieldRow">
+                    <Grid Margin="0,0,0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="100" />
+                            <ColumnDefinition Width="150" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Text="{Binding Label}" Style="{StaticResource MutedText}"
+                                   VerticalAlignment="Center" Margin="0,0,8,0" TextTrimming="CharacterEllipsis" />
+                        <ComboBox Grid.Column="1" ItemsSource="{Binding Choices}"
+                                  SelectedItem="{Binding SelectedChoice}"
+                                  Margin="0,0,6,0"
+                                  ToolTip="Pick a Steam library base, or '(Absolute path)' to type a full path." />
+                        <TextBox Grid.Column="2" Text="{Binding PathText, UpdateSourceTrigger=PropertyChanged}"
+                                 VerticalContentAlignment="Center" />
+                        <Button Grid.Column="3" Content="Browse..." Margin="6,0,0,0"
+                                Command="{Binding BrowseCommand}" />
+                        <TextBlock Grid.Column="4" Text="missing" Margin="8,0,0,0" VerticalAlignment="Center"
+                                   Foreground="{StaticResource LightDangerBrush}"
+                                   ToolTip="The resolved path doesn't exist on disk."
+                                   Visibility="{Binding PathMissing, Converter={StaticResource BoolToVis}}" />
+                    </Grid>
+                </DataTemplate>
+              </Grid.Resources>
+
+              <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="250" MinWidth="190" />
+                  <ColumnDefinition Width="8" />
+                  <ColumnDefinition Width="*" />
+              </Grid.ColumnDefinitions>
+
+              <!-- LEFT: games list with add on top, clone/delete at the bottom -->
+              <Border Grid.Column="0" Background="{StaticResource PanelGradientBrush}"
+                      BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
+                      CornerRadius="3" Padding="8">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+
+                    <Grid Grid.Row="0" Margin="2,2,2,8">
+                        <TextBlock Text="Games" FontWeight="SemiBold" VerticalAlignment="Center" />
+                        <Button Content="+" FontSize="18" FontWeight="Bold" Width="26" Height="26" Padding="0"
+                                HorizontalAlignment="Right" Command="{Binding AddGameCommand}"
+                                ToolTip="Add a new game" />
+                    </Grid>
+
+                    <ListBox Grid.Row="1" ItemsSource="{Binding Games}" SelectedItem="{Binding SelectedGame}"
+                             BorderThickness="0" Background="Transparent"
+                             ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <Grid Margin="2,5">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel VerticalAlignment="Center">
+                                        <TextBlock Text="{Binding DisplayName}" FontWeight="SemiBold"
+                                                   TextTrimming="CharacterEllipsis" />
+                                        <TextBlock Text="{Binding Engine}" Style="{StaticResource MutedText}" />
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                        <Button Style="{StaticResource CloneButton}" Click="GameClone_Click"
+                                                ToolTip="Clone this game (as 'Clone of ...')." />
+                                        <Button Style="{StaticResource TrashButton}" Click="GameDelete_Click"
+                                                ToolTip="Delete this game." />
+                                    </StackPanel>
+                                </Grid>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                </Grid>
+              </Border>
+
+              <GridSplitter Grid.Column="1" Width="8" HorizontalAlignment="Stretch" Background="Transparent" />
+
+              <!-- RIGHT: editor for the selected game - one gradient panel (matching the Workshop
+                   editor) with flat titled sections inside. -->
+              <Grid Grid.Column="2">
+                <TextBlock Text="Select a game on the left, or click + to add one."
+                           Style="{StaticResource MutedText}"
+                           HorizontalAlignment="Center" VerticalAlignment="Center"
+                           Visibility="{Binding SelectedGame, Converter={StaticResource NullToVis}, ConverterParameter=invert}" />
+
+                <Border Background="{StaticResource PanelGradientBrush}" BorderBrush="{StaticResource BorderBrush}"
+                        BorderThickness="1" CornerRadius="3"
+                        Visibility="{Binding SelectedGame, Converter={StaticResource NullToVis}}">
+                  <!-- Scrolls when the window is too short. On a taller window the inner grid's
+                       MinHeight tracks the scroll viewport, so the Steam library section still
+                       stretches to fill the remaining space (no dead gap at the bottom). -->
+                  <ScrollViewer x:Name="GameSetupDetailScroll" VerticalScrollBarVisibility="Auto"
+                                Padding="16,14,12,14">
+                    <Grid MinHeight="{Binding ViewportHeight, ElementName=GameSetupDetailScroll}">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+
+                    <!-- General -->
+                    <Border Grid.Row="0" Style="{StaticResource Card}">
+                      <StackPanel>
+                        <TextBlock Text="General" Style="{StaticResource CardTitle}" />
+                        <Grid Margin="0,0,0,8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="100" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="Name" Style="{StaticResource MutedText}"
+                                       VerticalAlignment="Center" Margin="0,0,8,0" />
+                            <TextBox Grid.Column="1" Text="{Binding SelectedGame.Name, UpdateSourceTrigger=PropertyChanged}"
+                                     VerticalContentAlignment="Center" />
+                        </Grid>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="100" />
+                                <ColumnDefinition Width="200" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="Engine" Style="{StaticResource MutedText}"
+                                       VerticalAlignment="Center" Margin="0,0,8,0" />
+                            <ComboBox Grid.Column="1" ItemsSource="{Binding EngineOptions}"
+                                      SelectedItem="{Binding SelectedGame.Engine}" />
+                        </Grid>
+                      </StackPanel>
+                    </Border>
+
+                    <!-- Tools -->
+                    <Border Grid.Row="1" Style="{StaticResource Card}">
+                      <StackPanel>
+                        <TextBlock Text="Tools" Style="{StaticResource CardTitle}" />
+
+                        <ContentControl Content="{Binding SelectedGame.GameInfo}"
+                                        ContentTemplate="{StaticResource PathFieldRow}" />
+                        <ContentControl Content="{Binding SelectedGame.ModelCompiler}"
+                                        ContentTemplate="{StaticResource PathFieldRow}" />
+                        <ContentControl Content="{Binding SelectedGame.ModelViewer}"
+                                        ContentTemplate="{StaticResource PathFieldRow}" />
+                        <ContentControl Content="{Binding SelectedGame.PackerTool}"
+                                        ContentTemplate="{StaticResource PathFieldRow}" />
+                      </StackPanel>
+                    </Border>
+
+                    <!-- Steam library folders (stretches to fill the remaining height; bottom margin
+                         zeroed so it lines up with the games panel on the left) -->
+                    <Border Grid.Row="2" Style="{StaticResource Card}" Margin="0,0,0,0">
+                      <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                        </Grid.RowDefinitions>
+
+                        <!-- Library folders sub-section: Add Library always on top -->
+                        <Grid Grid.Row="0" Margin="0,0,0,8">
+                            <TextBlock VerticalAlignment="Center" FontSize="14" FontWeight="SemiBold"
+                                       Text="Steam Library folders" />
+                            <Button HorizontalAlignment="Right" Content="Add Library" Padding="10,3"
+                                    Command="{Binding AddLibraryCommand}"
+                                    ToolTip="Add a Steam library folder (selectable as a base for any path above)." />
+                        </Grid>
+
+                        <!-- The table fills the rest of the card; rows scroll inside it. -->
+                        <Border Grid.Row="1" Background="{StaticResource BgBrush}" BorderBrush="{StaticResource BorderBrush}"
+                                BorderThickness="1" CornerRadius="3" Padding="8">
+                          <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="*" />
+                            </Grid.RowDefinitions>
+
+                            <Grid Grid.Row="0" Margin="0,0,0,6">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Text="Library path" Style="{StaticResource MutedText}"
+                                           FontWeight="SemiBold" />
+                                <TextBlock Grid.Column="1" Text="Browse" Style="{StaticResource MutedText}"
+                                           FontWeight="SemiBold" Margin="0,0,38,0" />
+                            </Grid>
+
+                            <TextBlock Grid.Row="1" Text="No libraries yet - click 'Add Library' above."
+                                       Style="{StaticResource MutedText}" Margin="0,2,0,2"
+                                       Visibility="{Binding HasLibraries, Converter={StaticResource BoolToVis}, ConverterParameter=invert}" />
+
+                            <ItemsControl Grid.Row="2" VerticalAlignment="Top" ItemsSource="{Binding Libraries}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Grid Margin="0,0,0,6">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <TextBox Text="{Binding PathText, UpdateSourceTrigger=PropertyChanged}"
+                                                     Tag="Steam library path (e.g. D:\SteamLibrary)"
+                                                     VerticalContentAlignment="Center" />
+                                            <Button Grid.Column="1" Content="Browse..." Margin="6,0,0,0"
+                                                    Command="{Binding BrowseCommand}" />
+                                            <Button Grid.Column="2" Style="{StaticResource TrashButton}"
+                                                    VerticalAlignment="Center" Margin="2,0,0,0"
+                                                    Command="{Binding RemoveCommand}"
+                                                    ToolTip="Remove this library." />
+                                        </Grid>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                          </Grid>
+                        </Border>
+                      </Grid>
+                    </Border>
+                    </Grid>
+                  </ScrollViewer>
+                </Border>
+              </Grid>
+            </Grid>
+          </TabItem>
+
+          <!-- Compile: a friendlier take on Crowbar's "Compile MDL". An inner Simple / Advanced
+               tab split (Advanced is a placeholder for now). Runs studiomdl on a single .qc using a
+               Game Setup entry's tool paths, streaming live output into the bottom Terminal drawer. -->
+          <TabItem Header="Compile" x:Name="CompileTab">
+            <Grid DataContext="{Binding Compile}" Margin="0,8,0,0">
+              <Grid.Resources>
+                <!-- The left-hand label of a form row: muted, aligned to its field's text line.
+                     Min width keeps the field column's left edge consistent across rows. -->
+                <Style x:Key="CompileFieldLabel" TargetType="TextBlock" BasedOn="{StaticResource MutedText}">
+                    <Setter Property="VerticalAlignment" Value="Top" />
+                    <Setter Property="MinWidth" Value="60" />
+                    <Setter Property="Margin" Value="0,6,12,0" />
+                </Style>
+              </Grid.Resources>
+
+              <TabControl Background="Transparent" BorderThickness="0" Padding="0">
+
+                <!-- SIMPLE: the working compile form (top) above a fixed, always-visible terminal that
+                     shows only this compile's studiomdl output - separate from the Workshop terminal. -->
+                <TabItem Header="Simple" x:Name="CompileSimpleTab">
+                  <!-- Form on top, terminal below - merged as one panel (no resizable split). The form
+                       sizes to its content; the terminal fills the remaining height. -->
+                  <Grid Margin="0,8,0,4">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" MinHeight="100" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+
+                  <Border Grid.Row="0" Background="{StaticResource PanelGradientBrush}" BorderBrush="{StaticResource BorderBrush}"
+                          BorderThickness="1" CornerRadius="3">
+                    <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="14,12,14,12">
+                      <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+
+                        <!-- Game: full-width dropdown (from the Game Setup roster). -->
+                        <TextBlock Grid.Row="0" Text="Game" Style="{StaticResource CompileFieldLabel}" />
+                        <ComboBox Grid.Row="0" Grid.Column="1" Margin="0,0,0,6"
+                                  ItemsSource="{Binding Games}" SelectedItem="{Binding SelectedGame}"
+                                  DisplayMemberPath="DisplayName" />
+
+                        <!-- Resolved compiler + gameinfo paths (with "missing" warnings). -->
+                        <Grid Grid.Row="1" Grid.Column="1" Margin="0,0,0,10"
+                              Visibility="{Binding SelectedGame, Converter={StaticResource NullToVis}}">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+                            <TextBlock Text="Compiler" Style="{StaticResource MutedText}" Margin="0,0,10,0" />
+                            <TextBlock Grid.Column="1" Text="{Binding SelectedGame.ModelCompiler.ResolvedPath}"
+                                       TextTrimming="CharacterEllipsis" Foreground="{StaticResource MutedTextBrush}"
+                                       ToolTip="{Binding SelectedGame.ModelCompiler.ResolvedPath}" />
+                            <TextBlock Grid.Column="2" Text="missing" Margin="8,0,0,0"
+                                       Foreground="{StaticResource LightDangerBrush}"
+                                       ToolTip="The model compiler path doesn't exist - set it in Game Setup."
+                                       Visibility="{Binding SelectedGame.ModelCompiler.PathMissing, Converter={StaticResource BoolToVis}}" />
+                            <TextBlock Grid.Row="1" Text="GameInfo" Style="{StaticResource MutedText}" Margin="0,3,10,0" />
+                            <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding SelectedGame.GameInfo.ResolvedPath}"
+                                       TextTrimming="CharacterEllipsis" Margin="0,3,0,0" Foreground="{StaticResource MutedTextBrush}"
+                                       ToolTip="{Binding SelectedGame.GameInfo.ResolvedPath}" />
+                            <TextBlock Grid.Row="1" Grid.Column="2" Text="missing" Margin="8,3,0,0"
+                                       Foreground="{StaticResource LightDangerBrush}"
+                                       ToolTip="The gameinfo.txt path doesn't exist - set it in Game Setup."
+                                       Visibility="{Binding SelectedGame.GameInfo.PathMissing, Converter={StaticResource BoolToVis}}" />
+                        </Grid>
+
+                        <!-- QC file: full-width path + Browse. -->
+                        <TextBlock Grid.Row="2" Text="QC file" Style="{StaticResource CompileFieldLabel}" />
+                        <Grid Grid.Row="2" Grid.Column="1" Margin="0,0,0,10">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBox Text="{Binding QcPath, UpdateSourceTrigger=PropertyChanged}"
+                                     Tag="Type or paste a .qc path" VerticalContentAlignment="Center" />
+                            <Button Grid.Column="1" Content="Browse..." Margin="6,0,0,0"
+                                    Command="{Binding BrowseQcCommand}" />
+                        </Grid>
+
+                        <!-- Output: mode dropdown inline with its field (Subfolder name / Work folder path). -->
+                        <TextBlock Grid.Row="3" Text="Output" Style="{StaticResource CompileFieldLabel}" />
+                        <Grid Grid.Row="3" Grid.Column="1" Margin="0,0,0,10">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <ComboBox Width="220" ItemsSource="{Binding OutputModes}"
+                                      SelectedItem="{Binding SelectedOutputMode}" />
+                            <!-- One of these two occupies the field cell, depending on the mode. -->
+                            <TextBox Grid.Column="1" Margin="6,0,0,0"
+                                     Text="{Binding SubfolderName, UpdateSourceTrigger=PropertyChanged}"
+                                     VerticalContentAlignment="Center"
+                                     Visibility="{Binding ShowSubfolderName, Converter={StaticResource BoolToVis}}"
+                                     ToolTip="Folder created beside the .qc to receive the compiled files (preserving the models\... path)." />
+                            <TextBox Grid.Column="1" Margin="6,0,0,0"
+                                     Text="{Binding WorkFolderPath, UpdateSourceTrigger=PropertyChanged}"
+                                     Tag="Absolute path to copy compiled files into" VerticalContentAlignment="Center"
+                                     Visibility="{Binding ShowWorkFolder, Converter={StaticResource BoolToVis}}" />
+                            <Button Grid.Column="2" Content="Browse..." Margin="6,0,0,0"
+                                    Command="{Binding BrowseWorkFolderCommand}"
+                                    Visibility="{Binding ShowWorkFolder, Converter={StaticResource BoolToVis}}" />
+                        </Grid>
+
+                        <!-- Options: full-width. -->
+                        <TextBlock Grid.Row="4" Text="Options" Style="{StaticResource CompileFieldLabel}" />
+                        <TextBox Grid.Row="4" Grid.Column="1" Margin="0,0,0,2"
+                                 Text="{Binding ExtraOptions, UpdateSourceTrigger=PropertyChanged}"
+                                 Tag="Extra studiomdl options (e.g. -nox360)" VerticalContentAlignment="Center" />
+                        <TextBlock Grid.Row="5" Grid.Column="1" Style="{StaticResource MutedText}" Margin="0,0,0,10"
+                                   TextWrapping="Wrap"
+                                   Text="-verbose is always added (its output locates the .mdl); a typed -quiet is removed automatically." />
+
+                        <!-- Command preview: full-width, read-only. -->
+                        <TextBlock Grid.Row="6" Text="Command" Style="{StaticResource CompileFieldLabel}" />
+                        <TextBox Grid.Row="6" Grid.Column="1" Margin="0,0,0,12"
+                                 Text="{Binding CommandPreview, Mode=OneWay}" IsReadOnly="True"
+                                 FontFamily="Consolas" FontSize="12" TextWrapping="Wrap"
+                                 Background="{StaticResource BgBrush}" />
+
+                        <!-- Compile action + status (left) + material options (far right). -->
+                        <Grid Grid.Row="7" Grid.Column="1">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+
+                            <StackPanel Orientation="Horizontal">
+                                <Button Content="Compile" Style="{StaticResource AccentButton}" MinWidth="120"
+                                        Padding="16,8" Command="{Binding CompileCommand}" />
+                                <StackPanel VerticalAlignment="Center" Margin="14,0,0,0">
+                                    <TextBlock Text="{Binding StatusMessage}" Style="{StaticResource MutedText}"
+                                               TextTrimming="CharacterEllipsis" Margin="0,0,0,4" />
+                                    <ProgressBar Width="200" IsIndeterminate="True" HorizontalAlignment="Left"
+                                                 Visibility="{Binding IsCompiling, Converter={StaticResource BoolToVis}}" />
+                                </StackPanel>
+                            </StackPanel>
+
+                            <!-- Material options: all on one line. Localize + Flat patch are always
+                                 visible but disabled until "Get materials on compile" is checked. -->
+                            <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                                <CheckBox Content="Get materials on compile"
+                                          IsChecked="{Binding GetMaterialOnCompile}"
+                                          IsEnabled="{Binding CanGetMaterials}"
+                                          Foreground="{StaticResource TextBrush}"
+                                          ToolTip="After each successful compile, copy VMT and VTF files to the output folder. Requires Subfolder or Work folder output mode." />
+                                <CheckBox Content="Localize" IsChecked="{Binding LocalizeMaterials}"
+                                          IsEnabled="{Binding CanConfigureMaterials}"
+                                          Margin="14,0,0,0" Foreground="{StaticResource TextBrush}"
+                                          ToolTip="Place VTF files beside their VMT instead of preserving the game's materials hierarchy." />
+                                <CheckBox Content="Flat patch" IsChecked="{Binding FlatPatchShader}"
+                                          IsEnabled="{Binding CanConfigureMaterials}"
+                                          Margin="14,0,0,0" Foreground="{StaticResource TextBrush}"
+                                          ToolTip="Flatten Patch VMTs into their base shader." />
+                            </StackPanel>
+                        </Grid>
+
+                      </Grid>
+                    </ScrollViewer>
+                  </Border>
+
+                  <!-- Embedded Compile terminal: live studiomdl output only. Part of the same panel as
+                       the form above (no drag handle) - the form and terminal are merged. -->
+                  <Border Grid.Row="1" Margin="0,8,0,0" Background="{StaticResource BgBrush}"
+                          BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
+                          CornerRadius="3">
+                    <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                        </Grid.RowDefinitions>
+
+                        <!-- Header strip: title + clear -->
+                        <Grid Grid.Row="0" Background="{StaticResource PanelAltBrush}">
+                            <TextBlock Text="Terminal" Margin="10,5" FontWeight="SemiBold"
+                                       VerticalAlignment="Center" />
+                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right"
+                                        VerticalAlignment="Center" Margin="0,2,6,2">
+                                <Button Content="Clear" Padding="10,2" Command="{Binding ClearConsoleCommand}"
+                                        ToolTip="Clear the compile output." />
+                            </StackPanel>
+                        </Grid>
+
+                        <!-- Log text: monospace, read-only but fully selectable, auto-scrolled (code-behind). -->
+                        <TextBox Grid.Row="1" x:Name="CompileConsoleBox" Text="{Binding ConsoleText, Mode=OneWay}"
+                                 IsReadOnly="True" IsReadOnlyCaretVisible="True" IsUndoEnabled="False"
+                                 Background="Transparent" BorderThickness="0" Padding="8,2"
+                                 FontFamily="Consolas" FontSize="12" Foreground="{StaticResource TextBrush}"
+                                 TextWrapping="NoWrap" VerticalContentAlignment="Top"
+                                 VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
+                                 TextChanged="OnCompileConsoleTextChanged" />
+                    </Grid>
+                  </Border>
+                  <!-- "Go to file" button: appears after a successful compile; opens Explorer with the .mdl selected. -->
+                  <Button Grid.Row="2" Content="Go to file" Command="{Binding GoToMdlCommand}"
+                          HorizontalAlignment="Left" Margin="0,6,0,0" Padding="12,6"
+                          Visibility="{Binding LastMdlPath, Converter={StaticResource StringToVis}}"
+                          ToolTip="{Binding LastMdlPath}" />
+                  </Grid>
+                </TabItem>
+
+                <!-- ADVANCED: reserved for a future, fuller compile workflow. -->
+                <TabItem Header="Advanced">
+                  <Border Background="{StaticResource PanelGradientBrush}" BorderBrush="{StaticResource BorderBrush}"
+                          BorderThickness="1" CornerRadius="3" Margin="0,8,0,4">
+                    <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                        <TextBlock Text="Advanced compile" FontSize="15" FontWeight="SemiBold"
+                                   HorizontalAlignment="Center" />
+                        <TextBlock Text="Coming in a future update." Style="{StaticResource MutedText}"
+                                   HorizontalAlignment="Center" Margin="0,6,0,0" />
+                    </StackPanel>
+                  </Border>
+                </TabItem>
+
+              </TabControl>
+            </Grid>
+          </TabItem>
+
           <!-- About: developer + app info, Steam-style profile card. -->
           <TabItem Header="About">
-            <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="0,12,8,0">
+            <ScrollViewer x:Name="AboutScroll" VerticalScrollBarVisibility="Auto" Padding="0,8,0,0">
               <Border Background="{StaticResource PanelGradientBrush}"
                       BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
-                      CornerRadius="3" Padding="24" HorizontalAlignment="Center"
-                      VerticalAlignment="Top" MaxWidth="640" Margin="0,8,0,0">
+                      CornerRadius="3" Padding="24" HorizontalAlignment="Stretch"
+                      VerticalAlignment="Stretch" Margin="0"
+                      MinHeight="{Binding ViewportHeight, ElementName=AboutScroll}">
                 <StackPanel>
                     <!-- Developer: circular avatar + name + SteamID, like the Steam profile header. -->
                     <StackPanel Orientation="Horizontal">
@@ -687,16 +1178,22 @@
                                Margin="0,2,0,0" />
                     <TextBlock Text="{Binding AppDescription}" TextWrapping="Wrap"
                                Foreground="{StaticResource TextBrush}" Margin="0,14,0,0" LineHeight="20" />
+                    <Button Content="KitsuneResource" HorizontalAlignment="Left" Margin="0,10,0,0"
+                            Padding="12,4" Click="OpenKitsuneResource_Click"
+                            ToolTip="Open the predecessor project, KitsuneResource, on GitHub." />
                 </StackPanel>
               </Border>
             </ScrollViewer>
           </TabItem>
         </TabControl>
 
-        <!-- Terminal drawer: drag handle (resizes the top block vs the terminal) -->
-        <GridSplitter Grid.Row="1" Height="6" HorizontalAlignment="Stretch"
-                      VerticalAlignment="Center" ResizeBehavior="PreviousAndNext"
-                      ResizeDirection="Rows" Background="Transparent" Cursor="SizeNS"
+        <!-- Drag handle (own dedicated row, directly between the editor and the drawer): resizes the
+             editor block (Row 0) vs the terminal drawer (Row 2). Only shown while the terminal is
+             visible; its row collapses to 0 with the drawer (driven in MainWindow.xaml.cs). -->
+        <GridSplitter Grid.Row="1" Height="12" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
+                      ResizeBehavior="PreviousAndNext" ResizeDirection="Rows"
+                      Background="Transparent" Cursor="SizeNS"
+                      ToolTip="Drag to resize the terminal."
                       Visibility="{Binding IsConsoleVisible, Converter={StaticResource BoolToVis}}" />
 
         <!-- Console drawer: live log of the Steam host + upload progress -->
@@ -721,26 +1218,15 @@
                     </StackPanel>
                 </Grid>
 
-                <!-- Log lines: monospace, auto-scrolled to the newest line (see code-behind). -->
-                <ListBox Grid.Row="1" x:Name="ConsoleList" ItemsSource="{Binding ConsoleLines}"
-                         Background="Transparent" BorderThickness="0"
-                         ScrollViewer.HorizontalScrollBarVisibility="Auto"
-                         VirtualizingStackPanel.IsVirtualizing="True">
-                    <ListBox.ItemContainerStyle>
-                        <Style TargetType="ListBoxItem">
-                            <Setter Property="Background" Value="Transparent" />
-                            <Setter Property="Padding" Value="0" />
-                            <Setter Property="Focusable" Value="False" />
-                        </Style>
-                    </ListBox.ItemContainerStyle>
-                    <ListBox.ItemTemplate>
-                        <DataTemplate>
-                            <TextBlock Text="{Binding}" FontFamily="Consolas" FontSize="12"
-                                       Foreground="{StaticResource TextBrush}" TextWrapping="NoWrap"
-                                       Margin="10,0" />
-                        </DataTemplate>
-                    </ListBox.ItemTemplate>
-                </ListBox>
+                <!-- Log text: monospace, read-only but fully selectable for copy/paste, auto-scrolled
+                     to the newest line (see code-behind). -->
+                <TextBox Grid.Row="1" x:Name="ConsoleBox" Text="{Binding ConsoleText, Mode=OneWay}"
+                         IsReadOnly="True" IsReadOnlyCaretVisible="True" IsUndoEnabled="False"
+                         Background="Transparent" BorderThickness="0" Padding="8,2"
+                         FontFamily="Consolas" FontSize="12" Foreground="{StaticResource TextBrush}"
+                         TextWrapping="NoWrap" VerticalContentAlignment="Top"
+                         VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
+                         TextChanged="OnConsoleTextChanged" />
             </Grid>
         </Border>
     </Grid>

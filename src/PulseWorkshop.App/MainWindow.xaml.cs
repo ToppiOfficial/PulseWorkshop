@@ -1,4 +1,3 @@
-using System.Collections.Specialized;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
@@ -7,7 +6,6 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Interop;
-using System.Windows.Media;
 using Microsoft.Win32;
 using PulseWorkshop.App.ViewModels;
 using PulseWorkshop.Core.Models;
@@ -35,7 +33,6 @@ public partial class MainWindow : Window
         _vm.SelectDraftRequested += id => SelectRow(DraftsList, _vm.Drafts.FirstOrDefault(d => d.Draft.Id == id));
         _vm.SelectTemplateRequested += id => SelectRow(TemplatesList, _vm.Templates.FirstOrDefault(t => t.Template.Id == id));
         _vm.PropertyChanged += OnViewModelPropertyChanged;
-        _vm.ConsoleLines.CollectionChanged += OnConsoleLinesChanged;
 
         // Restore the console drawer state. Height must be set before IsConsoleVisible so the toggle
         // expands the rows to the remembered size.
@@ -52,12 +49,36 @@ public partial class MainWindow : Window
 
     private void SaveUiSettings()
     {
-        if (_vm.IsConsoleVisible && ConsoleRowDef.ActualHeight > 1)
+        if (_vm.IsConsoleVisible && WorkshopTab.IsSelected && ConsoleRowDef.ActualHeight > 1)
             _consoleHeightPx = ConsoleRowDef.ActualHeight;
         _settings.ConsoleVisible = _vm.IsConsoleVisible;
         _settings.ConsoleHeight = _consoleHeightPx;
         _settings.Save();
     }
+
+    // --- Workshop terminal: Workshop-tab-only --------------------------------------------------
+
+    /// <summary>
+    /// Reacts to tab switches (the Compile inner tabs bubble their SelectionChanged up here too).
+    /// The bottom terminal drawer + its toggle belong to the Workshop tab only; every other tab
+    /// hides them (Game Setup has no terminal; Compile has its own embedded one).
+    /// </summary>
+    private void MainTabs_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        // Selector.SelectionChanged also bubbles up from combo boxes / list boxes - only react to
+        // actual tab switches.
+        if (e.OriginalSource is not TabControl)
+            return;
+
+        UpdateWorkshopTerminalVisibility();
+    }
+
+    /// <summary>
+    /// Collapses the Workshop terminal drawer on non-Workshop tabs. (The toggle button itself lives
+    /// inside the Workshop tab's action bar, so it's already Workshop-only - only the bottom drawer,
+    /// which spans the whole window, needs hiding here.)
+    /// </summary>
+    private void UpdateWorkshopTerminalVisibility() => UpdateConsoleRowHeights();
 
     // --- Console drawer ------------------------------------------------------------------------
 
@@ -78,9 +99,12 @@ public partial class MainWindow : Window
     /// </summary>
     private void UpdateConsoleRowHeights()
     {
-        if (_vm.IsConsoleVisible)
+        // The drawer lives at the window bottom but is a Workshop-only tool, so it stays collapsed
+        // on every other tab regardless of the toggle state. (The drag handle lives in the always-on
+        // terminal bar and hides itself via binding when the drawer is collapsed.)
+        if (_vm.IsConsoleVisible && WorkshopTab.IsSelected)
         {
-            ConsoleSplitterRow.Height = new GridLength(6);
+            ConsoleSplitterRowDef.Height = new GridLength(12);
             ConsoleRowDef.Height = new GridLength(_consoleHeightPx);
             ConsoleRowDef.MinHeight = 80;
             ScrollConsoleToEnd();
@@ -92,34 +116,44 @@ public partial class MainWindow : Window
                 _consoleHeightPx = ConsoleRowDef.ActualHeight;
             ConsoleRowDef.MinHeight = 0;
             ConsoleRowDef.Height = new GridLength(0);
-            ConsoleSplitterRow.Height = new GridLength(0);
+            ConsoleSplitterRowDef.Height = new GridLength(0);
         }
     }
 
-    private void OnConsoleLinesChanged(object? sender, NotifyCollectionChangedEventArgs e)
+    // Auto-scroll to the newest line as the log grows, but only when the caret/view is already at the
+    // bottom - otherwise a user scrolled up to read (or select) older output would keep getting yanked
+    // down on every new line.
+    private void OnConsoleTextChanged(object sender, TextChangedEventArgs e)
     {
-        if (e.Action is NotifyCollectionChangedAction.Add)
-            ScrollConsoleToEnd();
+        if (ConsoleBox.VerticalOffset >= ConsoleBox.ExtentHeight - ConsoleBox.ViewportHeight - 1)
+            ConsoleBox.ScrollToEnd();
     }
 
-    private void ScrollConsoleToEnd()
+    private void ScrollConsoleToEnd() => ConsoleBox.ScrollToEnd();
+
+    // Same auto-scroll behavior for the Compile tab's embedded terminal: follow the newest studiomdl
+    // line unless the user has scrolled up to read/select older output.
+    private void OnCompileConsoleTextChanged(object sender, TextChangedEventArgs e)
     {
-        // Scroll the ListBox's own ScrollViewer rather than ScrollIntoView - log lines can repeat,
-        // and ScrollIntoView would jump to the first equal item instead of the newest one.
-        if (FindScrollViewer(ConsoleList) is { } sv)
-            sv.ScrollToEnd();
+        if (CompileConsoleBox.VerticalOffset >= CompileConsoleBox.ExtentHeight - CompileConsoleBox.ViewportHeight - 1)
+            CompileConsoleBox.ScrollToEnd();
     }
 
-    private static ScrollViewer? FindScrollViewer(DependencyObject root)
+    /// <summary>
+    /// Toggle the terminal drawer with the <c>~</c> / backtick key (like the Source engine console).
+    /// Ignored while a text field has focus so the character can still be typed into titles,
+    /// descriptions, paths, etc.
+    /// </summary>
+    protected override void OnPreviewKeyDown(KeyEventArgs e)
     {
-        if (root is ScrollViewer sv)
-            return sv;
-        for (var i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
+        base.OnPreviewKeyDown(e);
+        // The ~ console toggle only applies to the Workshop terminal (the only toggleable one).
+        if (e.Key == Key.OemTilde && Keyboard.FocusedElement is not (TextBox or PasswordBox)
+            && WorkshopTab.IsSelected)
         {
-            if (FindScrollViewer(VisualTreeHelper.GetChild(root, i)) is { } found)
-                return found;
+            _vm.IsConsoleVisible = !_vm.IsConsoleVisible;
+            e.Handled = true;
         }
-        return null;
     }
 
     /// <summary>
@@ -374,9 +408,30 @@ public partial class MainWindow : Window
 
     private void SaveAsTemplate_Click(object sender, RoutedEventArgs e) => _vm.SaveAsTemplate();
 
+    /// <summary>Game Setup: clone the game whose list row's icon was clicked.</summary>
+    private void GameClone_Click(object sender, RoutedEventArgs e)
+    {
+        if (RowData<GameSetupEntryViewModel>(sender) is { } game)
+            _vm.GameSetup.CloneGame(game);
+    }
+
+    /// <summary>Game Setup: delete the game whose list row's trash icon was clicked, confirming first.</summary>
+    private void GameDelete_Click(object sender, RoutedEventArgs e)
+    {
+        if (RowData<GameSetupEntryViewModel>(sender) is not { } game)
+            return;
+
+        if (Confirm("Delete game", $"Delete game setup \"{game.Name}\"?"))
+            _vm.GameSetup.DeleteGame(game);
+    }
+
     /// <summary>Opens the developer's GitHub (About tab) in the default browser.</summary>
     private void OpenDeveloperGitHub_Click(object sender, RoutedEventArgs e) =>
         TryOpen(_vm.DeveloperGitHubUrl);
+
+    /// <summary>Opens the KitsuneResource predecessor project on GitHub.</summary>
+    private void OpenKitsuneResource_Click(object sender, RoutedEventArgs e) =>
+        TryOpen(_vm.KitsuneResourceUrl);
 
     // --- Content file zone ---------------------------------------------------------------------
 

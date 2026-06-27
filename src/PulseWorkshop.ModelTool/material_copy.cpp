@@ -13,23 +13,29 @@ namespace fs = std::filesystem;
 
 namespace {
 
-// VMT texture parameter names (lowercase). Derived from Source SDK VMT documentation.
+// VMT texture parameter names (lowercase). Mirrors KitsuneResource's TEXTURE_KEYS so the same
+// set of textures is gathered. Keys are compared against to_lower(node.key), so all must be lower.
 static const std::unordered_set<std::string>& tex_params() {
     static const std::unordered_set<std::string> s = {
-        "$basetexture",    "$basetexture2",   "$basetexture3",
-        "$bumpmap",        "$bumpmap2",
-        "$normalmap",      "$normalmap2",
-        "$detail",         "$detail2",
-        "$envmapmask",
-        "$phongexponenttexture",
-        "$lightwarptexture",
-        "$selfillummask",
+        "$basetexture",                "$basetexture2",
+        "$bumpmap",                    "$bumpmap2",
+        "$normaltexture",              "$normalmap",
+        "$lightwarptexture",           "$phongexponenttexture",
+        "$phongwarptexture",
+        "$emissiveblendbasetexture",   "$emissiveblendtexture",
+        "$emissiveblendflowtexture",
+        "$ssbump",
+        "$envmapmask",                 "$envmap",
+        "$detail",                     "$detail1",                "$detail2",
         "$blendmodulatetexture",
-        "$flowmap",
-        "$masks1",         "$masks2",
-        "$texture2",
-        "$dudvmap",
-        "$wrinkle",        "$stretch",
+        "$ambientoccltexture",
+        "$corneatexture",
+        "$selfillummask",              "$selfillumtexture",
+        "$iris",
+        "$mraotexture",
+        "$paintsplatnormalmap",        "$paintsplatbubblelayout",
+        "$paintsplatbubble",           "$paintenvmap",
+        "$emissiontexture",            "$emissiontexture2",
     };
     return s;
 }

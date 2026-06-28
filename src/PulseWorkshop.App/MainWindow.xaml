@@ -814,6 +814,23 @@
                                         ContentTemplate="{StaticResource PathFieldRow}" />
                         <ContentControl Content="{Binding SelectedGame.PackerTool}"
                                         ContentTemplate="{StaticResource PathFieldRow}" />
+                        <ContentControl Content="{Binding SelectedGame.VtfTool}"
+                                        ContentTemplate="{StaticResource PathFieldRow}" />
+
+                        <!-- VTF tool launch command: how the Package tool invokes the VTF tool for one
+                             image asset. Placeholders are substituted per asset. -->
+                        <Grid Margin="0,2,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="100" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="VTF command" Style="{StaticResource MutedText}"
+                                       VerticalAlignment="Center" Margin="0,0,8,0" />
+                            <TextBox Grid.Column="1"
+                                     Text="{Binding SelectedGame.VtfToolCommand, UpdateSourceTrigger=PropertyChanged}"
+                                     VerticalContentAlignment="Center"
+                                     Tag="VTF tool arguments. Placeholders: {input} {output} {outputdir} {outputname}" />
+                        </Grid>
                       </StackPanel>
                     </Border>
 
@@ -1233,87 +1250,178 @@
                                           Margin="14,0,0,0" Foreground="{StaticResource TextBrush}"
                                           ToolTip="Before a non-in-game compile, delete the previous in-game build so stale files can't leak into the moved output." />
                             </StackPanel>
+
+                            <!-- Optional dedicated materials folder: when checked, the materials/ tree is
+                                 written here (always relative to the project root) instead of beside the
+                                 compiled models. Absolute or outside-project paths are rejected at copy time. -->
+                            <StackPanel Orientation="Horizontal" Margin="0,8,0,0" VerticalAlignment="Center">
+                                <CheckBox Content="Custom materials folder" IsChecked="{Binding UseCustomMaterialsDir}"
+                                          IsEnabled="{Binding CanConfigureMaterials}" VerticalAlignment="Center"
+                                          Foreground="{StaticResource TextBrush}"
+                                          ToolTip="Put the materials/ folder in a dedicated folder under the project root instead of beside the compiled models." />
+                                <TextBox Width="280" Margin="14,0,0,0" VerticalAlignment="Center"
+                                         Text="{Binding MaterialsOutputDir, UpdateSourceTrigger=PropertyChanged}"
+                                         IsEnabled="{Binding CanEditMaterialsDir}"
+                                         ToolTip="Folder relative to the project root (e.g. shared/materials_src). Absolute or outside-project paths are not allowed; empty means the project root." />
+                                <TextBlock Text="(relative to project root)" Style="{StaticResource MutedText}"
+                                           VerticalAlignment="Center" Margin="8,0,0,0" />
+                            </StackPanel>
                         </StackPanel>
                       </Border>
 
-                      <!-- Model entries: header + Add, the reorderable list (fills), and the
-                           compile-all action bar at the bottom (kept inside this panel so the drag
-                           handle below sits directly between the list and the terminal). -->
+                      <!-- Model entries: a master-detail layout (entries sidebar + selected-entry
+                           editor, like Game Setup / Package) plus the compile-all action bar at the
+                           bottom (kept inside this panel so the drag handle below sits directly
+                           between the list and the terminal). -->
                       <Border Grid.Row="2" Margin="0,8,0,0" Background="{StaticResource PanelGradientBrush}"
                               BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="3">
                         <Grid Margin="14,10">
                           <Grid.RowDefinitions>
-                              <RowDefinition Height="Auto" />
                               <RowDefinition Height="*" />
                               <RowDefinition Height="Auto" />
                           </Grid.RowDefinitions>
 
-                          <Grid Grid.Row="0" Margin="0,0,0,6">
-                              <TextBlock Text="Model entries" Style="{StaticResource HeaderText}"
-                                         VerticalAlignment="Center" Margin="0" />
-                              <Button HorizontalAlignment="Right" Content="Add entry..." Padding="10,4"
-                                      Command="{Binding AddEntryCommand}" />
-                          </Grid>
+                          <!-- Master-detail: entries sidebar (left) + selected-entry editor (right),
+                               like Game Setup. The sidebar shows the entry name + which .qc it uses. -->
+                          <Grid Grid.Row="0">
+                              <Grid.ColumnDefinitions>
+                                  <ColumnDefinition Width="230" MinWidth="180" />
+                                  <ColumnDefinition Width="8" />
+                                  <ColumnDefinition Width="*" />
+                              </Grid.ColumnDefinitions>
 
-                          <!-- Each row is labelled (Name / QC / Output / Command); QC and Output share
-                               the same field column so they line up. Drag the handle to reorder. -->
-                          <ListBox x:Name="AdvancedEntriesList" Grid.Row="1" ItemsSource="{Binding Entries}"
-                                   HorizontalContentAlignment="Stretch" Background="Transparent" BorderThickness="0"
-                                   PreviewMouseLeftButtonDown="AdvancedEntries_PreviewMouseLeftButtonDown"
-                                   DragOver="AdvancedEntries_DragOver" Drop="AdvancedEntries_Drop" AllowDrop="True"
-                                   ScrollViewer.HorizontalScrollBarVisibility="Disabled">
-                              <ListBox.Resources>
-                                  <Style x:Key="EntryLabel" TargetType="TextBlock" BasedOn="{StaticResource MutedText}">
-                                      <Setter Property="VerticalAlignment" Value="Center" />
-                                      <Setter Property="MinWidth" Value="56" />
-                                      <Setter Property="Margin" Value="0,0,8,0" />
-                                  </Style>
-                              </ListBox.Resources>
-                              <ListBox.ItemTemplate>
-                                  <DataTemplate>
-                                      <!-- Outline reflects state: blue while compiling, red if the last
-                                           compile failed (red persists until the next compile / restart). -->
-                                      <Border CornerRadius="3" Padding="8" Margin="0,0,0,6" BorderThickness="2">
-                                          <Border.Style>
-                                              <Style TargetType="Border">
-                                                  <Setter Property="Background" Value="{StaticResource PanelAltBrush}" />
-                                                  <Setter Property="BorderBrush" Value="Transparent" />
-                                                  <Style.Triggers>
-                                                      <DataTrigger Binding="{Binding HasError}" Value="True">
-                                                          <Setter Property="BorderBrush" Value="{StaticResource DangerBrush}" />
-                                                          <Setter Property="Effect">
-                                                              <Setter.Value>
-                                                                  <DropShadowEffect Color="{StaticResource DangerColor}"
-                                                                                    BlurRadius="9" ShadowDepth="0" Opacity="0.7" />
-                                                              </Setter.Value>
-                                                          </Setter>
-                                                      </DataTrigger>
-                                                      <DataTrigger Binding="{Binding IsCompiling}" Value="True">
-                                                          <Setter Property="BorderBrush" Value="{StaticResource AccentBrush}" />
-                                                          <Setter Property="Effect">
-                                                              <Setter.Value>
-                                                                  <DropShadowEffect Color="{StaticResource AccentColor}"
-                                                                                    BlurRadius="9" ShadowDepth="0" Opacity="0.85" />
-                                                              </Setter.Value>
-                                                          </Setter>
-                                                      </DataTrigger>
-                                                  </Style.Triggers>
-                                              </Style>
-                                          </Border.Style>
-                                          <Grid>
-                                              <Grid.ColumnDefinitions>
-                                                  <ColumnDefinition Width="Auto" />
-                                                  <ColumnDefinition Width="*" />
-                                                  <ColumnDefinition Width="Auto" />
-                                              </Grid.ColumnDefinitions>
+                              <!-- LEFT: entries list. Add on top; drag the handle to reorder. -->
+                              <Border Grid.Column="0" Background="{StaticResource PanelAltBrush}"
+                                      BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
+                                      CornerRadius="3" Padding="8">
+                                <Grid>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="*" />
+                                    </Grid.RowDefinitions>
+                                    <Grid Grid.Row="0" Margin="2,2,2,8">
+                                        <TextBlock Text="Entries" FontWeight="SemiBold" VerticalAlignment="Center" />
+                                        <Button Content="+" FontSize="18" FontWeight="Bold" Width="26" Height="26" Padding="0"
+                                                HorizontalAlignment="Right" Command="{Binding AddEntryCommand}"
+                                                ToolTip="Add a QC file to compile" />
+                                    </Grid>
 
-                                              <!-- Drag handle (only this initiates a reorder drag, so the row's fields stay editable) -->
-                                              <TextBlock Grid.Column="0" Tag="DragHandle" Text="&#x2630;" FontSize="16" Margin="2,0,10,0"
-                                                         VerticalAlignment="Center" Foreground="{StaticResource MutedTextBrush}"
-                                                         Cursor="SizeNS" ToolTip="Drag to reorder" />
+                                    <ListBox x:Name="AdvancedEntriesList" Grid.Row="1" ItemsSource="{Binding Entries}"
+                                             SelectedItem="{Binding SelectedEntry}"
+                                             HorizontalContentAlignment="Stretch" Background="Transparent" BorderThickness="0"
+                                             PreviewMouseLeftButtonDown="AdvancedEntries_PreviewMouseLeftButtonDown"
+                                             DragOver="AdvancedEntries_DragOver" Drop="AdvancedEntries_Drop" AllowDrop="True"
+                                             ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                                        <ListBox.ItemTemplate>
+                                            <DataTemplate>
+                                                <Grid Margin="2,4">
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="Auto" />
+                                                        <ColumnDefinition Width="Auto" />
+                                                        <ColumnDefinition Width="*" />
+                                                        <ColumnDefinition Width="Auto" />
+                                                        <ColumnDefinition Width="Auto" />
+                                                    </Grid.ColumnDefinitions>
+                                                    <!-- Drag handle (only this initiates a reorder drag) -->
+                                                    <TextBlock Grid.Column="0" Tag="DragHandle" Text="&#x2630;" FontSize="14"
+                                                               Margin="0,0,8,0" VerticalAlignment="Center"
+                                                               Foreground="{StaticResource MutedTextBrush}" Cursor="SizeNS"
+                                                               ToolTip="Drag to reorder" />
+                                                    <!-- Quick 'Compile all' toggle, editable straight from the list. -->
+                                                    <CheckBox Grid.Column="1" IsChecked="{Binding CompileInAll}" VerticalAlignment="Center"
+                                                              Margin="0,0,8,0" Foreground="{StaticResource TextBrush}"
+                                                              ToolTip="Include this entry when 'Compile all' runs." />
+                                                    <StackPanel Grid.Column="2" VerticalAlignment="Center">
+                                                        <TextBlock Text="{Binding Name}" FontWeight="SemiBold"
+                                                                   TextTrimming="CharacterEllipsis" />
+                                                        <TextBlock Text="{Binding QcSummary}" Style="{StaticResource MutedText}"
+                                                                   TextTrimming="CharacterEllipsis" ToolTip="{Binding ResolvedQcPath}" />
+                                                    </StackPanel>
+                                                    <!-- Status dot: blue while compiling, red after a failed compile. -->
+                                                    <Ellipse Grid.Column="3" Width="8" Height="8" Margin="4,0" VerticalAlignment="Center">
+                                                        <Ellipse.Style>
+                                                            <Style TargetType="Ellipse">
+                                                                <Setter Property="Visibility" Value="Collapsed" />
+                                                                <Style.Triggers>
+                                                                    <DataTrigger Binding="{Binding HasError}" Value="True">
+                                                                        <Setter Property="Visibility" Value="Visible" />
+                                                                        <Setter Property="Fill" Value="{StaticResource DangerBrush}" />
+                                                                    </DataTrigger>
+                                                                    <DataTrigger Binding="{Binding IsCompiling}" Value="True">
+                                                                        <Setter Property="Visibility" Value="Visible" />
+                                                                        <Setter Property="Fill" Value="{StaticResource AccentBrush}" />
+                                                                    </DataTrigger>
+                                                                </Style.Triggers>
+                                                            </Style>
+                                                        </Ellipse.Style>
+                                                    </Ellipse>
+                                                    <StackPanel Grid.Column="4" Orientation="Horizontal" VerticalAlignment="Center">
+                                                        <Button Style="{StaticResource CloneButton}" Command="{Binding CloneCommand}"
+                                                                ToolTip="Duplicate this entry." />
+                                                        <Button Style="{StaticResource TrashButton}" Command="{Binding RemoveCommand}"
+                                                                ToolTip="Remove this entry." />
+                                                    </StackPanel>
+                                                </Grid>
+                                            </DataTemplate>
+                                        </ListBox.ItemTemplate>
+                                    </ListBox>
+                                </Grid>
+                              </Border>
 
-                                              <StackPanel Grid.Column="1">
-                                                  <!-- Name + include-in-all -->
+                              <GridSplitter Grid.Column="1" Width="8" HorizontalAlignment="Stretch" Background="Transparent" />
+
+                              <!-- RIGHT: editor for the selected entry. -->
+                              <Grid Grid.Column="2">
+                                  <TextBlock Text="Select an entry on the left, or click + to add a QC file."
+                                             Style="{StaticResource MutedText}" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                             Visibility="{Binding HasSelectedEntry, Converter={StaticResource BoolToVis}, ConverterParameter=invert}" />
+
+                                  <ContentControl Content="{Binding SelectedEntry}">
+                                    <ContentControl.ContentTemplate>
+                                      <DataTemplate>
+                                        <DataTemplate.Resources>
+                                            <Style x:Key="EntryLabel" TargetType="TextBlock" BasedOn="{StaticResource MutedText}">
+                                                <Setter Property="VerticalAlignment" Value="Center" />
+                                                <Setter Property="MinWidth" Value="56" />
+                                                <Setter Property="Margin" Value="0,0,8,0" />
+                                            </Style>
+                                        </DataTemplate.Resources>
+                                        <!-- Outline reflects state: blue while compiling, red if the last
+                                             compile failed (red persists until the next compile / restart). -->
+                                        <Border CornerRadius="3" Padding="12" BorderThickness="2">
+                                            <Border.Style>
+                                                <Style TargetType="Border">
+                                                    <Setter Property="Background" Value="{StaticResource PanelAltBrush}" />
+                                                    <Setter Property="BorderBrush" Value="Transparent" />
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding HasError}" Value="True">
+                                                            <Setter Property="BorderBrush" Value="{StaticResource DangerBrush}" />
+                                                            <Setter Property="Effect">
+                                                                <Setter.Value>
+                                                                    <DropShadowEffect Color="{StaticResource DangerColor}"
+                                                                                      BlurRadius="9" ShadowDepth="0" Opacity="0.7" />
+                                                                </Setter.Value>
+                                                            </Setter>
+                                                        </DataTrigger>
+                                                        <DataTrigger Binding="{Binding IsCompiling}" Value="True">
+                                                            <Setter Property="BorderBrush" Value="{StaticResource AccentBrush}" />
+                                                            <Setter Property="Effect">
+                                                                <Setter.Value>
+                                                                    <DropShadowEffect Color="{StaticResource AccentColor}"
+                                                                                      BlurRadius="9" ShadowDepth="0" Opacity="0.85" />
+                                                                </Setter.Value>
+                                                            </Setter>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </Border.Style>
+                                            <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                                              <StackPanel>
+                                                  <CheckBox Content="Include in &quot;Compile all&quot;" Margin="0,0,0,8"
+                                                            IsChecked="{Binding CompileInAll}" Foreground="{StaticResource TextBrush}"
+                                                            ToolTip="Include this entry when the bottom 'Compile all' button runs." />
+
+                                                  <!-- Name + per-entry actions -->
                                                   <Grid>
                                                       <Grid.ColumnDefinitions>
                                                           <ColumnDefinition Width="Auto" />
@@ -1321,23 +1429,22 @@
                                                           <ColumnDefinition Width="Auto" />
                                                       </Grid.ColumnDefinitions>
                                                       <TextBlock Text="Name" Style="{StaticResource EntryLabel}" />
-                                                      <TextBox Grid.Column="1" Width="220" HorizontalAlignment="Left"
-                                                               Text="{Binding Name, UpdateSourceTrigger=PropertyChanged}"
+                                                      <TextBox Grid.Column="1" Text="{Binding Name, UpdateSourceTrigger=PropertyChanged}"
                                                                Tag="Entry name" VerticalContentAlignment="Center" />
-                                                      <CheckBox Grid.Column="2" Content="Include in &quot;Compile all&quot;"
-                                                                VerticalAlignment="Center" IsChecked="{Binding CompileInAll}"
-                                                                Foreground="{StaticResource TextBrush}"
-                                                                ToolTip="Include this entry when the bottom 'Compile all' button runs." />
+                                                      <StackPanel Grid.Column="2" Orientation="Horizontal" Margin="10,0,0,0">
+                                                          <Button Content="Compile" Style="{StaticResource AccentButton}"
+                                                                  MinWidth="84" Padding="10,5" Command="{Binding CompileThisCommand}"
+                                                                  ToolTip="Compile only this entry." />
+                                                          <Button Content="Go to file" Margin="6,0,0,0" Padding="10,5"
+                                                                  Command="{Binding GoToMdlCommand}"
+                                                                  Visibility="{Binding LastMdlPath, Converter={StaticResource StringToVis}}"
+                                                                  ToolTip="{Binding LastMdlPath}" />
+                                                      </StackPanel>
                                                   </Grid>
 
-                                                  <!-- QC + Output share one row: .qc (with Browse) on the
-                                                       left, the output destination (subfolder + mode) on the right. -->
-                                                  <Grid Margin="0,6,0,0">
+                                                  <!-- QC + Browse -->
+                                                  <Grid Margin="0,8,0,0">
                                                       <Grid.ColumnDefinitions>
-                                                          <ColumnDefinition Width="Auto" />
-                                                          <ColumnDefinition Width="*" />
-                                                          <ColumnDefinition Width="Auto" />
-                                                          <ColumnDefinition Width="18" />
                                                           <ColumnDefinition Width="Auto" />
                                                           <ColumnDefinition Width="*" />
                                                           <ColumnDefinition Width="Auto" />
@@ -1348,18 +1455,27 @@
                                                                VerticalContentAlignment="Center" ToolTip="{Binding ResolvedQcPath}" />
                                                       <Button Grid.Column="2" Content="Browse..." Margin="6,0,0,0"
                                                               Command="{Binding BrowseQcCommand}" />
-                                                      <TextBlock Grid.Column="4" Text="Output" Style="{StaticResource EntryLabel}" />
-                                                      <TextBox Grid.Column="5"
+                                                  </Grid>
+
+                                                  <!-- Output destination: subfolder name + mode -->
+                                                  <Grid Margin="0,8,0,0">
+                                                      <Grid.ColumnDefinitions>
+                                                          <ColumnDefinition Width="Auto" />
+                                                          <ColumnDefinition Width="*" />
+                                                          <ColumnDefinition Width="Auto" />
+                                                      </Grid.ColumnDefinitions>
+                                                      <TextBlock Grid.Column="0" Text="Output" Style="{StaticResource EntryLabel}" />
+                                                      <TextBox Grid.Column="1"
                                                                Text="{Binding SubfolderName, UpdateSourceTrigger=PropertyChanged}"
                                                                IsEnabled="{Binding ShowSubfolder}"
                                                                ToolTip="Subfolder under the project (a nested path like test/bill is allowed). Disabled for 'Compile in game'."
                                                                VerticalContentAlignment="Center" />
-                                                      <ComboBox Grid.Column="6" Width="200" Margin="6,0,0,0"
+                                                      <ComboBox Grid.Column="2" Width="200" Margin="6,0,0,0"
                                                                 ItemsSource="{Binding OutputModes}" SelectedItem="{Binding SelectedOutputMode}" />
                                                   </Grid>
 
                                                   <!-- Per-entry command -->
-                                                  <Grid Margin="0,6,0,0">
+                                                  <Grid Margin="0,8,0,0">
                                                       <Grid.ColumnDefinitions>
                                                           <ColumnDefinition Width="Auto" />
                                                           <ColumnDefinition Width="*" />
@@ -1370,32 +1486,16 @@
                                                                VerticalContentAlignment="Center" />
                                                   </Grid>
                                               </StackPanel>
-
-                                              <!-- Per-entry actions: Compile, then Go to file (after a compile),
-                                                   then clone + remove. -->
-                                              <StackPanel Grid.Column="2" Margin="10,0,0,0" VerticalAlignment="Top">
-                                                  <Button Content="Compile" Style="{StaticResource AccentButton}"
-                                                          MinWidth="84" Padding="10,6" Command="{Binding CompileThisCommand}"
-                                                          ToolTip="Compile only this entry." />
-                                                  <Button Content="Go to file" Margin="0,6,0,0" Padding="10,4"
-                                                          Command="{Binding GoToMdlCommand}"
-                                                          Visibility="{Binding LastMdlPath, Converter={StaticResource StringToVis}}"
-                                                          ToolTip="{Binding LastMdlPath}" />
-                                                  <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,6,0,0">
-                                                      <Button Style="{StaticResource CloneButton}" Command="{Binding CloneCommand}"
-                                                              ToolTip="Duplicate this entry." />
-                                                      <Button Style="{StaticResource TrashButton}" Command="{Binding RemoveCommand}"
-                                                              ToolTip="Remove this entry." />
-                                                  </StackPanel>
-                                              </StackPanel>
-                                          </Grid>
-                                      </Border>
-                                  </DataTemplate>
-                              </ListBox.ItemTemplate>
-                          </ListBox>
+                                            </ScrollViewer>
+                                        </Border>
+                                      </DataTemplate>
+                                    </ContentControl.ContentTemplate>
+                                  </ContentControl>
+                              </Grid>
+                          </Grid>
 
                           <!-- Compile all + status, with the terminal toggle on the right. -->
-                          <Grid Grid.Row="2" Margin="0,10,0,0">
+                          <Grid Grid.Row="1" Margin="0,10,0,0">
                               <StackPanel Orientation="Horizontal">
                                   <Button Content="Compile all" Style="{StaticResource AccentButton}" MinWidth="120"
                                           Padding="16,8" Command="{Binding CompileAllCommand}" />
@@ -1447,6 +1547,497 @@
                                      TextWrapping="NoWrap" VerticalContentAlignment="Top"
                                      VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
                                      TextChanged="OnAdvancedConsoleTextChanged" />
+                        </Grid>
+                      </Border>
+                    </Grid>
+                  </Grid>
+                </TabItem>
+
+              </TabControl>
+            </Grid>
+          </TabItem>
+
+          <!-- Package: pack a content folder into a .vpk/.gma via the game's packer. An inner
+               Simple / Advanced split (Advanced first). Advanced shares the .pw_mdlproject with the
+               Compile tab but edits its own entry list; each entry bakes its pre-assets into the
+               folder, then runs the packer, streaming output into the bottom Terminal drawer. -->
+          <TabItem Header="Package" x:Name="PackageTab">
+            <Grid Margin="0,8,0,0">
+              <TabControl Background="Transparent" BorderThickness="0" Padding="0">
+
+                <TabItem Header="Simple" x:Name="PackageSimpleTab">
+                  <Border Background="{StaticResource PanelGradientBrush}" BorderBrush="{StaticResource BorderBrush}"
+                          BorderThickness="1" CornerRadius="3" Margin="0,8,0,4">
+                    <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                        <TextBlock Text="Simple package" FontSize="15" FontWeight="SemiBold"
+                                   HorizontalAlignment="Center" />
+                        <TextBlock Style="{StaticResource MutedText}" HorizontalAlignment="Center"
+                                   Margin="0,6,0,0" TextAlignment="Center" MaxWidth="420" TextWrapping="Wrap"
+                                   Text="Coming soon. For now, use the Advanced tab to pack folders into .vpk/.gma." />
+                    </StackPanel>
+                  </Border>
+                </TabItem>
+
+                <TabItem Header="Advanced" x:Name="PackageAdvancedTab" DataContext="{Binding PackageAdvanced}">
+                  <Grid Margin="0,8,0,4">
+
+                    <!-- No project open: prompt to create or open one (shared with the Compile tab). -->
+                    <Border Background="{StaticResource PanelGradientBrush}" BorderBrush="{StaticResource BorderBrush}"
+                            BorderThickness="1" CornerRadius="3"
+                            Visibility="{Binding IsProjectOpen, Converter={StaticResource BoolToVis}, ConverterParameter=invert}">
+                      <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                          <TextBlock Text="Advanced package" FontSize="15" FontWeight="SemiBold"
+                                     HorizontalAlignment="Center" />
+                          <TextBlock Style="{StaticResource MutedText}" HorizontalAlignment="Center"
+                                     Margin="0,6,0,14" TextAlignment="Center" MaxWidth="440" TextWrapping="Wrap"
+                                     Text="Create or open a project (.pw_mdlproject). It's the same project file the Compile tab uses - packaging stores its own entry list inside it." />
+                          <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                              <Button Content="New project..." Style="{StaticResource AccentButton}"
+                                      Padding="16,8" Command="{Binding NewProjectCommand}" />
+                              <Button Content="Open project..." Margin="8,0,0,0" Padding="16,8"
+                                      Command="{Binding OpenProjectCommand}" />
+                          </StackPanel>
+                      </StackPanel>
+                    </Border>
+
+                    <!-- Project open: bar + settings (top), the entries list fills the middle, then a
+                         drag handle + toggleable terminal drawer at the bottom. -->
+                    <Grid Visibility="{Binding IsProjectOpen, Converter={StaticResource BoolToVis}}">
+                      <Grid.RowDefinitions>
+                          <RowDefinition Height="Auto" />
+                          <RowDefinition Height="Auto" />
+                          <RowDefinition Height="*" MinHeight="160" />
+                          <RowDefinition x:Name="PkgConsoleSplitterRowDef" Height="0" />
+                          <RowDefinition x:Name="PkgConsoleRowDef" Height="0" MinHeight="0" />
+                      </Grid.RowDefinitions>
+
+                      <!-- Project bar: name + path, with New / Open / Close. -->
+                      <Border Grid.Row="0" Background="{StaticResource HeaderGradientBrush}"
+                              BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="3"
+                              Padding="12,8">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel>
+                                <TextBlock Text="{Binding ProjectName}" FontWeight="SemiBold" />
+                                <TextBlock Text="{Binding ProjectPath, Converter={StaticResource PathEllipsis}, ConverterParameter=70}"
+                                           Style="{StaticResource MutedText}" ToolTip="{Binding ProjectPath}" />
+                            </StackPanel>
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                <Button Content="New" Padding="10,4" Command="{Binding NewProjectCommand}" />
+                                <Button Content="Open" Margin="6,0,0,0" Padding="10,4" Command="{Binding OpenProjectCommand}" />
+                                <Button Content="Close" Margin="6,0,0,0" Padding="10,4" Command="{Binding CloseProjectCommand}" />
+                            </StackPanel>
+                        </Grid>
+                      </Border>
+
+                      <!-- Project settings: game (drives the packer + VTF tool). -->
+                      <Border Grid.Row="1" Margin="0,8,0,0" Background="{StaticResource PanelGradientBrush}"
+                              BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="3">
+                        <Grid Margin="14,12">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="Game" Style="{StaticResource MutedText}" VerticalAlignment="Center"
+                                       MinWidth="60" Margin="0,0,12,0" />
+                            <ComboBox Grid.Column="1" ItemsSource="{Binding Games}" SelectedItem="{Binding SelectedGame}"
+                                      DisplayMemberPath="DisplayName" />
+                        </Grid>
+                      </Border>
+
+                      <!-- Package entries: header + Add, the reorderable list (fills), and the
+                           package-all action bar at the bottom. -->
+                      <Border Grid.Row="2" Margin="0,8,0,0" Background="{StaticResource PanelGradientBrush}"
+                              BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="3">
+                        <Grid Margin="14,10">
+                          <Grid.RowDefinitions>
+                              <RowDefinition Height="*" />
+                              <RowDefinition Height="Auto" />
+                          </Grid.RowDefinitions>
+
+                          <!-- Master-detail: entries sidebar (left) + selected-entry editor (right),
+                               like Game Setup. The sidebar shows just folder name + asset count. -->
+                          <Grid Grid.Row="0">
+                              <Grid.ColumnDefinitions>
+                                  <ColumnDefinition Width="230" MinWidth="180" />
+                                  <ColumnDefinition Width="8" />
+                                  <ColumnDefinition Width="*" />
+                              </Grid.ColumnDefinitions>
+
+                              <!-- LEFT: entries list. Add on top; drag the handle to reorder. -->
+                              <Border Grid.Column="0" Background="{StaticResource PanelAltBrush}"
+                                      BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
+                                      CornerRadius="3" Padding="8">
+                                <Grid>
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto" />
+                                        <RowDefinition Height="*" />
+                                    </Grid.RowDefinitions>
+                                    <Grid Grid.Row="0" Margin="2,2,2,8">
+                                        <TextBlock Text="Entries" FontWeight="SemiBold" VerticalAlignment="Center" />
+                                        <Button Content="+" FontSize="18" FontWeight="Bold" Width="26" Height="26" Padding="0"
+                                                HorizontalAlignment="Right" Command="{Binding AddEntryCommand}"
+                                                ToolTip="Add a folder to package" />
+                                    </Grid>
+
+                                    <ListBox x:Name="PackageEntriesList" Grid.Row="1" ItemsSource="{Binding Entries}"
+                                             SelectedItem="{Binding SelectedEntry}"
+                                             HorizontalContentAlignment="Stretch" Background="Transparent" BorderThickness="0"
+                                             PreviewMouseLeftButtonDown="PackageEntries_PreviewMouseLeftButtonDown"
+                                             DragOver="PackageEntries_DragOver" Drop="PackageEntries_Drop" AllowDrop="True"
+                                             ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                                        <ListBox.ItemTemplate>
+                                            <DataTemplate>
+                                                <Grid Margin="2,4">
+                                                    <Grid.ColumnDefinitions>
+                                                        <ColumnDefinition Width="Auto" />
+                                                        <ColumnDefinition Width="Auto" />
+                                                        <ColumnDefinition Width="*" />
+                                                        <ColumnDefinition Width="Auto" />
+                                                        <ColumnDefinition Width="Auto" />
+                                                    </Grid.ColumnDefinitions>
+                                                    <!-- Drag handle (only this initiates a reorder drag) -->
+                                                    <TextBlock Grid.Column="0" Tag="DragHandle" Text="&#x2630;" FontSize="14"
+                                                               Margin="0,0,8,0" VerticalAlignment="Center"
+                                                               Foreground="{StaticResource MutedTextBrush}" Cursor="SizeNS"
+                                                               ToolTip="Drag to reorder" />
+                                                    <!-- Quick 'Package all' toggle, editable straight from the list. -->
+                                                    <CheckBox Grid.Column="1" IsChecked="{Binding IncludeInAll}" VerticalAlignment="Center"
+                                                              Margin="0,0,8,0" Foreground="{StaticResource TextBrush}"
+                                                              ToolTip="Include this entry when 'Package all' runs." />
+                                                    <StackPanel Grid.Column="2" VerticalAlignment="Center">
+                                                        <TextBlock Text="{Binding Name}" FontWeight="SemiBold"
+                                                                   TextTrimming="CharacterEllipsis" />
+                                                        <TextBlock Text="{Binding AssetSummary}" Style="{StaticResource MutedText}" />
+                                                    </StackPanel>
+                                                    <!-- Status dot: blue while packaging, red after a failed package. -->
+                                                    <Ellipse Grid.Column="3" Width="8" Height="8" Margin="4,0" VerticalAlignment="Center">
+                                                        <Ellipse.Style>
+                                                            <Style TargetType="Ellipse">
+                                                                <Setter Property="Visibility" Value="Collapsed" />
+                                                                <Style.Triggers>
+                                                                    <DataTrigger Binding="{Binding HasError}" Value="True">
+                                                                        <Setter Property="Visibility" Value="Visible" />
+                                                                        <Setter Property="Fill" Value="{StaticResource DangerBrush}" />
+                                                                    </DataTrigger>
+                                                                    <DataTrigger Binding="{Binding IsPackaging}" Value="True">
+                                                                        <Setter Property="Visibility" Value="Visible" />
+                                                                        <Setter Property="Fill" Value="{StaticResource AccentBrush}" />
+                                                                    </DataTrigger>
+                                                                </Style.Triggers>
+                                                            </Style>
+                                                        </Ellipse.Style>
+                                                    </Ellipse>
+                                                    <StackPanel Grid.Column="4" Orientation="Horizontal" VerticalAlignment="Center">
+                                                        <Button Style="{StaticResource CloneButton}" Command="{Binding CloneCommand}"
+                                                                ToolTip="Duplicate this entry." />
+                                                        <Button Style="{StaticResource TrashButton}" Command="{Binding RemoveCommand}"
+                                                                ToolTip="Remove this entry." />
+                                                    </StackPanel>
+                                                </Grid>
+                                            </DataTemplate>
+                                        </ListBox.ItemTemplate>
+                                    </ListBox>
+                                </Grid>
+                              </Border>
+
+                              <GridSplitter Grid.Column="1" Width="8" HorizontalAlignment="Stretch" Background="Transparent" />
+
+                              <!-- RIGHT: editor for the selected entry. -->
+                              <Grid Grid.Column="2">
+                                  <TextBlock Text="Select an entry on the left, or click + to add a folder."
+                                             Style="{StaticResource MutedText}" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                             Visibility="{Binding HasSelectedEntry, Converter={StaticResource BoolToVis}, ConverterParameter=invert}" />
+
+                                  <ContentControl Content="{Binding SelectedEntry}">
+                                    <ContentControl.ContentTemplate>
+                                      <DataTemplate>
+                                        <DataTemplate.Resources>
+                                            <Style x:Key="PkgEntryLabel" TargetType="TextBlock" BasedOn="{StaticResource MutedText}">
+                                                <Setter Property="VerticalAlignment" Value="Center" />
+                                                <Setter Property="MinWidth" Value="56" />
+                                                <Setter Property="Margin" Value="0,0,8,0" />
+                                            </Style>
+                                        </DataTemplate.Resources>
+                                        <!-- Outline: blue while packaging, red if the last package failed. -->
+                                        <Border CornerRadius="3" Padding="12" BorderThickness="2">
+                                            <Border.Style>
+                                                <Style TargetType="Border">
+                                                    <Setter Property="Background" Value="{StaticResource PanelAltBrush}" />
+                                                    <Setter Property="BorderBrush" Value="Transparent" />
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding HasError}" Value="True">
+                                                            <Setter Property="BorderBrush" Value="{StaticResource DangerBrush}" />
+                                                            <Setter Property="Effect">
+                                                                <Setter.Value>
+                                                                    <DropShadowEffect Color="{StaticResource DangerColor}"
+                                                                                      BlurRadius="9" ShadowDepth="0" Opacity="0.7" />
+                                                                </Setter.Value>
+                                                            </Setter>
+                                                        </DataTrigger>
+                                                        <DataTrigger Binding="{Binding IsPackaging}" Value="True">
+                                                            <Setter Property="BorderBrush" Value="{StaticResource AccentBrush}" />
+                                                            <Setter Property="Effect">
+                                                                <Setter.Value>
+                                                                    <DropShadowEffect Color="{StaticResource AccentColor}"
+                                                                                      BlurRadius="9" ShadowDepth="0" Opacity="0.85" />
+                                                                </Setter.Value>
+                                                            </Setter>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </Border.Style>
+                                            <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                                              <StackPanel>
+                                                  <CheckBox Content="Include in &quot;Package all&quot;" Margin="0,0,0,8"
+                                                            IsChecked="{Binding IncludeInAll}" Foreground="{StaticResource TextBrush}"
+                                                            ToolTip="Include this entry when the bottom 'Package all' button runs." />
+
+                                                  <!-- Name + per-entry actions -->
+                                                  <Grid>
+                                                      <Grid.ColumnDefinitions>
+                                                          <ColumnDefinition Width="Auto" />
+                                                          <ColumnDefinition Width="*" />
+                                                          <ColumnDefinition Width="Auto" />
+                                                      </Grid.ColumnDefinitions>
+                                                      <TextBlock Text="Name" Style="{StaticResource PkgEntryLabel}" />
+                                                      <TextBox Grid.Column="1" Text="{Binding Name, UpdateSourceTrigger=PropertyChanged}"
+                                                               Tag="Entry name" VerticalContentAlignment="Center" />
+                                                      <StackPanel Grid.Column="2" Orientation="Horizontal" Margin="10,0,0,0">
+                                                          <Button Content="Package" Style="{StaticResource AccentButton}"
+                                                                  MinWidth="84" Padding="10,5" Command="{Binding PackageThisCommand}"
+                                                                  ToolTip="Package only this entry." />
+                                                          <Button Content="Go to file" Margin="6,0,0,0" Padding="10,5"
+                                                                  Command="{Binding GoToPackageCommand}"
+                                                                  Visibility="{Binding LastPackagePath, Converter={StaticResource StringToVis}}"
+                                                                  ToolTip="{Binding LastPackagePath}" />
+                                                      </StackPanel>
+                                                  </Grid>
+
+                                                  <!-- Folder + Browse -->
+                                                  <Grid Margin="0,8,0,0">
+                                                      <Grid.ColumnDefinitions>
+                                                          <ColumnDefinition Width="Auto" />
+                                                          <ColumnDefinition Width="*" />
+                                                          <ColumnDefinition Width="Auto" />
+                                                      </Grid.ColumnDefinitions>
+                                                      <TextBlock Grid.Column="0" Text="Folder" Style="{StaticResource PkgEntryLabel}" />
+                                                      <TextBox Grid.Column="1" Text="{Binding FolderPath, UpdateSourceTrigger=PropertyChanged}"
+                                                               Tag="Folder to package (relative to the project, or absolute)"
+                                                               VerticalContentAlignment="Center" ToolTip="{Binding ResolvedFolderPath}" />
+                                                      <Button Grid.Column="2" Content="Browse..." Margin="6,0,0,0"
+                                                              Command="{Binding BrowseFolderCommand}" />
+                                                  </Grid>
+
+                                                  <!-- Per-entry packer command -->
+                                                  <Grid Margin="0,8,0,0">
+                                                      <Grid.ColumnDefinitions>
+                                                          <ColumnDefinition Width="Auto" />
+                                                          <ColumnDefinition Width="*" />
+                                                      </Grid.ColumnDefinitions>
+                                                      <TextBlock Text="Command" Style="{StaticResource PkgEntryLabel}" />
+                                                      <TextBox Grid.Column="1" Text="{Binding Command, UpdateSourceTrigger=PropertyChanged}"
+                                                               Tag="Extra packer options for this entry (the .vpk/.gma is written beside the folder)"
+                                                               VerticalContentAlignment="Center" />
+                                                  </Grid>
+
+                                                  <!-- Pre-assets: transformed + copied into the folder before packing -->
+                                                  <Border Margin="0,8,0,0" Background="{StaticResource BgBrush}"
+                                                          BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
+                                                          CornerRadius="3" Padding="8">
+                                                    <StackPanel>
+                                                      <Grid Margin="0,0,0,6">
+                                                          <TextBlock Text="Pre-assets" Style="{StaticResource MutedText}"
+                                                                     FontWeight="SemiBold" VerticalAlignment="Center" />
+                                                          <Button HorizontalAlignment="Right" Content="Add asset" Padding="8,3"
+                                                                  Command="{Binding AddAssetCommand}" />
+                                                      </Grid>
+
+                                                      <ItemsControl ItemsSource="{Binding Assets}">
+                                                        <ItemsControl.ItemTemplate>
+                                                          <DataTemplate>
+                                                            <Border Background="{StaticResource PanelAltBrush}" CornerRadius="3"
+                                                                    Padding="8" Margin="0,0,0,6">
+                                                              <Grid>
+                                                                <Grid.ColumnDefinitions>
+                                                                  <ColumnDefinition Width="Auto" />
+                                                                  <ColumnDefinition Width="*" />
+                                                                </Grid.ColumnDefinitions>
+                                                                <!-- Thumbnail: image when Kind=Image and path loads, blank BgBrush otherwise -->
+                                                                <Border Width="96" Height="96" CornerRadius="2" Margin="0,0,8,0"
+                                                                        Background="{StaticResource BgBrush}" VerticalAlignment="Top">
+                                                                  <Image Source="{Binding ThumbnailSource}" Stretch="UniformToFill" />
+                                                                </Border>
+                                                                <StackPanel Grid.Column="1">
+                                                                <!-- Kind + Input + Browse + clone/remove -->
+                                                                <Grid>
+                                                                    <Grid.ColumnDefinitions>
+                                                                        <ColumnDefinition Width="Auto" />
+                                                                        <ColumnDefinition Width="120" />
+                                                                        <ColumnDefinition Width="Auto" />
+                                                                        <ColumnDefinition Width="*" />
+                                                                        <ColumnDefinition Width="Auto" />
+                                                                        <ColumnDefinition Width="Auto" />
+                                                                    </Grid.ColumnDefinitions>
+                                                                    <TextBlock Text="Kind" Style="{StaticResource PkgEntryLabel}" />
+                                                                    <ComboBox Grid.Column="1" ItemsSource="{Binding AssetKinds}"
+                                                                              SelectedItem="{Binding SelectedKind}" />
+                                                                    <TextBlock Grid.Column="2" Text="Input" Style="{StaticResource PkgEntryLabel}"
+                                                                               Margin="10,0,8,0" />
+                                                                    <TextBox Grid.Column="3" Text="{Binding InputPath, UpdateSourceTrigger=PropertyChanged}"
+                                                                             Tag="Source file (relative to the project, or absolute)"
+                                                                             VerticalContentAlignment="Center" />
+                                                                    <Button Grid.Column="4" Content="Browse..." Margin="6,0,0,0"
+                                                                            Command="{Binding BrowseInputCommand}" />
+                                                                    <StackPanel Grid.Column="5" Orientation="Horizontal" Margin="2,0,0,0">
+                                                                        <Button Style="{StaticResource CloneButton}" Command="{Binding CloneCommand}"
+                                                                                ToolTip="Duplicate this asset." />
+                                                                        <Button Style="{StaticResource TrashButton}" Command="{Binding RemoveCommand}"
+                                                                                ToolTip="Remove this asset." />
+                                                                    </StackPanel>
+                                                                </Grid>
+
+                                                                <!-- Output dir + filename -->
+                                                                <Grid Margin="0,6,0,0">
+                                                                    <Grid.ColumnDefinitions>
+                                                                        <ColumnDefinition Width="Auto" />
+                                                                        <ColumnDefinition Width="*" />
+                                                                        <ColumnDefinition Width="Auto" />
+                                                                        <ColumnDefinition Width="*" />
+                                                                    </Grid.ColumnDefinitions>
+                                                                    <TextBlock Text="Out dir" Style="{StaticResource PkgEntryLabel}" />
+                                                                    <TextBox Grid.Column="1" Text="{Binding OutputDir, UpdateSourceTrigger=PropertyChanged}"
+                                                                             Tag="Subfolder inside the package folder (blank = folder root; can't escape it)"
+                                                                             VerticalContentAlignment="Center" />
+                                                                    <TextBlock Grid.Column="2" Text="File" Style="{StaticResource PkgEntryLabel}"
+                                                                               Margin="10,0,8,0" />
+                                                                    <TextBox Grid.Column="3" Text="{Binding OutputFileName, UpdateSourceTrigger=PropertyChanged}"
+                                                                             Tag="Output file name (the extension sets the format)"
+                                                                             VerticalContentAlignment="Center" />
+                                                                </Grid>
+
+                                                                <!-- Image: target format -->
+                                                                <Grid Margin="0,6,0,0"
+                                                                      Visibility="{Binding IsImage, Converter={StaticResource BoolToVis}}">
+                                                                    <Grid.ColumnDefinitions>
+                                                                        <ColumnDefinition Width="Auto" />
+                                                                        <ColumnDefinition Width="240" />
+                                                                        <ColumnDefinition Width="*" />
+                                                                    </Grid.ColumnDefinitions>
+                                                                    <TextBlock Text="Convert" Style="{StaticResource PkgEntryLabel}" />
+                                                                    <ComboBox Grid.Column="1" ItemsSource="{Binding ImageFormats}"
+                                                                              SelectedItem="{Binding SelectedImageFormat}" />
+                                                                </Grid>
+
+                                                                <!-- Text: regex replaces -->
+                                                                <StackPanel Margin="0,6,0,0"
+                                                                            Visibility="{Binding IsText, Converter={StaticResource BoolToVis}}">
+                                                                    <Grid Margin="0,0,0,4">
+                                                                        <TextBlock Text="Regex replaces" Style="{StaticResource MutedText}"
+                                                                                   VerticalAlignment="Center" />
+                                                                        <Button HorizontalAlignment="Right" Content="Add regex" Padding="8,2"
+                                                                                Command="{Binding AddRegexCommand}" />
+                                                                    </Grid>
+                                                                    <ItemsControl ItemsSource="{Binding Regexes}">
+                                                                      <ItemsControl.ItemTemplate>
+                                                                        <DataTemplate>
+                                                                          <Grid Margin="0,0,0,4">
+                                                                              <Grid.ColumnDefinitions>
+                                                                                  <ColumnDefinition Width="*" />
+                                                                                  <ColumnDefinition Width="*" />
+                                                                                  <ColumnDefinition Width="Auto" />
+                                                                                  <ColumnDefinition Width="Auto" />
+                                                                                  <ColumnDefinition Width="Auto" />
+                                                                              </Grid.ColumnDefinitions>
+                                                                              <TextBox Grid.Column="0" Text="{Binding Pattern, UpdateSourceTrigger=PropertyChanged}"
+                                                                                       Tag="Find (regex)" VerticalContentAlignment="Center" Margin="0,0,4,0" />
+                                                                              <TextBox Grid.Column="1" Text="{Binding Replacement, UpdateSourceTrigger=PropertyChanged}"
+                                                                                       Tag="Replace ($1, ${name}...)" VerticalContentAlignment="Center" Margin="0,0,6,0" />
+                                                                              <CheckBox Grid.Column="2" Content="Aa" IsChecked="{Binding IgnoreCase}"
+                                                                                        VerticalAlignment="Center" Foreground="{StaticResource TextBrush}"
+                                                                                        ToolTip="Ignore case" Margin="0,0,8,0" />
+                                                                              <CheckBox Grid.Column="3" Content="ML" IsChecked="{Binding Multiline}"
+                                                                                        VerticalAlignment="Center" Foreground="{StaticResource TextBrush}"
+                                                                                        ToolTip="Multiline (^ and $ match at line breaks)" Margin="0,0,4,0" />
+                                                                              <Button Grid.Column="4" Style="{StaticResource TrashButton}"
+                                                                                      Command="{Binding RemoveCommand}" ToolTip="Remove this replace." />
+                                                                          </Grid>
+                                                                        </DataTemplate>
+                                                                      </ItemsControl.ItemTemplate>
+                                                                    </ItemsControl>
+                                                                </StackPanel>
+                                                              </StackPanel>
+                                                              </Grid>
+                                                            </Border>
+                                                          </DataTemplate>
+                                                        </ItemsControl.ItemTemplate>
+                                                      </ItemsControl>
+                                                    </StackPanel>
+                                                  </Border>
+                                              </StackPanel>
+                                            </ScrollViewer>
+                                        </Border>
+                                      </DataTemplate>
+                                    </ContentControl.ContentTemplate>
+                                  </ContentControl>
+                              </Grid>
+                          </Grid>
+
+                          <!-- Package all + status, with the terminal toggle on the right. -->
+                          <Grid Grid.Row="1" Margin="0,10,0,0">
+                              <StackPanel Orientation="Horizontal">
+                                  <Button Content="Package all" Style="{StaticResource AccentButton}" MinWidth="120"
+                                          Padding="16,8" Command="{Binding PackageAllCommand}" />
+                                  <Button Content="Cancel" Style="{StaticResource DangerButton}" Margin="8,0,0,0"
+                                          Padding="14,8" Command="{Binding CancelCommand}"
+                                          Visibility="{Binding IsPackaging, Converter={StaticResource BoolToVis}}" />
+                                  <StackPanel VerticalAlignment="Center" Margin="14,0,0,0">
+                                      <TextBlock Text="{Binding StatusMessage}" Style="{StaticResource MutedText}"
+                                                 TextTrimming="CharacterEllipsis" Margin="0,0,0,4" MaxWidth="420" />
+                                      <ProgressBar Width="200" IsIndeterminate="True" HorizontalAlignment="Left"
+                                                   Visibility="{Binding IsPackaging, Converter={StaticResource BoolToVis}}" />
+                                  </StackPanel>
+                              </StackPanel>
+                              <ToggleButton Content="Terminal" HorizontalAlignment="Right" VerticalAlignment="Center"
+                                            Padding="12,6" IsChecked="{Binding IsTerminalVisible}"
+                                            ToolTip="Show or hide the package output terminal (toggle with the ~ key)." />
+                          </Grid>
+                        </Grid>
+                      </Border>
+
+                      <!-- Drag handle between the entries panel and the terminal drawer. -->
+                      <GridSplitter Grid.Row="3" Height="12" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
+                                    ResizeBehavior="PreviousAndNext" ResizeDirection="Rows"
+                                    Background="Transparent" Cursor="SizeNS" ToolTip="Drag to resize the terminal."
+                                    Visibility="{Binding IsTerminalVisible, Converter={StaticResource BoolToVis}}" />
+
+                      <!-- Resizable, toggleable terminal drawer: packer / asset output for this project. -->
+                      <Border Grid.Row="4" Margin="0,2,0,0" Background="{StaticResource BgBrush}"
+                              BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="3"
+                              Visibility="{Binding IsTerminalVisible, Converter={StaticResource BoolToVis}}">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="*" />
+                            </Grid.RowDefinitions>
+                            <Grid Grid.Row="0" Background="{StaticResource PanelAltBrush}">
+                                <TextBlock Text="Terminal" Margin="10,5" FontWeight="SemiBold" VerticalAlignment="Center" />
+                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right"
+                                            VerticalAlignment="Center" Margin="0,2,6,2">
+                                    <Button Content="Clear" Padding="10,2" Command="{Binding ClearConsoleCommand}"
+                                            ToolTip="Clear the package output." />
+                                </StackPanel>
+                            </Grid>
+                            <TextBox Grid.Row="1" x:Name="PackageConsoleBox" Text="{Binding ConsoleText, Mode=OneWay}"
+                                     IsReadOnly="True" IsReadOnlyCaretVisible="True" IsUndoEnabled="False"
+                                     Background="Transparent" BorderThickness="0" Padding="8,2"
+                                     FontFamily="Consolas" FontSize="12" Foreground="{StaticResource TextBrush}"
+                                     TextWrapping="NoWrap" VerticalContentAlignment="Top"
+                                     VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
+                                     TextChanged="OnPackageConsoleTextChanged" />
                         </Grid>
                       </Border>
                     </Grid>

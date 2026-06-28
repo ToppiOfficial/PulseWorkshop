@@ -46,6 +46,13 @@ public sealed class GameSetupEntry
 
     public PathRef PackerTool { get; set; } = new();
 
+    public PathRef VtfTool { get; set; } = new();
+
+    /// <summary>The command-line template used to launch <see cref="VtfTool"/> for one image asset.
+    /// Supports the placeholders <c>{input}</c>, <c>{output}</c>, <c>{outputdir}</c>,
+    /// <c>{outputname}</c> (see <c>AssetPipelineService</c>).</summary>
+    public string VtfToolCommand { get; set; } = string.Empty;
+
     public GameSetupEntry Clone() => new()
     {
         Id = Guid.NewGuid(),
@@ -55,6 +62,8 @@ public sealed class GameSetupEntry
         ModelCompiler = ModelCompiler.Clone(),
         ModelViewer = ModelViewer.Clone(),
         PackerTool = PackerTool.Clone(),
+        VtfTool = VtfTool.Clone(),
+        VtfToolCommand = VtfToolCommand,
     };
 }
 

@@ -7,66 +7,75 @@ using PulseWorkshop.App.Mvvm;
 using PulseWorkshop.App.Services;
 using PulseWorkshop.Core.Models;
 using PulseWorkshop.Core.Services;
-using PulseWorkshop.Core.Storage;
 
 namespace PulseWorkshop.App.ViewModels;
 
 /// <summary>
 /// The Compile - Advanced tab: a project-directory workflow on top of the same studiomdl pipeline as
-/// the Simple tab. State lives in a user-chosen <c>.pw_mdlproject</c> file (not <c>%AppData%</c>) and
-/// holds its own game selection plus an ordered list of model entries that compile one at a time.
-/// Reuses <see cref="ModelCompileService"/> and <see cref="MaterialCopyService"/>; owns its own
-/// embedded terminal, separate from the Simple tab's.
+/// the Simple tab. Project state (path, game, save) lives in the shared <see cref="AdvancedProjectSession"/>
+/// so the Package tab can edit the same <c>.pw_mdlproject</c> without clobbering it; this view model
+/// owns only the compile-specific concerns: the model-entry list, the project's compile options, the
+/// embedded terminal, and the compile run. Reuses <see cref="ModelCompileService"/> and
+/// <see cref="MaterialCopyService"/>.
 /// </summary>
 public sealed class CompileAdvancedViewModel : ObservableObject
 {
-    private readonly GameSetupViewModel _gameSetup;
-    private readonly AdvancedCompileConfig _config;
+    private readonly AdvancedProjectSession _session;
     private readonly string _modelToolPath;
 
-    private ModelProject _project = new();
-    private string? _projectPath;
-    private GameSetupEntryViewModel? _selectedGame;
+    private ModelEntryViewModel? _selectedEntry;
     private bool _isCompiling;
     private bool _isTerminalVisible;
     private string _statusMessage = "No project open.";
     private CancellationTokenSource? _cancelSource;
 
-    public CompileAdvancedViewModel(GameSetupViewModel gameSetup)
+    public CompileAdvancedViewModel(AdvancedProjectSession session)
     {
-        _gameSetup = gameSetup;
-        _config = AdvancedCompileConfig.Load();
+        _session = session;
         _modelToolPath = ToolLocator.ResolveModelToolPath();
 
-        NewProjectCommand = new RelayCommand(NewProject);
-        OpenProjectCommand = new RelayCommand(OpenProject);
-        CloseProjectCommand = new RelayCommand(CloseProject, () => IsProjectOpen);
         AddEntryCommand = new RelayCommand(AddEntry, () => IsProjectOpen);
         CompileAllCommand = new AsyncRelayCommand(CompileAllAsync, () => CanCompileAll);
         CancelCommand = new RelayCommand(Cancel, () => IsCompiling);
         ClearConsoleCommand = new RelayCommand(ClearConsole);
 
-        // Reopen the last project if it still exists.
-        if (!string.IsNullOrEmpty(_config.LastProjectPath) && File.Exists(_config.LastProjectPath)
-            && ModelProject.Load(_config.LastProjectPath) is { } reopened)
-            LoadProject(_config.LastProjectPath, reopened);
+        // This tab persists the compile entry list into the shared project on every save.
+        _session.RegisterSync(() => _session.Project.Entries = Entries.Select(e => e.Model).ToList());
+        _session.ProjectChanged += OnProjectChanged;
+        _session.GameChanged += OnGameChanged;
+
+        // Pick up a project the session reopened before this view model existed.
+        OnProjectChanged();
     }
 
     // --- Commands -----------------------------------------------------------------------------
 
-    public RelayCommand NewProjectCommand { get; }
-    public RelayCommand OpenProjectCommand { get; }
-    public RelayCommand CloseProjectCommand { get; }
+    public RelayCommand NewProjectCommand => _session.NewProjectCommand;
+    public RelayCommand OpenProjectCommand => _session.OpenProjectCommand;
+    public RelayCommand CloseProjectCommand => _session.CloseProjectCommand;
     public RelayCommand AddEntryCommand { get; }
     public AsyncRelayCommand CompileAllCommand { get; }
     public RelayCommand CancelCommand { get; }
     public RelayCommand ClearConsoleCommand { get; }
 
     /// <summary>The shared Game Setup roster (game name + resolved tool paths) used for the dropdown.</summary>
-    public ObservableCollection<GameSetupEntryViewModel> Games => _gameSetup.Games;
+    public ObservableCollection<GameSetupEntryViewModel> Games => _session.Games;
 
     /// <summary>The model entries, in compile order. The UI lets the user drag to reorder.</summary>
     public ObservableCollection<ModelEntryViewModel> Entries { get; } = new();
+
+    /// <summary>The entry shown in the editor panel (master-detail, like Game Setup / Package).</summary>
+    public ModelEntryViewModel? SelectedEntry
+    {
+        get => _selectedEntry;
+        set
+        {
+            if (SetField(ref _selectedEntry, value))
+                OnPropertyChanged(nameof(HasSelectedEntry));
+        }
+    }
+
+    public bool HasSelectedEntry => _selectedEntry is not null;
 
     /// <summary>Output-destination choices, shared with every entry so ComboBox selection matches.
     /// A Subfolder name may itself be a nested path (e.g. <c>test/bill</c>), so a separate work-folder
@@ -77,95 +86,34 @@ public sealed class CompileAdvancedViewModel : ObservableObject
         new OutputModeChoice(CompileOutputMode.LeaveInGame, "Compile in game (don't move)"),
     };
 
-    // --- Project lifecycle --------------------------------------------------------------------
+    // --- Project lifecycle (delegated to the shared session) ----------------------------------
 
-    public bool IsProjectOpen => !string.IsNullOrEmpty(_projectPath);
-    public string ProjectPath => _projectPath ?? string.Empty;
-    public string ProjectName => IsProjectOpen ? Path.GetFileNameWithoutExtension(_projectPath!) : string.Empty;
+    public bool IsProjectOpen => _session.IsProjectOpen;
+    public string ProjectPath => _session.ProjectPath;
+    public string ProjectName => _session.ProjectName;
+    public string? ProjectDir => _session.ProjectDir;
 
-    /// <summary>The folder the <c>.pw_mdlproject</c> lives in (the base for relative paths), or null.</summary>
-    public string? ProjectDir => string.IsNullOrEmpty(_projectPath) ? null : Path.GetDirectoryName(_projectPath);
-
-    private void NewProject()
+    private void OnProjectChanged()
     {
-        var dlg = new SaveFileDialog
-        {
-            Title = "Create model project",
-            Filter = "Model project (*.pw_mdlproject)|*.pw_mdlproject",
-            DefaultExt = ".pw_mdlproject",
-            FileName = "models.pw_mdlproject",
-            AddExtension = true,
-            OverwritePrompt = true,
-        };
-        if (dlg.ShowDialog() != true)
-            return;
-
-        var project = new ModelProject();
-        project.Save(dlg.FileName);
-        LoadProject(dlg.FileName, project);
-    }
-
-    private void OpenProject()
-    {
-        var dlg = new OpenFileDialog
-        {
-            Title = "Open model project",
-            Filter = "Model project (*.pw_mdlproject)|*.pw_mdlproject|All files (*.*)|*.*",
-            CheckFileExists = true,
-        };
-        if (dlg.ShowDialog() != true)
-            return;
-
-        var loaded = ModelProject.Load(dlg.FileName);
-        if (loaded is null)
-        {
-            StatusMessage = "Couldn't open project (missing or corrupt).";
-            return;
-        }
-        LoadProject(dlg.FileName, loaded);
-    }
-
-    private void CloseProject()
-    {
-        _projectPath = null;
-        _project = new ModelProject();
-        _selectedGame = null;
         Entries.Clear();
-        _config.LastProjectPath = null;
-        _config.Save();
-
-        OnPropertyChanged(string.Empty); // refresh every binding
-        RefreshCommands();
-        StatusMessage = "No project open.";
-    }
-
-    private void LoadProject(string path, ModelProject project)
-    {
-        _projectPath = path;
-        _project = project;
-        _selectedGame = project.GameId is { } id
-            ? _gameSetup.Games.FirstOrDefault(g => g.Model.Id == id)
-            : null;
-
-        Entries.Clear();
-        foreach (var entry in project.Entries)
+        foreach (var entry in _session.Project.Entries)
             Entries.Add(new ModelEntryViewModel(this, entry));
 
-        _config.Remember(path);
-
+        SelectedEntry = Entries.FirstOrDefault();
         OnPropertyChanged(string.Empty); // refresh every binding
         RefreshCommands();
-        StatusMessage = $"Opened {Path.GetFileName(path)}.";
+        StatusMessage = IsProjectOpen ? $"Opened {ProjectName}." : "No project open.";
     }
 
-    /// <summary>Persists the project to its file (best-effort), rebuilding entry order from the UI.</summary>
-    public void Save()
+    private void OnGameChanged()
     {
-        if (string.IsNullOrEmpty(_projectPath))
-            return;
-        _project.Entries = Entries.Select(e => e.Model).ToList();
-        _project.Save(_projectPath);
+        OnPropertyChanged(nameof(SelectedGame));
+        OnPropertyChanged(nameof(IsGameReady));
+        RefreshCommands();
     }
+
+    /// <summary>Persists the project (best-effort), rebuilding entry order from the UI via the session.</summary>
+    public void Save() => _session.Save();
 
     /// <summary>Re-evaluates the can-execute state of every compile command.</summary>
     public void RefreshCommands()
@@ -173,7 +121,6 @@ public sealed class CompileAdvancedViewModel : ObservableObject
         CompileAllCommand.RaiseCanExecuteChanged();
         CancelCommand.RaiseCanExecuteChanged();
         AddEntryCommand.RaiseCanExecuteChanged();
-        CloseProjectCommand.RaiseCanExecuteChanged();
         foreach (var entry in Entries)
             entry.RaiseCanCompileChanged();
     }
@@ -182,27 +129,18 @@ public sealed class CompileAdvancedViewModel : ObservableObject
 
     public GameSetupEntryViewModel? SelectedGame
     {
-        get => _selectedGame;
-        set
-        {
-            if (SetField(ref _selectedGame, value))
-            {
-                _project.GameId = value?.Model.Id;
-                Save();
-                OnPropertyChanged(nameof(IsGameReady));
-                RefreshCommands();
-            }
-        }
+        get => _session.SelectedGame;
+        set => _session.SelectedGame = value;
     }
 
     public string GlobalCommand
     {
-        get => _project.GlobalCommand;
+        get => _session.Project.GlobalCommand;
         set
         {
-            if (_project.GlobalCommand != (value ?? string.Empty))
+            if (_session.Project.GlobalCommand != (value ?? string.Empty))
             {
-                _project.GlobalCommand = value ?? string.Empty;
+                _session.Project.GlobalCommand = value ?? string.Empty;
                 OnPropertyChanged();
                 Save();
             }
@@ -211,14 +149,15 @@ public sealed class CompileAdvancedViewModel : ObservableObject
 
     public bool GetMaterialOnCompile
     {
-        get => _project.GetMaterialOnCompile;
+        get => _session.Project.GetMaterialOnCompile;
         set
         {
-            if (_project.GetMaterialOnCompile != value)
+            if (_session.Project.GetMaterialOnCompile != value)
             {
-                _project.GetMaterialOnCompile = value;
+                _session.Project.GetMaterialOnCompile = value;
                 OnPropertyChanged();
                 OnPropertyChanged(nameof(CanConfigureMaterials));
+                OnPropertyChanged(nameof(CanEditMaterialsDir));
                 Save();
             }
         }
@@ -226,24 +165,61 @@ public sealed class CompileAdvancedViewModel : ObservableObject
 
     public bool LocalizeMaterials
     {
-        get => _project.LocalizeMaterials;
-        set { if (_project.LocalizeMaterials != value) { _project.LocalizeMaterials = value; OnPropertyChanged(); Save(); } }
+        get => _session.Project.LocalizeMaterials;
+        set { if (_session.Project.LocalizeMaterials != value) { _session.Project.LocalizeMaterials = value; OnPropertyChanged(); Save(); } }
     }
 
     public bool FlatPatchShader
     {
-        get => _project.FlatPatchShader;
-        set { if (_project.FlatPatchShader != value) { _project.FlatPatchShader = value; OnPropertyChanged(); Save(); } }
+        get => _session.Project.FlatPatchShader;
+        set { if (_session.Project.FlatPatchShader != value) { _session.Project.FlatPatchShader = value; OnPropertyChanged(); Save(); } }
     }
 
     public bool CleanBeforeTransfer
     {
-        get => _project.CleanBeforeTransfer;
-        set { if (_project.CleanBeforeTransfer != value) { _project.CleanBeforeTransfer = value; OnPropertyChanged(); Save(); } }
+        get => _session.Project.CleanBeforeTransfer;
+        set { if (_session.Project.CleanBeforeTransfer != value) { _session.Project.CleanBeforeTransfer = value; OnPropertyChanged(); Save(); } }
+    }
+
+    /// <summary>When true, the materials/ folder is written to <see cref="MaterialsOutputDir"/> (under the
+    /// project root) instead of beside the compiled models.</summary>
+    public bool UseCustomMaterialsDir
+    {
+        get => _session.Project.UseCustomMaterialsDir;
+        set
+        {
+            if (_session.Project.UseCustomMaterialsDir != value)
+            {
+                _session.Project.UseCustomMaterialsDir = value;
+                OnPropertyChanged();
+                OnPropertyChanged(nameof(CanEditMaterialsDir));
+                Save();
+            }
+        }
+    }
+
+    /// <summary>The materials destination folder, always relative to the project root (absolute or
+    /// outside-project paths are rejected when copying). Empty means the project root itself.</summary>
+    public string MaterialsOutputDir
+    {
+        get => _session.Project.MaterialsOutputDir;
+        set
+        {
+            var v = value ?? string.Empty;
+            if (_session.Project.MaterialsOutputDir != v)
+            {
+                _session.Project.MaterialsOutputDir = v;
+                OnPropertyChanged();
+                Save();
+            }
+        }
     }
 
     /// <summary>True when material gathering is enabled - controls the Localize and Flat patch options.</summary>
     public bool CanConfigureMaterials => GetMaterialOnCompile;
+
+    /// <summary>True when the materials folder text input is editable (materials on + custom folder on).</summary>
+    public bool CanEditMaterialsDir => GetMaterialOnCompile && UseCustomMaterialsDir;
 
     // --- Validation ---------------------------------------------------------------------------
 
@@ -295,38 +271,13 @@ public sealed class CompileAdvancedViewModel : ObservableObject
         set => SetField(ref _isTerminalVisible, value);
     }
 
-    // --- Path helpers (used by entries) -------------------------------------------------------
+    // --- Path helpers (used by entries; delegated to the session) -----------------------------
 
     /// <summary>Resolves a stored (relative or absolute) path against the project folder.</summary>
-    public string ResolveAgainstProject(string path)
-    {
-        if (string.IsNullOrWhiteSpace(path))
-            return string.Empty;
-        if (Path.IsPathRooted(path))
-            return path;
-        var dir = ProjectDir;
-        return string.IsNullOrEmpty(dir) ? path : Path.GetFullPath(Path.Combine(dir, path));
-    }
+    public string ResolveAgainstProject(string path) => _session.ResolveAgainstProject(path);
 
     /// <summary>Stores a picked path relative to the project when it sits under it; else absolute.</summary>
-    public string MakeProjectRelative(string fullPath)
-    {
-        var dir = ProjectDir;
-        if (!string.IsNullOrEmpty(dir))
-        {
-            try
-            {
-                var rel = Path.GetRelativePath(dir, fullPath);
-                if (!Path.IsPathRooted(rel) && !rel.StartsWith("..", StringComparison.Ordinal))
-                    return rel;
-            }
-            catch
-            {
-                // Fall through to the absolute path.
-            }
-        }
-        return fullPath;
-    }
+    public string MakeProjectRelative(string fullPath) => _session.MakeProjectRelative(fullPath);
 
     // --- Entries ------------------------------------------------------------------------------
 
@@ -349,7 +300,9 @@ public sealed class CompileAdvancedViewModel : ObservableObject
             QcPath = MakeProjectRelative(dlg.FileName),
             SubfolderName = DefaultSubfolderName,
         };
-        Entries.Add(new ModelEntryViewModel(this, model));
+        var vm = new ModelEntryViewModel(this, model);
+        Entries.Add(vm);
+        SelectedEntry = vm;
         Save();
         RefreshCommands();
     }
@@ -369,6 +322,7 @@ public sealed class CompileAdvancedViewModel : ObservableObject
         else
             Entries.Add(vm);
 
+        SelectedEntry = vm;
         Save();
         RefreshCommands();
     }
@@ -385,7 +339,10 @@ public sealed class CompileAdvancedViewModel : ObservableObject
         if (result != MessageBoxResult.Yes)
             return;
 
+        var index = Entries.IndexOf(entry);
         Entries.Remove(entry);
+        if (ReferenceEquals(SelectedEntry, entry))
+            SelectedEntry = Entries.Count == 0 ? null : Entries[Math.Min(index, Entries.Count - 1)];
         Save();
         RefreshCommands();
     }
@@ -553,7 +510,7 @@ public sealed class CompileAdvancedViewModel : ObservableObject
                     ? result.CompiledMdls
                     : result.CopiedFiles
                         .Where(f => f.EndsWith(".mdl", StringComparison.OrdinalIgnoreCase)).ToList();
-                await RunMaterialCopyAsync(matMdls, destination, ct);
+                await RunMaterialCopyAsync(matMdls, ResolveMaterialsDestination(destination), ct);
             }
             return true;
         }
@@ -592,6 +549,52 @@ public sealed class CompileAdvancedViewModel : ObservableObject
         };
     }
 
+    /// <summary>
+    /// Where the materials/ folder is written for an entry. With "Custom materials folder" off this is the
+    /// entry's own compile destination (materials sit beside the models). With it on, materials go to a
+    /// folder under the project root (<see cref="MaterialsOutputDir"/>) - the path is always resolved
+    /// relative to the project root, and absolute or escaping paths are rejected (falling back to the
+    /// compile destination). Empty means the project root itself. An in-game compile (null
+    /// <paramref name="compileDest"/>) always overrules the custom folder: materials stay in game.
+    /// </summary>
+    private string? ResolveMaterialsDestination(string? compileDest)
+    {
+        // "Compile in game" leaves the output in place, so there's nothing to gather out - this
+        // overrules the custom materials folder.
+        if (compileDest is null || !UseCustomMaterialsDir)
+            return compileDest;
+
+        var projectDir = ProjectDir;
+        if (string.IsNullOrEmpty(projectDir))
+            return compileDest;
+
+        var rel = (MaterialsOutputDir ?? string.Empty).Trim();
+        if (Path.IsPathRooted(rel))
+        {
+            Log($"[Materials] Custom folder '{rel}' must be relative to the project root - using the compile output folder.");
+            return compileDest;
+        }
+
+        var root = Path.GetFullPath(projectDir);
+        string combined;
+        try
+        {
+            combined = Path.GetFullPath(Path.Combine(root, rel));
+        }
+        catch
+        {
+            Log($"[Materials] Custom folder '{rel}' is not a valid path - using the compile output folder.");
+            return compileDest;
+        }
+
+        if (combined.Equals(root, StringComparison.OrdinalIgnoreCase)
+            || combined.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+            return combined;
+
+        Log($"[Materials] Custom folder '{rel}' escapes the project root - using the compile output folder.");
+        return compileDest;
+    }
+
     /// <summary>The project's global command with one entry's command appended after it. The global
     /// command may be typed across multiple lines for readability; newlines are flattened to spaces
     /// here so studiomdl receives a single argument string.</summary>
@@ -602,7 +605,7 @@ public sealed class CompileAdvancedViewModel : ObservableObject
         return string.Join(" ", new[] { Flatten(global), Flatten(entry) }.Where(s => s.Length > 0)).Trim();
     }
 
-    private async Task RunMaterialCopyAsync(IReadOnlyList<string> mdlPaths, string? compileDest, CancellationToken ct)
+    private async Task RunMaterialCopyAsync(IReadOnlyList<string> mdlPaths, string? materialsDest, CancellationToken ct)
     {
         var gameInfoPath = SelectedGame?.GameInfo.ResolvedPath;
         if (string.IsNullOrEmpty(gameInfoPath) || !File.Exists(gameInfoPath))
@@ -610,7 +613,7 @@ public sealed class CompileAdvancedViewModel : ObservableObject
             Log("[Materials] Skipped: gameinfo.txt not configured.");
             return;
         }
-        if (compileDest is null)
+        if (materialsDest is null)
         {
             Log("[Materials] Skipped: output mode is 'compile in game'.");
             return;
@@ -630,7 +633,7 @@ public sealed class CompileAdvancedViewModel : ObservableObject
                     ToolPath:     _modelToolPath,
                     MdlPath:      mdl,
                     GameInfoPath: gameInfoPath,
-                    DestDir:      compileDest,
+                    DestDir:      materialsDest,
                     Localize:     LocalizeMaterials,
                     FlatPatch:    FlatPatchShader);
 

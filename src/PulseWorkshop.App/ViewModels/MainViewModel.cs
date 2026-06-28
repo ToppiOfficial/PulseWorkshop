@@ -69,7 +69,12 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         // studiomdl's output, kept separate from this Workshop terminal. The Advanced sub-tab shares
         // the same Game Setup roster but drives a project-based, multi-entry compile.
         Compile = new CompileViewModel(GameSetup);
-        CompileAdvanced = new CompileAdvancedViewModel(GameSetup);
+
+        // Compile - Advanced and Package - Advanced share one open .pw_mdlproject via this session, so
+        // both edit the same project (different lists) without clobbering each other.
+        AdvancedProject = new AdvancedProjectSession(GameSetup);
+        CompileAdvanced = new CompileAdvancedViewModel(AdvancedProject);
+        PackageAdvanced = new PackageAdvancedViewModel(AdvancedProject);
 
         // Live-filtered views over each list.
         PublishedView = CollectionViewSource.GetDefaultView(PublishedItems);
@@ -105,8 +110,14 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     /// <summary>The Compile panel (runs studiomdl on a .qc; reuses Game Setup's tool paths).</summary>
     public CompileViewModel Compile { get; }
 
+    /// <summary>The shared open project for both Advanced tabs (Compile and Package).</summary>
+    public AdvancedProjectSession AdvancedProject { get; }
+
     /// <summary>The Compile - Advanced panel (project-based, multi-entry compile).</summary>
     public CompileAdvancedViewModel CompileAdvanced { get; }
+
+    /// <summary>The Package - Advanced panel (project-based, multi-entry vpk/gma packaging).</summary>
+    public PackageAdvancedViewModel PackageAdvanced { get; }
 
     public ObservableCollection<WorkshopItem> PublishedItems { get; } = new();
     public ObservableCollection<DraftListItemViewModel> Drafts { get; } = new();

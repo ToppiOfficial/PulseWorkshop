@@ -27,12 +27,26 @@ public sealed class ModelProject
     /// <summary>When true, Patch VMTs are flattened into their base shader.</summary>
     public bool FlatPatchShader { get; set; }
 
+    /// <summary>When true, the materials/ folder is written to <see cref="MaterialsOutputDir"/> (a folder
+    /// under the project root) instead of beside the compiled models in the entry's output folder.</summary>
+    public bool UseCustomMaterialsDir { get; set; }
+
+    /// <summary>Destination folder for materials when <see cref="UseCustomMaterialsDir"/> is set. Always
+    /// relative to the project root; absolute or outside-project paths are rejected. Empty means the
+    /// project root itself.</summary>
+    public string MaterialsOutputDir { get; set; } = string.Empty;
+
     /// <summary>When true, the previous in-game build is deleted before a non-in-game compile so stale
     /// files can't leak into the moved output.</summary>
     public bool CleanBeforeTransfer { get; set; }
 
     /// <summary>The model entries, in compile order (significant - the UI lets the user reorder them).</summary>
     public List<ModelEntry> Entries { get; set; } = new();
+
+    /// <summary>The package entries (Package - Advanced tab), in package order. Stored alongside the
+    /// compile <see cref="Entries"/> in the same project file; the two tabs share one project but
+    /// never touch each other's list.</summary>
+    public List<PackageEntry> PackageEntries { get; set; } = new();
 
     private static readonly JsonSerializerOptions Options = new() { WriteIndented = true };
 

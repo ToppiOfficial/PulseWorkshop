@@ -29,6 +29,9 @@ public partial class MainWindow : Window
     // Same, for the Compile - Advanced tab's own terminal drawer.
     private double _advConsoleHeightPx = 200;
 
+    // Same, for the Package - Advanced tab's own terminal drawer.
+    private double _pkgConsoleHeightPx = 200;
+
     public MainWindow()
     {
         InitializeComponent();
@@ -40,6 +43,7 @@ public partial class MainWindow : Window
         _vm.SelectTemplateRequested += id => SelectRow(TemplatesList, _vm.Templates.FirstOrDefault(t => t.Template.Id == id));
         _vm.PropertyChanged += OnViewModelPropertyChanged;
         _vm.CompileAdvanced.PropertyChanged += OnAdvancedVmPropertyChanged;
+        _vm.PackageAdvanced.PropertyChanged += OnPackageAdvancedVmPropertyChanged;
 
         // Restore the console drawer state. Height must be set before IsConsoleVisible so the toggle
         // expands the rows to the remembered size.
@@ -153,6 +157,13 @@ public partial class MainWindow : Window
             AdvancedConsoleBox.ScrollToEnd();
     }
 
+    // Same auto-scroll behavior for the Package - Advanced tab's embedded terminal.
+    private void OnPackageConsoleTextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (PackageConsoleBox.VerticalOffset >= PackageConsoleBox.ExtentHeight - PackageConsoleBox.ViewportHeight - 1)
+            PackageConsoleBox.ScrollToEnd();
+    }
+
     // Let the user drag the Advanced "Global" command box taller/shorter.
     private void GlobalCommandResize_DragDelta(object sender, DragDeltaEventArgs e)
     {
@@ -164,6 +175,33 @@ public partial class MainWindow : Window
     {
         if (e.PropertyName == nameof(CompileAdvancedViewModel.IsTerminalVisible))
             UpdateAdvancedTerminalRows();
+    }
+
+    private void OnPackageAdvancedVmPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(PackageAdvancedViewModel.IsTerminalVisible))
+            UpdatePackageTerminalRows();
+    }
+
+    /// <summary>Expands/collapses the Package terminal drawer rows (mirrors
+    /// <see cref="UpdateAdvancedTerminalRows"/>).</summary>
+    private void UpdatePackageTerminalRows()
+    {
+        if (_vm.PackageAdvanced.IsTerminalVisible)
+        {
+            PkgConsoleSplitterRowDef.Height = new GridLength(12);
+            PkgConsoleRowDef.Height = new GridLength(_pkgConsoleHeightPx);
+            PkgConsoleRowDef.MinHeight = 80;
+            PackageConsoleBox.ScrollToEnd();
+        }
+        else
+        {
+            if (PkgConsoleRowDef.ActualHeight > 1)
+                _pkgConsoleHeightPx = PkgConsoleRowDef.ActualHeight;
+            PkgConsoleRowDef.MinHeight = 0;
+            PkgConsoleRowDef.Height = new GridLength(0);
+            PkgConsoleSplitterRowDef.Height = new GridLength(0);
+        }
     }
 
     /// <summary>Expands/collapses the Advanced terminal drawer rows, remembering the dragged height
@@ -264,6 +302,79 @@ public partial class MainWindow : Window
         return (source as ListBoxItem)?.DataContext as ModelEntryViewModel;
     }
 
+    // --- Package entries drag-to-reorder (mirrors the Advanced compile reorder) -------------------
+
+    private DragAdorner? _pkgDragAdorner;
+    private AdornerLayer? _pkgDragLayer;
+
+    private void PackageEntries_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (e.OriginalSource is not FrameworkElement { Tag: "DragHandle" } handle
+            || handle.DataContext is not PackageEntryViewModel item)
+            return;
+
+        if (PackageEntriesList.ItemContainerGenerator.ContainerFromItem(item) is UIElement container)
+        {
+            _pkgDragLayer = AdornerLayer.GetAdornerLayer(PackageEntriesList);
+            if (_pkgDragLayer is not null)
+            {
+                _pkgDragAdorner = new DragAdorner(PackageEntriesList, container);
+                _pkgDragLayer.Add(_pkgDragAdorner);
+            }
+        }
+
+        try
+        {
+            DragDrop.DoDragDrop(PackageEntriesList, item, DragDropEffects.Move);
+        }
+        finally
+        {
+            if (_pkgDragAdorner is not null)
+            {
+                _pkgDragLayer?.Remove(_pkgDragAdorner);
+                _pkgDragAdorner = null;
+                _pkgDragLayer = null;
+            }
+        }
+    }
+
+    private void PackageEntries_DragOver(object sender, DragEventArgs e)
+    {
+        if (_pkgDragAdorner is not null)
+        {
+            var pos = e.GetPosition(PackageEntriesList);
+            _pkgDragAdorner.SetPosition(pos.X, pos.Y);
+        }
+        e.Effects = DragDropEffects.Move;
+    }
+
+    private void PackageEntries_Drop(object sender, DragEventArgs e)
+    {
+        if (e.Data.GetData(typeof(PackageEntryViewModel)) is not PackageEntryViewModel dragged
+            || DataContext is not MainViewModel vm)
+            return;
+
+        var list = vm.PackageAdvanced.Entries;
+        var oldIndex = list.IndexOf(dragged);
+        if (oldIndex < 0)
+            return;
+
+        var target = FindPackageEntryUnder(e.OriginalSource as DependencyObject);
+        var newIndex = target is null ? list.Count - 1 : list.IndexOf(target);
+        if (newIndex < 0 || newIndex == oldIndex)
+            return;
+
+        list.Move(oldIndex, newIndex);
+        vm.PackageAdvanced.Save();
+    }
+
+    private static PackageEntryViewModel? FindPackageEntryUnder(DependencyObject? source)
+    {
+        while (source is not null and not ListBoxItem)
+            source = VisualTreeHelper.GetParent(source);
+        return (source as ListBoxItem)?.DataContext as PackageEntryViewModel;
+    }
+
     /// <summary>A translucent ghost of the dragged row, drawn in the adorner layer and moved to
     /// follow the cursor - so it's obvious a reorder is in progress.</summary>
     private sealed class DragAdorner : Adorner
@@ -335,6 +446,11 @@ public partial class MainWindow : Window
         else if (CompileTab.IsSelected && CompileAdvancedTab.IsSelected)
         {
             _vm.CompileAdvanced.IsTerminalVisible = !_vm.CompileAdvanced.IsTerminalVisible;
+            e.Handled = true;
+        }
+        else if (PackageTab.IsSelected && PackageAdvancedTab.IsSelected)
+        {
+            _vm.PackageAdvanced.IsTerminalVisible = !_vm.PackageAdvanced.IsTerminalVisible;
             e.Handled = true;
         }
     }

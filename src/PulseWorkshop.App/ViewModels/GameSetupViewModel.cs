@@ -162,6 +162,7 @@ public sealed class GameSetupEntryViewModel : ObservableObject
         ModelCompiler = new PathFieldViewModel("Model compiler", exeFilter, model.ModelCompiler, choices, absolute, onChanged);
         ModelViewer = new PathFieldViewModel("Model viewer", exeFilter, model.ModelViewer, choices, absolute, onChanged);
         PackerTool = new PathFieldViewModel("Packer tool", exeFilter, model.PackerTool, choices, absolute, onChanged);
+        VtfTool = new PathFieldViewModel("VTF tool", exeFilter, model.VtfTool, choices, absolute, onChanged);
     }
 
     public GameSetupEntry Model { get; }
@@ -206,6 +207,23 @@ public sealed class GameSetupEntryViewModel : ObservableObject
     public PathFieldViewModel ModelCompiler { get; }
     public PathFieldViewModel ModelViewer { get; }
     public PathFieldViewModel PackerTool { get; }
+    public PathFieldViewModel VtfTool { get; }
+
+    /// <summary>The command-line template the Package tool uses to launch the VTF tool for one asset.
+    /// Placeholders: {input} {output} {outputdir} {outputname}.</summary>
+    public string VtfToolCommand
+    {
+        get => Model.VtfToolCommand;
+        set
+        {
+            if (Model.VtfToolCommand != (value ?? string.Empty))
+            {
+                Model.VtfToolCommand = value ?? string.Empty;
+                OnPropertyChanged();
+                _onChanged();
+            }
+        }
+    }
 
     public void OnLibraryRemoved(Guid id)
     {
@@ -213,6 +231,7 @@ public sealed class GameSetupEntryViewModel : ObservableObject
         ModelCompiler.OnLibraryRemoved(id);
         ModelViewer.OnLibraryRemoved(id);
         PackerTool.OnLibraryRemoved(id);
+        VtfTool.OnLibraryRemoved(id);
     }
 }
 

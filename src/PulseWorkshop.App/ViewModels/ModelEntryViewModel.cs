@@ -86,11 +86,16 @@ public sealed class ModelEntryViewModel : ObservableObject
             {
                 Model.QcPath = value ?? string.Empty;
                 OnPropertyChanged();
+                OnPropertyChanged(nameof(QcSummary));
                 _parent.Save();
                 _parent.RefreshCommands();
             }
         }
     }
+
+    /// <summary>The .qc file shown in the entries sidebar (the file name, or "No QC file").</summary>
+    public string QcSummary =>
+        string.IsNullOrWhiteSpace(Model.QcPath) ? "No QC file" : Path.GetFileName(Model.QcPath);
 
     public bool CompileInAll
     {

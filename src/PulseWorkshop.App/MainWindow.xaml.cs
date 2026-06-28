@@ -4,8 +4,11 @@ using System.IO;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
+using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Interop;
+using System.Windows.Media;
 using Microsoft.Win32;
 using PulseWorkshop.App.ViewModels;
 using PulseWorkshop.Core.Models;
@@ -23,6 +26,9 @@ public partial class MainWindow : Window
     // Remembered console drawer height (px) so toggling hide/show restores the user's drag size.
     private double _consoleHeightPx = 180;
 
+    // Same, for the Compile - Advanced tab's own terminal drawer.
+    private double _advConsoleHeightPx = 200;
+
     public MainWindow()
     {
         InitializeComponent();
@@ -33,6 +39,7 @@ public partial class MainWindow : Window
         _vm.SelectDraftRequested += id => SelectRow(DraftsList, _vm.Drafts.FirstOrDefault(d => d.Draft.Id == id));
         _vm.SelectTemplateRequested += id => SelectRow(TemplatesList, _vm.Templates.FirstOrDefault(t => t.Template.Id == id));
         _vm.PropertyChanged += OnViewModelPropertyChanged;
+        _vm.CompileAdvanced.PropertyChanged += OnAdvancedVmPropertyChanged;
 
         // Restore the console drawer state. Height must be set before IsConsoleVisible so the toggle
         // expands the rows to the remembered size.
@@ -139,6 +146,174 @@ public partial class MainWindow : Window
             CompileConsoleBox.ScrollToEnd();
     }
 
+    // Same auto-scroll behavior for the Compile - Advanced tab's embedded terminal.
+    private void OnAdvancedConsoleTextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (AdvancedConsoleBox.VerticalOffset >= AdvancedConsoleBox.ExtentHeight - AdvancedConsoleBox.ViewportHeight - 1)
+            AdvancedConsoleBox.ScrollToEnd();
+    }
+
+    // Let the user drag the Advanced "Global" command box taller/shorter.
+    private void GlobalCommandResize_DragDelta(object sender, DragDeltaEventArgs e)
+    {
+        var height = GlobalCommandBox.ActualHeight + e.VerticalChange;
+        GlobalCommandBox.Height = Math.Clamp(height, 34, 400);
+    }
+
+    private void OnAdvancedVmPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(CompileAdvancedViewModel.IsTerminalVisible))
+            UpdateAdvancedTerminalRows();
+    }
+
+    /// <summary>Expands/collapses the Advanced terminal drawer rows, remembering the dragged height
+    /// across hide/show (mirrors <see cref="UpdateConsoleRowHeights"/>).</summary>
+    private void UpdateAdvancedTerminalRows()
+    {
+        if (_vm.CompileAdvanced.IsTerminalVisible)
+        {
+            AdvConsoleSplitterRowDef.Height = new GridLength(12);
+            AdvConsoleRowDef.Height = new GridLength(_advConsoleHeightPx);
+            AdvConsoleRowDef.MinHeight = 80;
+            AdvancedConsoleBox.ScrollToEnd();
+        }
+        else
+        {
+            if (AdvConsoleRowDef.ActualHeight > 1)
+                _advConsoleHeightPx = AdvConsoleRowDef.ActualHeight;
+            AdvConsoleRowDef.MinHeight = 0;
+            AdvConsoleRowDef.Height = new GridLength(0);
+            AdvConsoleSplitterRowDef.Height = new GridLength(0);
+        }
+    }
+
+    // --- Advanced entries drag-to-reorder ---------------------------------------------------------
+    // A reorder starts only when the press lands on a row's drag handle (Tag="DragHandle"), so the
+    // text fields inside each row stay fully editable. The dropped row is moved within the project's
+    // entries collection and the project is re-saved (order is persisted on save).
+
+    private DragAdorner? _advDragAdorner;
+    private AdornerLayer? _advDragLayer;
+
+    private void AdvancedEntries_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (e.OriginalSource is not FrameworkElement { Tag: "DragHandle" } handle
+            || handle.DataContext is not ModelEntryViewModel item)
+            return;
+
+        // Show a semi-transparent ghost of the row that follows the cursor while dragging.
+        if (AdvancedEntriesList.ItemContainerGenerator.ContainerFromItem(item) is UIElement container)
+        {
+            _advDragLayer = AdornerLayer.GetAdornerLayer(AdvancedEntriesList);
+            if (_advDragLayer is not null)
+            {
+                _advDragAdorner = new DragAdorner(AdvancedEntriesList, container);
+                _advDragLayer.Add(_advDragAdorner);
+            }
+        }
+
+        try
+        {
+            DragDrop.DoDragDrop(AdvancedEntriesList, item, DragDropEffects.Move);
+        }
+        finally
+        {
+            if (_advDragAdorner is not null)
+            {
+                _advDragLayer?.Remove(_advDragAdorner);
+                _advDragAdorner = null;
+                _advDragLayer = null;
+            }
+        }
+    }
+
+    private void AdvancedEntries_DragOver(object sender, DragEventArgs e)
+    {
+        if (_advDragAdorner is not null)
+        {
+            var pos = e.GetPosition(AdvancedEntriesList);
+            _advDragAdorner.SetPosition(pos.X, pos.Y);
+        }
+        e.Effects = DragDropEffects.Move;
+    }
+
+    private void AdvancedEntries_Drop(object sender, DragEventArgs e)
+    {
+        if (e.Data.GetData(typeof(ModelEntryViewModel)) is not ModelEntryViewModel dragged
+            || DataContext is not MainViewModel vm)
+            return;
+
+        var list = vm.CompileAdvanced.Entries;
+        var oldIndex = list.IndexOf(dragged);
+        if (oldIndex < 0)
+            return;
+
+        var target = FindEntryUnder(e.OriginalSource as DependencyObject);
+        var newIndex = target is null ? list.Count - 1 : list.IndexOf(target);
+        if (newIndex < 0 || newIndex == oldIndex)
+            return;
+
+        list.Move(oldIndex, newIndex);
+        vm.CompileAdvanced.Save();
+    }
+
+    private static ModelEntryViewModel? FindEntryUnder(DependencyObject? source)
+    {
+        while (source is not null and not ListBoxItem)
+            source = VisualTreeHelper.GetParent(source);
+        return (source as ListBoxItem)?.DataContext as ModelEntryViewModel;
+    }
+
+    /// <summary>A translucent ghost of the dragged row, drawn in the adorner layer and moved to
+    /// follow the cursor - so it's obvious a reorder is in progress.</summary>
+    private sealed class DragAdorner : Adorner
+    {
+        private readonly System.Windows.Shapes.Rectangle _ghost;
+        private double _left, _top;
+
+        public DragAdorner(UIElement adorned, UIElement dragged) : base(adorned)
+        {
+            _ghost = new System.Windows.Shapes.Rectangle
+            {
+                Width = dragged.RenderSize.Width,
+                Height = dragged.RenderSize.Height,
+                Fill = new VisualBrush(dragged) { Opacity = 0.65 },
+                IsHitTestVisible = false,
+            };
+            IsHitTestVisible = false;
+        }
+
+        public void SetPosition(double left, double top)
+        {
+            _left = left + 8;
+            _top = top + 8;
+            _advLayerUpdate();
+        }
+
+        private void _advLayerUpdate() => (Parent as AdornerLayer)?.Update(AdornedElement);
+
+        protected override int VisualChildrenCount => 1;
+        protected override Visual GetVisualChild(int index) => _ghost;
+        protected override Size MeasureOverride(Size constraint)
+        {
+            _ghost.Measure(constraint);
+            return _ghost.DesiredSize;
+        }
+        protected override Size ArrangeOverride(Size finalSize)
+        {
+            _ghost.Arrange(new Rect(_ghost.DesiredSize));
+            return finalSize;
+        }
+        public override GeneralTransform GetDesiredTransform(GeneralTransform transform)
+        {
+            var group = new GeneralTransformGroup();
+            if (base.GetDesiredTransform(transform) is { } baseTransform)
+                group.Children.Add(baseTransform);
+            group.Children.Add(new TranslateTransform(_left, _top));
+            return group;
+        }
+    }
+
     /// <summary>
     /// Toggle the terminal drawer with the <c>~</c> / backtick key (like the Source engine console).
     /// Ignored while a text field has focus so the character can still be typed into titles,
@@ -147,11 +322,19 @@ public partial class MainWindow : Window
     protected override void OnPreviewKeyDown(KeyEventArgs e)
     {
         base.OnPreviewKeyDown(e);
-        // The ~ console toggle only applies to the Workshop terminal (the only toggleable one).
-        if (e.Key == Key.OemTilde && Keyboard.FocusedElement is not (TextBox or PasswordBox)
-            && WorkshopTab.IsSelected)
+        if (e.Key != Key.OemTilde || Keyboard.FocusedElement is TextBox or PasswordBox)
+            return;
+
+        // ~ toggles whichever terminal the current tab owns: the Workshop drawer, or the
+        // Compile - Advanced drawer when that tab is showing.
+        if (WorkshopTab.IsSelected)
         {
             _vm.IsConsoleVisible = !_vm.IsConsoleVisible;
+            e.Handled = true;
+        }
+        else if (CompileTab.IsSelected && CompileAdvancedTab.IsSelected)
+        {
+            _vm.CompileAdvanced.IsTerminalVisible = !_vm.CompileAdvanced.IsTerminalVisible;
             e.Handled = true;
         }
     }

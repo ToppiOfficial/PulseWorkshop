@@ -1114,17 +1114,343 @@
                   </Grid>
                 </TabItem>
 
-                <!-- ADVANCED: reserved for a future, fuller compile workflow. -->
-                <TabItem Header="Advanced">
-                  <Border Background="{StaticResource PanelGradientBrush}" BorderBrush="{StaticResource BorderBrush}"
-                          BorderThickness="1" CornerRadius="3" Margin="0,8,0,4">
-                    <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
-                        <TextBlock Text="Advanced compile" FontSize="15" FontWeight="SemiBold"
-                                   HorizontalAlignment="Center" />
-                        <TextBlock Text="Coming in a future update." Style="{StaticResource MutedText}"
-                                   HorizontalAlignment="Center" Margin="0,6,0,0" />
-                    </StackPanel>
-                  </Border>
+                <!-- ADVANCED: a project-directory workflow. State lives in a .pw_mdlproject file the
+                     user picks; it owns its own game selection and an ordered, drag-reorderable list
+                     of model entries compiled one at a time. DataContext is the Window's
+                     CompileAdvanced VM (the inner TabControl's DataContext is the Simple Compile VM). -->
+                <TabItem Header="Advanced" x:Name="CompileAdvancedTab"
+                         DataContext="{Binding DataContext.CompileAdvanced, RelativeSource={RelativeSource AncestorType=Window}}">
+                  <Grid Margin="0,8,0,4">
+
+                    <!-- No project open: prompt to create or open one. -->
+                    <Border Background="{StaticResource PanelGradientBrush}" BorderBrush="{StaticResource BorderBrush}"
+                            BorderThickness="1" CornerRadius="3"
+                            Visibility="{Binding IsProjectOpen, Converter={StaticResource BoolToVis}, ConverterParameter=invert}">
+                      <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                          <TextBlock Text="Advanced compile" FontSize="15" FontWeight="SemiBold"
+                                     HorizontalAlignment="Center" />
+                          <TextBlock Style="{StaticResource MutedText}" HorizontalAlignment="Center"
+                                     Margin="0,6,0,14" TextAlignment="Center" MaxWidth="420" TextWrapping="Wrap"
+                                     Text="Create or open a model project (.pw_mdlproject). It stores its own game, entries and options in the folder you choose." />
+                          <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                              <Button Content="New project..." Style="{StaticResource AccentButton}"
+                                      Padding="16,8" Command="{Binding NewProjectCommand}" />
+                              <Button Content="Open project..." Margin="8,0,0,0" Padding="16,8"
+                                      Command="{Binding OpenProjectCommand}" />
+                          </StackPanel>
+                      </StackPanel>
+                    </Border>
+
+                    <!-- Project open: bar + settings (top), the entries list (with its compile-all
+                         action bar) fills the middle, then a drag handle + a toggleable, resizable
+                         terminal drawer at the bottom (mirrors the Workshop terminal). -->
+                    <Grid Visibility="{Binding IsProjectOpen, Converter={StaticResource BoolToVis}}">
+                      <Grid.RowDefinitions>
+                          <RowDefinition Height="Auto" />
+                          <RowDefinition Height="Auto" />
+                          <RowDefinition Height="*" MinHeight="160" />
+                          <RowDefinition x:Name="AdvConsoleSplitterRowDef" Height="0" />
+                          <RowDefinition x:Name="AdvConsoleRowDef" Height="0" MinHeight="0" />
+                      </Grid.RowDefinitions>
+
+                      <!-- Project bar: name + path, with New / Open / Close. -->
+                      <Border Grid.Row="0" Background="{StaticResource HeaderGradientBrush}"
+                              BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="3"
+                              Padding="12,8">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel>
+                                <TextBlock Text="{Binding ProjectName}" FontWeight="SemiBold" />
+                                <TextBlock Text="{Binding ProjectPath, Converter={StaticResource PathEllipsis}, ConverterParameter=70}"
+                                           Style="{StaticResource MutedText}" ToolTip="{Binding ProjectPath}" />
+                            </StackPanel>
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                <Button Content="New" Padding="10,4" Command="{Binding NewProjectCommand}" />
+                                <Button Content="Open" Margin="6,0,0,0" Padding="10,4" Command="{Binding OpenProjectCommand}" />
+                                <Button Content="Close" Margin="6,0,0,0" Padding="10,4" Command="{Binding CloseProjectCommand}" />
+                            </StackPanel>
+                        </Grid>
+                      </Border>
+
+                      <!-- Project settings: game, global command, material + clean options. -->
+                      <Border Grid.Row="1" Margin="0,8,0,0" Background="{StaticResource PanelGradientBrush}"
+                              BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="3">
+                        <StackPanel Margin="14,12">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+
+                                <TextBlock Grid.Row="0" Text="Game" Style="{StaticResource CompileFieldLabel}" />
+                                <ComboBox Grid.Row="0" Grid.Column="1" Margin="0,0,0,8"
+                                          ItemsSource="{Binding Games}" SelectedItem="{Binding SelectedGame}"
+                                          DisplayMemberPath="DisplayName" />
+
+                                <TextBlock Grid.Row="1" Text="Global" Style="{StaticResource CompileFieldLabel}" />
+                                <!-- Multi-line, user-resizable: drag the handle below to set its height. -->
+                                <StackPanel Grid.Row="1" Grid.Column="1">
+                                    <TextBox x:Name="GlobalCommandBox" Height="50" MinHeight="34"
+                                             Text="{Binding GlobalCommand, UpdateSourceTrigger=PropertyChanged}"
+                                             AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
+                                             VerticalContentAlignment="Top"
+                                             Tag="studiomdl options shared by every entry. You can use line breaks to organize them - they're flattened to spaces when compiling." />
+                                    <Thumb Height="9" Cursor="SizeNS" HorizontalAlignment="Stretch"
+                                           DragDelta="GlobalCommandResize_DragDelta" ToolTip="Drag to resize.">
+                                        <Thumb.Template>
+                                            <ControlTemplate TargetType="Thumb">
+                                                <Border Background="Transparent" Padding="0,3">
+                                                    <Border Height="2" Width="44" CornerRadius="1"
+                                                            HorizontalAlignment="Center"
+                                                            Background="{StaticResource BorderBrush}" />
+                                                </Border>
+                                            </ControlTemplate>
+                                        </Thumb.Template>
+                                    </Thumb>
+                                </StackPanel>
+                            </Grid>
+
+                            <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                                <CheckBox Content="Get materials on compile" IsChecked="{Binding GetMaterialOnCompile}"
+                                          Foreground="{StaticResource TextBrush}"
+                                          ToolTip="After each successful compile (that moves output out of game), copy VMT and VTF files to the output folder." />
+                                <CheckBox Content="Localize" IsChecked="{Binding LocalizeMaterials}"
+                                          IsEnabled="{Binding CanConfigureMaterials}" Margin="14,0,0,0"
+                                          Foreground="{StaticResource TextBrush}"
+                                          ToolTip="Place VTF files beside their VMT instead of preserving the game's materials hierarchy." />
+                                <CheckBox Content="Flat patch" IsChecked="{Binding FlatPatchShader}"
+                                          IsEnabled="{Binding CanConfigureMaterials}" Margin="14,0,0,0"
+                                          Foreground="{StaticResource TextBrush}"
+                                          ToolTip="Flatten Patch VMTs into their base shader." />
+                                <CheckBox Content="Clean before transfer" IsChecked="{Binding CleanBeforeTransfer}"
+                                          Margin="14,0,0,0" Foreground="{StaticResource TextBrush}"
+                                          ToolTip="Before a non-in-game compile, delete the previous in-game build so stale files can't leak into the moved output." />
+                            </StackPanel>
+                        </StackPanel>
+                      </Border>
+
+                      <!-- Model entries: header + Add, the reorderable list (fills), and the
+                           compile-all action bar at the bottom (kept inside this panel so the drag
+                           handle below sits directly between the list and the terminal). -->
+                      <Border Grid.Row="2" Margin="0,8,0,0" Background="{StaticResource PanelGradientBrush}"
+                              BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="3">
+                        <Grid Margin="14,10">
+                          <Grid.RowDefinitions>
+                              <RowDefinition Height="Auto" />
+                              <RowDefinition Height="*" />
+                              <RowDefinition Height="Auto" />
+                          </Grid.RowDefinitions>
+
+                          <Grid Grid.Row="0" Margin="0,0,0,6">
+                              <TextBlock Text="Model entries" Style="{StaticResource HeaderText}"
+                                         VerticalAlignment="Center" Margin="0" />
+                              <Button HorizontalAlignment="Right" Content="Add entry..." Padding="10,4"
+                                      Command="{Binding AddEntryCommand}" />
+                          </Grid>
+
+                          <!-- Each row is labelled (Name / QC / Output / Command); QC and Output share
+                               the same field column so they line up. Drag the handle to reorder. -->
+                          <ListBox x:Name="AdvancedEntriesList" Grid.Row="1" ItemsSource="{Binding Entries}"
+                                   HorizontalContentAlignment="Stretch" Background="Transparent" BorderThickness="0"
+                                   PreviewMouseLeftButtonDown="AdvancedEntries_PreviewMouseLeftButtonDown"
+                                   DragOver="AdvancedEntries_DragOver" Drop="AdvancedEntries_Drop" AllowDrop="True"
+                                   ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                              <ListBox.Resources>
+                                  <Style x:Key="EntryLabel" TargetType="TextBlock" BasedOn="{StaticResource MutedText}">
+                                      <Setter Property="VerticalAlignment" Value="Center" />
+                                      <Setter Property="MinWidth" Value="56" />
+                                      <Setter Property="Margin" Value="0,0,8,0" />
+                                  </Style>
+                              </ListBox.Resources>
+                              <ListBox.ItemTemplate>
+                                  <DataTemplate>
+                                      <!-- Outline reflects state: blue while compiling, red if the last
+                                           compile failed (red persists until the next compile / restart). -->
+                                      <Border CornerRadius="3" Padding="8" Margin="0,0,0,6" BorderThickness="2">
+                                          <Border.Style>
+                                              <Style TargetType="Border">
+                                                  <Setter Property="Background" Value="{StaticResource PanelAltBrush}" />
+                                                  <Setter Property="BorderBrush" Value="Transparent" />
+                                                  <Style.Triggers>
+                                                      <DataTrigger Binding="{Binding HasError}" Value="True">
+                                                          <Setter Property="BorderBrush" Value="{StaticResource DangerBrush}" />
+                                                          <Setter Property="Effect">
+                                                              <Setter.Value>
+                                                                  <DropShadowEffect Color="{StaticResource DangerColor}"
+                                                                                    BlurRadius="9" ShadowDepth="0" Opacity="0.7" />
+                                                              </Setter.Value>
+                                                          </Setter>
+                                                      </DataTrigger>
+                                                      <DataTrigger Binding="{Binding IsCompiling}" Value="True">
+                                                          <Setter Property="BorderBrush" Value="{StaticResource AccentBrush}" />
+                                                          <Setter Property="Effect">
+                                                              <Setter.Value>
+                                                                  <DropShadowEffect Color="{StaticResource AccentColor}"
+                                                                                    BlurRadius="9" ShadowDepth="0" Opacity="0.85" />
+                                                              </Setter.Value>
+                                                          </Setter>
+                                                      </DataTrigger>
+                                                  </Style.Triggers>
+                                              </Style>
+                                          </Border.Style>
+                                          <Grid>
+                                              <Grid.ColumnDefinitions>
+                                                  <ColumnDefinition Width="Auto" />
+                                                  <ColumnDefinition Width="*" />
+                                                  <ColumnDefinition Width="Auto" />
+                                              </Grid.ColumnDefinitions>
+
+                                              <!-- Drag handle (only this initiates a reorder drag, so the row's fields stay editable) -->
+                                              <TextBlock Grid.Column="0" Tag="DragHandle" Text="&#x2630;" FontSize="16" Margin="2,0,10,0"
+                                                         VerticalAlignment="Center" Foreground="{StaticResource MutedTextBrush}"
+                                                         Cursor="SizeNS" ToolTip="Drag to reorder" />
+
+                                              <StackPanel Grid.Column="1">
+                                                  <!-- Name + include-in-all -->
+                                                  <Grid>
+                                                      <Grid.ColumnDefinitions>
+                                                          <ColumnDefinition Width="Auto" />
+                                                          <ColumnDefinition Width="*" />
+                                                          <ColumnDefinition Width="Auto" />
+                                                      </Grid.ColumnDefinitions>
+                                                      <TextBlock Text="Name" Style="{StaticResource EntryLabel}" />
+                                                      <TextBox Grid.Column="1" Width="220" HorizontalAlignment="Left"
+                                                               Text="{Binding Name, UpdateSourceTrigger=PropertyChanged}"
+                                                               Tag="Entry name" VerticalContentAlignment="Center" />
+                                                      <CheckBox Grid.Column="2" Content="Include in &quot;Compile all&quot;"
+                                                                VerticalAlignment="Center" IsChecked="{Binding CompileInAll}"
+                                                                Foreground="{StaticResource TextBrush}"
+                                                                ToolTip="Include this entry when the bottom 'Compile all' button runs." />
+                                                  </Grid>
+
+                                                  <!-- QC + Output share one row: .qc (with Browse) on the
+                                                       left, the output destination (subfolder + mode) on the right. -->
+                                                  <Grid Margin="0,6,0,0">
+                                                      <Grid.ColumnDefinitions>
+                                                          <ColumnDefinition Width="Auto" />
+                                                          <ColumnDefinition Width="*" />
+                                                          <ColumnDefinition Width="Auto" />
+                                                          <ColumnDefinition Width="18" />
+                                                          <ColumnDefinition Width="Auto" />
+                                                          <ColumnDefinition Width="*" />
+                                                          <ColumnDefinition Width="Auto" />
+                                                      </Grid.ColumnDefinitions>
+                                                      <TextBlock Grid.Column="0" Text="QC" Style="{StaticResource EntryLabel}" />
+                                                      <TextBox Grid.Column="1" Text="{Binding QcPath, UpdateSourceTrigger=PropertyChanged}"
+                                                               Tag="Path to .qc (relative to the project, or absolute)"
+                                                               VerticalContentAlignment="Center" ToolTip="{Binding ResolvedQcPath}" />
+                                                      <Button Grid.Column="2" Content="Browse..." Margin="6,0,0,0"
+                                                              Command="{Binding BrowseQcCommand}" />
+                                                      <TextBlock Grid.Column="4" Text="Output" Style="{StaticResource EntryLabel}" />
+                                                      <TextBox Grid.Column="5"
+                                                               Text="{Binding SubfolderName, UpdateSourceTrigger=PropertyChanged}"
+                                                               IsEnabled="{Binding ShowSubfolder}"
+                                                               ToolTip="Subfolder under the project (a nested path like test/bill is allowed). Disabled for 'Compile in game'."
+                                                               VerticalContentAlignment="Center" />
+                                                      <ComboBox Grid.Column="6" Width="200" Margin="6,0,0,0"
+                                                                ItemsSource="{Binding OutputModes}" SelectedItem="{Binding SelectedOutputMode}" />
+                                                  </Grid>
+
+                                                  <!-- Per-entry command -->
+                                                  <Grid Margin="0,6,0,0">
+                                                      <Grid.ColumnDefinitions>
+                                                          <ColumnDefinition Width="Auto" />
+                                                          <ColumnDefinition Width="*" />
+                                                      </Grid.ColumnDefinitions>
+                                                      <TextBlock Text="Command" Style="{StaticResource EntryLabel}" />
+                                                      <TextBox Grid.Column="1" Text="{Binding Command, UpdateSourceTrigger=PropertyChanged}"
+                                                               Tag="Extra studiomdl options for this entry (appended after the global command)"
+                                                               VerticalContentAlignment="Center" />
+                                                  </Grid>
+                                              </StackPanel>
+
+                                              <!-- Per-entry actions: Compile, then Go to file (after a compile),
+                                                   then clone + remove. -->
+                                              <StackPanel Grid.Column="2" Margin="10,0,0,0" VerticalAlignment="Top">
+                                                  <Button Content="Compile" Style="{StaticResource AccentButton}"
+                                                          MinWidth="84" Padding="10,6" Command="{Binding CompileThisCommand}"
+                                                          ToolTip="Compile only this entry." />
+                                                  <Button Content="Go to file" Margin="0,6,0,0" Padding="10,4"
+                                                          Command="{Binding GoToMdlCommand}"
+                                                          Visibility="{Binding LastMdlPath, Converter={StaticResource StringToVis}}"
+                                                          ToolTip="{Binding LastMdlPath}" />
+                                                  <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,6,0,0">
+                                                      <Button Style="{StaticResource CloneButton}" Command="{Binding CloneCommand}"
+                                                              ToolTip="Duplicate this entry." />
+                                                      <Button Style="{StaticResource TrashButton}" Command="{Binding RemoveCommand}"
+                                                              ToolTip="Remove this entry." />
+                                                  </StackPanel>
+                                              </StackPanel>
+                                          </Grid>
+                                      </Border>
+                                  </DataTemplate>
+                              </ListBox.ItemTemplate>
+                          </ListBox>
+
+                          <!-- Compile all + status, with the terminal toggle on the right. -->
+                          <Grid Grid.Row="2" Margin="0,10,0,0">
+                              <StackPanel Orientation="Horizontal">
+                                  <Button Content="Compile all" Style="{StaticResource AccentButton}" MinWidth="120"
+                                          Padding="16,8" Command="{Binding CompileAllCommand}" />
+                                  <Button Content="Cancel" Style="{StaticResource DangerButton}" Margin="8,0,0,0"
+                                          Padding="14,8" Command="{Binding CancelCommand}"
+                                          Visibility="{Binding IsCompiling, Converter={StaticResource BoolToVis}}" />
+                                  <StackPanel VerticalAlignment="Center" Margin="14,0,0,0">
+                                      <TextBlock Text="{Binding StatusMessage}" Style="{StaticResource MutedText}"
+                                                 TextTrimming="CharacterEllipsis" Margin="0,0,0,4" MaxWidth="420" />
+                                      <ProgressBar Width="200" IsIndeterminate="True" HorizontalAlignment="Left"
+                                                   Visibility="{Binding IsCompiling, Converter={StaticResource BoolToVis}}" />
+                                  </StackPanel>
+                              </StackPanel>
+                              <ToggleButton Content="Terminal" HorizontalAlignment="Right" VerticalAlignment="Center"
+                                            Padding="12,6" IsChecked="{Binding IsTerminalVisible}"
+                                            ToolTip="Show or hide the compile output terminal (toggle with the ~ key)." />
+                          </Grid>
+                        </Grid>
+                      </Border>
+
+                      <!-- Drag handle between the entries panel and the terminal drawer (mirrors the
+                           Workshop terminal). Its row + the drawer row are sized in MainWindow.xaml.cs. -->
+                      <GridSplitter Grid.Row="3" Height="12" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
+                                    ResizeBehavior="PreviousAndNext" ResizeDirection="Rows"
+                                    Background="Transparent" Cursor="SizeNS" ToolTip="Drag to resize the terminal."
+                                    Visibility="{Binding IsTerminalVisible, Converter={StaticResource BoolToVis}}" />
+
+                      <!-- Resizable, toggleable terminal drawer: studiomdl / ModelTool output for this project. -->
+                      <Border Grid.Row="4" Margin="0,2,0,0" Background="{StaticResource BgBrush}"
+                              BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="3"
+                              Visibility="{Binding IsTerminalVisible, Converter={StaticResource BoolToVis}}">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="*" />
+                            </Grid.RowDefinitions>
+                            <Grid Grid.Row="0" Background="{StaticResource PanelAltBrush}">
+                                <TextBlock Text="Terminal" Margin="10,5" FontWeight="SemiBold" VerticalAlignment="Center" />
+                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right"
+                                            VerticalAlignment="Center" Margin="0,2,6,2">
+                                    <Button Content="Clear" Padding="10,2" Command="{Binding ClearConsoleCommand}"
+                                            ToolTip="Clear the compile output." />
+                                </StackPanel>
+                            </Grid>
+                            <TextBox Grid.Row="1" x:Name="AdvancedConsoleBox" Text="{Binding ConsoleText, Mode=OneWay}"
+                                     IsReadOnly="True" IsReadOnlyCaretVisible="True" IsUndoEnabled="False"
+                                     Background="Transparent" BorderThickness="0" Padding="8,2"
+                                     FontFamily="Consolas" FontSize="12" Foreground="{StaticResource TextBrush}"
+                                     TextWrapping="NoWrap" VerticalContentAlignment="Top"
+                                     VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
+                                     TextChanged="OnAdvancedConsoleTextChanged" />
+                        </Grid>
+                      </Border>
+                    </Grid>
+                  </Grid>
                 </TabItem>
 
               </TabControl>

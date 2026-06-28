@@ -20,6 +20,10 @@ public static class AppPaths
     /// <summary>Single JSON file holding the Compile tab state (see <c>CompileConfig</c>).</summary>
     public static string CompileFile { get; } = Path.Combine(Root, "compile.json");
 
+    /// <summary>Single JSON file pointing at the last/recent Advanced compile projects
+    /// (see <c>AdvancedCompileConfig</c>). The projects themselves live in their own folders.</summary>
+    public static string AdvancedCompileFile { get; } = Path.Combine(Root, "compile-advanced.json");
+
     /// <summary>Ensures the data directories exist; safe to call repeatedly.</summary>
     public static void EnsureCreated()
     {

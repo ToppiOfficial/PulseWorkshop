@@ -423,6 +423,7 @@ public sealed class CompileViewModel : ObservableObject
 
         IsCompiling = true;
         LastMdlPath = null;
+        ClearConsole(); // A fresh compile starts with a clean terminal.
         StatusMessage = $"Compiling {Path.GetFileName(QcPath)}...";
         Log($"=== Compiling {QcPath} ===");
 
@@ -451,7 +452,15 @@ public sealed class CompileViewModel : ObservableObject
                           ?? result.CompiledMdls.FirstOrDefault();
 
             if (GetMaterialOnCompile && result.CompiledMdls.Count > 0)
-                await RunMaterialCopyAsync(result.CompiledMdls, destination);
+            {
+                // The compiled .mdl is moved out of the game folder, so material gathering must read
+                // the moved copy at the destination. ("Leave in game" keeps the .mdl in place.)
+                var matMdls = destination is null
+                    ? result.CompiledMdls
+                    : result.CopiedFiles
+                        .Where(f => f.EndsWith(".mdl", StringComparison.OrdinalIgnoreCase)).ToList();
+                await RunMaterialCopyAsync(matMdls, destination);
+            }
         }
         catch (Exception ex)
         {

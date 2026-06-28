@@ -66,8 +66,10 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         _service.HostOutput += OnHostOutput;
 
         // The Compile tab reuses Game Setup's tool paths. It owns its own embedded terminal for
-        // studiomdl's output, kept separate from this Workshop terminal.
+        // studiomdl's output, kept separate from this Workshop terminal. The Advanced sub-tab shares
+        // the same Game Setup roster but drives a project-based, multi-entry compile.
         Compile = new CompileViewModel(GameSetup);
+        CompileAdvanced = new CompileAdvancedViewModel(GameSetup);
 
         // Live-filtered views over each list.
         PublishedView = CollectionViewSource.GetDefaultView(PublishedItems);
@@ -102,6 +104,9 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
 
     /// <summary>The Compile panel (runs studiomdl on a .qc; reuses Game Setup's tool paths).</summary>
     public CompileViewModel Compile { get; }
+
+    /// <summary>The Compile - Advanced panel (project-based, multi-entry compile).</summary>
+    public CompileAdvancedViewModel CompileAdvanced { get; }
 
     public ObservableCollection<WorkshopItem> PublishedItems { get; } = new();
     public ObservableCollection<DraftListItemViewModel> Drafts { get; } = new();

@@ -27,7 +27,8 @@ public sealed record CompileRequest(
     string GameInfoDir,
     string QcPath,
     string ExtraOptions,
-    string? DestinationBase);
+    string? DestinationBase,
+    bool CleanBeforeTransfer = false);
 
 /// <summary>The outcome of a compile: process result plus the model files found and copied.</summary>
 public sealed record CompileResult(
@@ -56,6 +57,12 @@ public sealed class ModelCompileService
     // studiomdl emits e.g. "writing d:\...\models/toppi/x.mdl:" (note mixed slashes, trailing ':').
     private static readonly Regex WritingMdlLine =
         new(@"writing\s+(.+?\.mdl)", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    // A .qc's "$modelname <path>" line (quoted or bare). Used only by "clean before transfer" to
+    // locate the previous in-game build before a fresh compile.
+    private static readonly Regex ModelNameLine =
+        new(@"^\s*\$modelname\s+""?([^""\r\n]+?)""?\s*$",
+            RegexOptions.IgnoreCase | RegexOptions.Multiline | RegexOptions.Compiled);
 
     /// <summary>Raised once per studiomdl stdout/stderr line (and per copied file), live.</summary>
     public event Action<string>? Output;
@@ -100,6 +107,12 @@ public sealed class ModelCompileService
         if (string.IsNullOrWhiteSpace(req.QcPath) || !File.Exists(req.QcPath))
             return Fail($"QC file not found: {req.QcPath}");
 
+        // "Clean before transfer": only meaningful when we're moving the output out of the game
+        // (a destination is set). Deleting the previous in-game build first stops stale sibling
+        // files from a former compile (e.g. an .ani that's no longer produced) leaking into the move.
+        if (req.CleanBeforeTransfer && !string.IsNullOrWhiteSpace(req.DestinationBase))
+            CleanInGameModel(req.QcPath, req.GameInfoDir);
+
         var args = BuildArguments(req.GameInfoDir, req.QcPath, req.ExtraOptions);
         Output?.Invoke($"> \"{req.StudioMdlPath}\" {args}");
 
@@ -127,6 +140,12 @@ public sealed class ModelCompileService
             process.Start();
             process.BeginOutputReadLine();
             process.BeginErrorReadLine();
+
+            // Cancellation kills studiomdl (and its children) so a cancelled compile stops for real.
+            await using var reg = ct.Register(() =>
+            {
+                try { if (!process.HasExited) process.Kill(entireProcessTree: true); } catch { }
+            });
 
             await process.WaitForExitAsync(ct).ConfigureAwait(false);
             // WaitForExitAsync only waits for the process to exit. Calling the no-arg overload
@@ -175,8 +194,9 @@ public sealed class ModelCompileService
     }
 
     /// <summary>
-    /// Copies every gathered model file to the chosen destination, preserving the path relative to
-    /// the gameinfo dir (so the result lands under <c>&lt;dest&gt;\models\...</c> and is pack-ready).
+    /// Moves every gathered model file to the chosen destination, preserving the path relative to the
+    /// gameinfo dir (so the result lands under <c>&lt;dest&gt;\models\...</c> and is pack-ready). The
+    /// files are <b>moved</b>, not copied, so the game folder is left clean (Crowbar-style).
     /// No-op when the mode is "leave in game" (null destination).
     /// </summary>
     private IReadOnlyList<string> CopyOutputs(CompileRequest req, IReadOnlyList<string> mdlPaths)
@@ -186,37 +206,76 @@ public sealed class ModelCompileService
 
         var sources = new List<string>();
         foreach (var mdl in mdlPaths)
-        {
             sources.AddRange(GatherModelFiles(mdl));
-            // Best-effort: follow include models referenced inside the .mdl, resolved against the
-            // game's models folder. Any failure here is swallowed - the sibling group is the guarantee.
-            foreach (var include in TryReadIncludeModels(mdl, req.GameInfoDir))
-                sources.AddRange(GatherModelFiles(include));
-        }
 
-        var copied = new List<string>();
+        var moved = new List<string>();
         foreach (var src in sources.Distinct(StringComparer.OrdinalIgnoreCase))
         {
             try
             {
                 var rel = Path.GetRelativePath(req.GameInfoDir, src);
-                // If the file isn't under the game dir, fall back to copying it by name only.
+                // If the file isn't under the game dir, fall back to moving it by name only.
                 if (rel.StartsWith("..", StringComparison.Ordinal) || Path.IsPathRooted(rel))
                     rel = Path.GetFileName(src);
 
                 var dest = Path.Combine(req.DestinationBase, rel);
                 Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
-                File.Copy(src, dest, overwrite: true);
-                copied.Add(dest);
-                Output?.Invoke($"copied {rel}");
+                File.Move(src, dest, overwrite: true);
+                moved.Add(dest);
+                Output?.Invoke($"moved {rel}");
             }
             catch (Exception ex)
             {
-                Output?.Invoke($"WARNING: could not copy {src}: {ex.Message}");
+                Output?.Invoke($"WARNING: could not move {src}: {ex.Message}");
             }
         }
 
-        return copied;
+        return moved;
+    }
+
+    /// <summary>
+    /// Deletes the previous in-game build of the model the .qc compiles to (its <c>$modelname</c>
+    /// sibling group), so a fresh compile + move can't carry stale files forward. Fully best-effort:
+    /// a missing $modelname or any IO error simply leaves things as-is.
+    /// </summary>
+    private void CleanInGameModel(string qcPath, string gameInfoDir)
+    {
+        var modelName = TryReadModelName(qcPath);
+        if (string.IsNullOrWhiteSpace(modelName))
+            return;
+
+        var mdlPath = Path.Combine(gameInfoDir, "models", NormalizeSlashes(modelName));
+        if (!mdlPath.EndsWith(".mdl", StringComparison.OrdinalIgnoreCase))
+            mdlPath += ".mdl";
+
+        foreach (var file in GatherModelFiles(mdlPath))
+        {
+            try
+            {
+                File.Delete(file);
+                Output?.Invoke($"cleaned {Path.GetFileName(file)}");
+            }
+            catch (Exception ex)
+            {
+                Output?.Invoke($"WARNING: could not clean {file}: {ex.Message}");
+            }
+        }
+    }
+
+    /// <summary>Reads the <c>$modelname</c> path from a .qc (best-effort; empty on any problem).</summary>
+    private static string TryReadModelName(string qcPath)
+    {
+        try
+        {
+            if (!File.Exists(qcPath))
+                return string.Empty;
+            var match = ModelNameLine.Match(File.ReadAllText(qcPath));
+            return match.Success ? match.Groups[1].Value.Trim() : string.Empty;
+        }
+        catch
+        {
+            return string.Empty;
+        }
     }
 
     /// <summary>
@@ -236,67 +295,6 @@ public sealed class ModelCompileService
             if (File.Exists(candidate))
                 yield return candidate;
         }
-    }
-
-    /// <summary>
-    /// Reads a compiled .mdl's studiohdr and returns the disk paths of its include models, resolved
-    /// against <c>&lt;gameInfoDir&gt;\models</c>. Fully defensive: any parsing problem yields nothing.
-    /// </summary>
-    private static IEnumerable<string> TryReadIncludeModels(string mdlPath, string gameInfoDir)
-    {
-        try
-        {
-            var info = new FileInfo(mdlPath);
-            if (!info.Exists || info.Length is < 348 or > 128 * 1024 * 1024)
-                return Array.Empty<string>();
-
-            var buf = File.ReadAllBytes(mdlPath);
-
-            // studiohdr_t: numincludemodels @ 336, includemodelindex @ 340 (mdl v44+).
-            var count = BitConverter.ToInt32(buf, 336);
-            var index = BitConverter.ToInt32(buf, 340);
-            if (count is <= 0 or > 256 || index <= 0 || index >= buf.Length)
-                return Array.Empty<string>();
-
-            var modelsRoot = Path.Combine(gameInfoDir, "models");
-            var results = new List<string>();
-            for (var i = 0; i < count; i++)
-            {
-                // mstudiomodelgroup_t { int szlabelindex; int sznameindex; } - name offset is
-                // relative to the group struct's own base.
-                var groupBase = index + i * 8;
-                if (groupBase + 8 > buf.Length)
-                    break;
-
-                var nameOffset = BitConverter.ToInt32(buf, groupBase + 4);
-                var nameAbs = groupBase + nameOffset;
-                var name = ReadCString(buf, nameAbs);
-                if (string.IsNullOrWhiteSpace(name))
-                    continue;
-
-                var resolved = Path.Combine(modelsRoot, NormalizeSlashes(name));
-                if (File.Exists(resolved))
-                    results.Add(resolved);
-            }
-
-            return results;
-        }
-        catch
-        {
-            // Best-effort only.
-            return Array.Empty<string>();
-        }
-    }
-
-    private static string ReadCString(byte[] buf, int offset)
-    {
-        if (offset < 0 || offset >= buf.Length)
-            return string.Empty;
-
-        var end = offset;
-        while (end < buf.Length && buf[end] != 0)
-            end++;
-        return Encoding.ASCII.GetString(buf, offset, end - offset);
     }
 
     private static string NormalizeSlashes(string path) =>

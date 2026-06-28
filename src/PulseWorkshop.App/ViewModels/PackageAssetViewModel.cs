@@ -77,6 +77,7 @@ public sealed class PackageAssetViewModel : ObservableObject
                 Model.Kind = _selectedKind.Kind;
                 OnPropertyChanged(nameof(IsText));
                 OnPropertyChanged(nameof(IsImage));
+                OnPropertyChanged(nameof(IsVtf));
                 RefreshThumbnail();
                 Save();
             }
@@ -124,6 +125,24 @@ public sealed class PackageAssetViewModel : ObservableObject
             if (SetField(ref _selectedImageFormat, value ?? ImageFormats[0]))
             {
                 Model.ImageFormat = _selectedImageFormat.Format;
+                OnPropertyChanged(nameof(IsVtf));
+                Save();
+            }
+        }
+    }
+
+    /// <summary>True when Kind=Image and the target format is VTF - drives the VTF cmd row's visibility.</summary>
+    public bool IsVtf => Model.Kind == AssetKind.Image && Model.ImageFormat == ImageTargetFormat.Vtf;
+
+    public string VtfCommand
+    {
+        get => Model.VtfCommand;
+        set
+        {
+            if (Model.VtfCommand != (value ?? string.Empty))
+            {
+                Model.VtfCommand = value ?? string.Empty;
+                OnPropertyChanged();
                 Save();
             }
         }
@@ -258,5 +277,11 @@ public sealed class RegexReplaceViewModel : ObservableObject
     {
         get => Model.Multiline;
         set { if (Model.Multiline != value) { Model.Multiline = value; OnPropertyChanged(); _asset.Save(); } }
+    }
+
+    public bool IsLiteral
+    {
+        get => Model.IsLiteral;
+        set { if (Model.IsLiteral != value) { Model.IsLiteral = value; OnPropertyChanged(); _asset.Save(); } }
     }
 }

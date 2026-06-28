@@ -91,6 +91,11 @@ public sealed class PackageAsset
     [JsonConverter(typeof(JsonStringEnumConverter))]
     public ImageTargetFormat ImageFormat { get; set; } = ImageTargetFormat.Copy;
 
+    /// <summary>Per-asset extra VTF arguments. When non-empty and <see cref="ImageFormat"/> is
+    /// <see cref="ImageTargetFormat.Vtf"/>, this is appended after the Game Setup VTF command when
+    /// launching the VTF tool for this asset. Supports the same placeholders.</summary>
+    public string VtfCommand { get; set; } = string.Empty;
+
     /// <summary>A deep copy with a fresh <see cref="Id"/>.</summary>
     public PackageAsset Clone() => new()
     {
@@ -100,6 +105,7 @@ public sealed class PackageAsset
         OutputFileName = OutputFileName,
         RegexReplaces = RegexReplaces.Select(r => r.Clone()).ToList(),
         ImageFormat = ImageFormat,
+        VtfCommand = VtfCommand,
     };
 }
 
@@ -118,11 +124,16 @@ public sealed class RegexReplace
     /// <summary>Treat the input as multiple lines (^ and $ match at line breaks).</summary>
     public bool Multiline { get; set; }
 
+    /// <summary>When true, treat <see cref="Pattern"/> as a plain literal string instead of a regex.
+    /// Useful for tokens like $CHARA$ that contain regex metacharacters.</summary>
+    public bool IsLiteral { get; set; }
+
     public RegexReplace Clone() => new()
     {
         Pattern = Pattern,
         Replacement = Replacement,
         IgnoreCase = IgnoreCase,
         Multiline = Multiline,
+        IsLiteral = IsLiteral,
     };
 }

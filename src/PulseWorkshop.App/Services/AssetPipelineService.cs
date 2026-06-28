@@ -107,7 +107,13 @@ public sealed class AssetPipelineService
             var options = System.Text.RegularExpressions.RegexOptions.None;
             if (r.IgnoreCase) options |= System.Text.RegularExpressions.RegexOptions.IgnoreCase;
             if (r.Multiline) options |= System.Text.RegularExpressions.RegexOptions.Multiline;
-            text = System.Text.RegularExpressions.Regex.Replace(text, r.Pattern, r.Replacement ?? string.Empty, options);
+            var pattern = r.IsLiteral
+                ? System.Text.RegularExpressions.Regex.Escape(r.Pattern)
+                : r.Pattern;
+            var replacement = r.IsLiteral
+                ? r.Replacement?.Replace("$", "$$") ?? string.Empty
+                : r.Replacement ?? string.Empty;
+            text = System.Text.RegularExpressions.Regex.Replace(text, pattern, replacement, options);
         }
         File.WriteAllText(dest, text);
         Output?.Invoke($"[asset] text -> {dest}");
@@ -119,8 +125,39 @@ public sealed class AssetPipelineService
     private async Task<bool> ApplyImageAsync(PackageAsset asset, string input, string dest, string destDir,
         VtfToolConfig vtf, CancellationToken ct)
     {
+        // If the user left out the extension on the output name, append the one implied by the format.
+        if (string.IsNullOrEmpty(Path.GetExtension(dest)))
+        {
+            var ext = asset.ImageFormat switch
+            {
+                ImageTargetFormat.Copy => Path.GetExtension(input),
+                ImageTargetFormat.Vtf  => ".vtf",
+                ImageTargetFormat.Png  => ".png",
+                ImageTargetFormat.Jpg  => ".jpg",
+                ImageTargetFormat.Gif  => ".gif",
+                ImageTargetFormat.Bmp  => ".bmp",
+                ImageTargetFormat.Tiff => ".tiff",
+                _                      => ".png",
+            };
+            dest = dest + ext;
+        }
+
         if (asset.ImageFormat == ImageTargetFormat.Vtf)
-            return await ConvertToVtfAsync(input, dest, destDir, vtf, ct);
+        {
+            VtfToolConfig effectiveVtf;
+            if (!string.IsNullOrWhiteSpace(asset.VtfCommand))
+            {
+                var combined = string.IsNullOrWhiteSpace(vtf.Command)
+                    ? asset.VtfCommand
+                    : vtf.Command + " " + asset.VtfCommand;
+                effectiveVtf = new VtfToolConfig(vtf.ToolPath, combined);
+            }
+            else
+            {
+                effectiveVtf = vtf;
+            }
+            return await ConvertToVtfAsync(input, dest, destDir, effectiveVtf, ct);
+        }
 
         if (asset.ImageFormat == ImageTargetFormat.Copy)
         {
@@ -209,6 +246,20 @@ public sealed class AssetPipelineService
             Output?.Invoke($"[asset] VTF tool exited with code {process.ExitCode}.");
             return false;
         }
+
+        // vtfcmd names its output after the input file, ignoring any desired output name.
+        // If the expected dest differs, rename the produced file to match.
+        var produced = Path.Combine(destDir, Path.GetFileNameWithoutExtension(input) + ".vtf");
+        if (!string.Equals(Path.GetFullPath(produced), Path.GetFullPath(dest), StringComparison.OrdinalIgnoreCase))
+        {
+            if (!File.Exists(produced))
+            {
+                Output?.Invoke($"[asset] VTF tool succeeded but output not found ({produced}).");
+                return false;
+            }
+            File.Move(produced, dest, overwrite: true);
+        }
+
         Output?.Invoke($"[asset] vtf -> {dest}");
         return true;
     }

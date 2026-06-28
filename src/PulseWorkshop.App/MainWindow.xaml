@@ -1932,6 +1932,20 @@
                                                                               SelectedItem="{Binding SelectedImageFormat}" />
                                                                 </Grid>
 
+                                                                <!-- VTF: per-asset command override -->
+                                                                <Grid Margin="0,6,0,0"
+                                                                      Visibility="{Binding IsVtf, Converter={StaticResource BoolToVis}}">
+                                                                    <Grid.ColumnDefinitions>
+                                                                        <ColumnDefinition Width="Auto" />
+                                                                        <ColumnDefinition Width="*" />
+                                                                    </Grid.ColumnDefinitions>
+                                                                    <TextBlock Text="VTF cmd" Style="{StaticResource PkgEntryLabel}" />
+                                                                    <TextBox Grid.Column="1"
+                                                                             Text="{Binding VtfCommand, UpdateSourceTrigger=PropertyChanged}"
+                                                                             Tag="Extra VTF arguments for this asset - appended after the Game Setup VTF command. Placeholders: {input} {output} {outputdir} {outputname}"
+                                                                             VerticalContentAlignment="Center" />
+                                                                </Grid>
+
                                                                 <!-- Text: regex replaces -->
                                                                 <StackPanel Margin="0,6,0,0"
                                                                             Visibility="{Binding IsText, Converter={StaticResource BoolToVis}}">
@@ -1951,6 +1965,7 @@
                                                                                   <ColumnDefinition Width="Auto" />
                                                                                   <ColumnDefinition Width="Auto" />
                                                                                   <ColumnDefinition Width="Auto" />
+                                                                                  <ColumnDefinition Width="Auto" />
                                                                               </Grid.ColumnDefinitions>
                                                                               <TextBox Grid.Column="0" Text="{Binding Pattern, UpdateSourceTrigger=PropertyChanged}"
                                                                                        Tag="Find (regex)" VerticalContentAlignment="Center" Margin="0,0,4,0" />
@@ -1961,8 +1976,11 @@
                                                                                         ToolTip="Ignore case" Margin="0,0,8,0" />
                                                                               <CheckBox Grid.Column="3" Content="ML" IsChecked="{Binding Multiline}"
                                                                                         VerticalAlignment="Center" Foreground="{StaticResource TextBrush}"
-                                                                                        ToolTip="Multiline (^ and $ match at line breaks)" Margin="0,0,4,0" />
-                                                                              <Button Grid.Column="4" Style="{StaticResource TrashButton}"
+                                                                                        ToolTip="Multiline (^ and $ match at line breaks)" Margin="0,0,8,0" />
+                                                                              <CheckBox Grid.Column="4" Content="Lit" IsChecked="{Binding IsLiteral}"
+                                                                                        VerticalAlignment="Center" Foreground="{StaticResource TextBrush}"
+                                                                                        ToolTip="Literal - treat the pattern as plain text, not a regex. Use this for tokens like $CHARA$ that contain special characters." Margin="0,0,4,0" />
+                                                                              <Button Grid.Column="5" Style="{StaticResource TrashButton}"
                                                                                       Command="{Binding RemoveCommand}" ToolTip="Remove this replace." />
                                                                           </Grid>
                                                                         </DataTemplate>

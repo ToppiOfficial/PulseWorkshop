@@ -1,10 +1,17 @@
 # PulseWorkshop
+![status](https://img.shields.io/badge/status-alpha-orange) ![license](https://img.shields.io/badge/license-GPL--3.0-blue) ![platform](https://img.shields.io/badge/platform-Windows%20x64-lightgrey)
 
-A **Steam Workshop manager** — Browse, create, and edit your own Workshop
-items (title, description, tags, content files, preview image).
+**PulseWorkshop** is a Crowbar inspired tool.  Upload, edit and update your workshop items with extra tools to
+compile models and package addons.  The tool is a successor to my previous tool **"KitsuneResource"**
 
-Ships configured for **Left 4 Dead 2** (App ID `550`) and **Garry's Mod** (App ID `4000`);
-the game list is config-driven, so more games can be added.
+> [!NOTE]
+> Currently ships configured for **Left 4 Dead 2** (App ID `550`) and **Garry's Mod** (App ID `4000`);
+> the game list is config-driven, so more games can be added. *(More Steam workshop compatible games will be
+> added)*
+
+> [!NOTE]
+> *Currently supported for Windows only but a full migration to [Avaloniaui](https://avaloniaui.net/) is planned
+> for Linux native support*
 
 ## How it works
 

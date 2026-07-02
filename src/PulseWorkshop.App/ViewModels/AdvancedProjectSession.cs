@@ -122,6 +122,24 @@ public sealed class AdvancedProjectSession : ObservableObject
         LoadProject(dlg.FileName, loaded);
     }
 
+    /// <summary>
+    /// Opens a project directly from a path (e.g. a shell file-association launch: double-clicking a
+    /// <c>.pw_mdlproject</c>) rather than through the file picker. Returns whether it loaded; a missing
+    /// or corrupt file is a silent no-op so the caller can decide how to report it.
+    /// </summary>
+    public bool OpenProjectFromPath(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path) || !File.Exists(path))
+            return false;
+
+        var loaded = ModelProject.Load(path);
+        if (loaded is null)
+            return false;
+
+        LoadProject(Path.GetFullPath(path), loaded);
+        return true;
+    }
+
     private void CloseProject()
     {
         _projectPath = null;

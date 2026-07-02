@@ -14,25 +14,25 @@ namespace PulseWorkshop.App.ViewModels;
 /// via the game's packer. It shares the open <c>.pw_mdlproject</c> with the Compile tab through
 /// <see cref="AdvancedProjectSession"/> but edits its own <see cref="ModelProject.PackageEntries"/>
 /// list. Each entry first bakes its pre-assets into the folder (<see cref="AssetPipelineService"/>),
-/// then runs the packer (<see cref="PackageService"/>). Owns its own embedded terminal.
+/// then runs the packer (<see cref="PackageService"/>). Output streams into the shared app-wide console.
 /// </summary>
 public sealed class PackageAdvancedViewModel : ObservableObject
 {
     private readonly AdvancedProjectSession _session;
+    private readonly ConsoleViewModel _console;
     private PackageEntryViewModel? _selectedEntry;
     private bool _isPackaging;
-    private bool _isTerminalVisible;
     private string _statusMessage = "No project open.";
     private CancellationTokenSource? _cancelSource;
 
-    public PackageAdvancedViewModel(AdvancedProjectSession session)
+    public PackageAdvancedViewModel(AdvancedProjectSession session, ConsoleViewModel console)
     {
         _session = session;
+        _console = console;
 
         AddEntryCommand = new RelayCommand(AddEntry, () => IsProjectOpen);
         PackageAllCommand = new AsyncRelayCommand(PackageAllAsync, () => CanPackageAll);
         CancelCommand = new RelayCommand(Cancel, () => IsPackaging);
-        ClearConsoleCommand = new RelayCommand(ClearConsole);
 
         // This tab persists the package entry list (with each entry's assets) into the shared project.
         _session.RegisterSync(() => _session.Project.PackageEntries =
@@ -51,7 +51,6 @@ public sealed class PackageAdvancedViewModel : ObservableObject
     public RelayCommand AddEntryCommand { get; }
     public AsyncRelayCommand PackageAllCommand { get; }
     public RelayCommand CancelCommand { get; }
-    public RelayCommand ClearConsoleCommand { get; }
 
     /// <summary>The shared Game Setup roster used for the dropdown.</summary>
     public ObservableCollection<GameSetupEntryViewModel> Games => _session.Games;
@@ -172,12 +171,6 @@ public sealed class PackageAdvancedViewModel : ObservableObject
         private set => SetField(ref _statusMessage, value);
     }
 
-    public bool IsTerminalVisible
-    {
-        get => _isTerminalVisible;
-        set => SetField(ref _isTerminalVisible, value);
-    }
-
     // --- Path helpers (used by entries / assets) ----------------------------------------------
 
     public string ResolveAgainstProject(string path) => _session.ResolveAgainstProject(path);
@@ -258,7 +251,6 @@ public sealed class PackageAdvancedViewModel : ObservableObject
         if (!IsGameReady)
             return;
 
-        ClearConsole();
         _cancelSource = new CancellationTokenSource();
         var ct = _cancelSource.Token;
         IsPackaging = true;
@@ -290,7 +282,6 @@ public sealed class PackageAdvancedViewModel : ObservableObject
         if (!ConfirmPackageAll(targets.Count))
             return;
 
-        ClearConsole();
         _cancelSource = new CancellationTokenSource();
         var ct = _cancelSource.Token;
         IsPackaging = true;
@@ -413,9 +404,11 @@ public sealed class PackageAdvancedViewModel : ObservableObject
                     return false;
                 }
 
+                var finalPath = RenamePackage(result.OutputPackagePath, entry.Model.OutputName);
+
                 entry.HasError = false;
-                entry.LastPackagePath = result.OutputPackagePath;
-                StatusMessage = $"Packaged {entry.Name} -> {Path.GetFileName(result.OutputPackagePath)}.";
+                entry.LastPackagePath = finalPath;
+                StatusMessage = $"Packaged {entry.Name} -> {Path.GetFileName(finalPath)}.";
                 Log($"=== Done. {StatusMessage} ===");
                 return true;
             }
@@ -438,45 +431,52 @@ public sealed class PackageAdvancedViewModel : ObservableObject
         }
     }
 
-    // --- Embedded terminal --------------------------------------------------------------------
-
-    private const int MaxConsoleLines = 1000;
-    private readonly List<string> _consoleLines = new();
-    private string _consoleText = string.Empty;
-
-    public string ConsoleText
+    /// <summary>Renames a freshly-produced package to the entry's <c>OutputName</c> (in the same
+    /// folder), keeping the packer's extension when none is given and overwriting any existing file of
+    /// that name. Returns the resulting path (unchanged when <paramref name="outputName"/> is blank or
+    /// the produced path is missing). Any directory parts in the name are stripped so it can't escape
+    /// the output folder.</summary>
+    private string? RenamePackage(string? producedPath, string outputName)
     {
-        get => _consoleText;
-        private set => SetField(ref _consoleText, value);
+        if (string.IsNullOrWhiteSpace(outputName)
+            || string.IsNullOrEmpty(producedPath) || !File.Exists(producedPath))
+            return producedPath;
+
+        var name = Path.GetFileName(outputName.Trim());
+        if (string.IsNullOrWhiteSpace(name))
+            return producedPath;
+
+        if (string.IsNullOrEmpty(Path.GetExtension(name)))
+            name += Path.GetExtension(producedPath); // keep the packer's .vpk/.gma
+
+        var dir = Path.GetDirectoryName(producedPath) ?? string.Empty;
+        var target = Path.Combine(dir, name);
+
+        if (string.Equals(Path.GetFullPath(target), Path.GetFullPath(producedPath),
+                StringComparison.OrdinalIgnoreCase))
+            return producedPath; // already the desired name
+
+        try
+        {
+            File.Move(producedPath, target, overwrite: true);
+            Log($"Renamed package -> {name}");
+            return target;
+        }
+        catch (Exception ex)
+        {
+            Log($"WARNING: could not rename package to '{name}': {ex.Message}");
+            return producedPath;
+        }
     }
 
-    private void ClearConsole()
-    {
-        _consoleLines.Clear();
-        ConsoleText = string.Empty;
-    }
+    // --- Shared console (packer / asset output) -----------------------------------------------
 
-    private void Log(string line)
-    {
-        var dispatcher = Application.Current?.Dispatcher;
-        if (dispatcher is null || dispatcher.CheckAccess())
-            AppendConsoleLine(line);
-        else
-            dispatcher.BeginInvoke(() => AppendConsoleLine(line));
-    }
+    // Output arrives one line at a time on background threads, in bursts; the shared console buffers
+    // and coalesces them, so we just forward each line.
+    private void Log(string line) => _console.Append(line);
 
-    private static Task FlushLogAsync() =>
-        Application.Current.Dispatcher
-            .InvokeAsync(static () => { }, System.Windows.Threading.DispatcherPriority.Background)
-            .Task;
-
-    private void AppendConsoleLine(string line)
-    {
-        _consoleLines.Add(line);
-        while (_consoleLines.Count > MaxConsoleLines)
-            _consoleLines.RemoveAt(0);
-        ConsoleText = string.Join(Environment.NewLine, _consoleLines);
-    }
+    // Ensures queued background output is on screen before we write our own marker lines.
+    private Task FlushLogAsync() => _console.FlushAsync();
 }
 
 /// <summary>An asset-kind dropdown entry (the themed ComboBox renders via ToString).</summary>

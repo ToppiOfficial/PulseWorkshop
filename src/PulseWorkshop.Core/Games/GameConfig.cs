@@ -47,6 +47,15 @@ public sealed record GameConfig
     /// <summary>The Workshop content file type for this game (a single packed file).</summary>
     public required string ContentFileExtension { get; init; } // e.g. ".vpk", ".gma"
 
+    /// <summary>
+    /// True when the game's Workshop uses the modern ISteamUGC upload path (CreateItem +
+    /// SubmitItemUpdate); false for the legacy Steam Cloud (ISteamRemoteStorage) Workshop.
+    /// GMod is UGC (mirrors Crowbar's UsesSteamUGC and gmpublish); L4D2 has no upload depot and
+    /// must stay legacy. Routing GMod through the legacy path produces items subscribers cannot
+    /// download.
+    /// </summary>
+    public bool UsesUgcUpload { get; init; }
+
     /// <summary>Flat list of every known tag across all categories.</summary>
     public IReadOnlyList<string> KnownTags =>
         TagCategories.SelectMany(c => c.Tags).ToList();
@@ -109,6 +118,7 @@ public static class KnownGames
         AppId = GarrysModAppId,
         DisplayName = "Garry's Mod",
         ContentFileExtension = ".gma",
+        UsesUgcUpload = true,
         TagCategories = new[]
         {
             new TagCategory("Type", new[]

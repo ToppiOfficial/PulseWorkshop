@@ -1,5 +1,6 @@
 using System.IO.Pipes;
 using System.Text;
+using PulseWorkshop.Core.Games;
 using PulseWorkshop.Core.Ipc;
 using PulseWorkshop.Core.Models;
 using PulseWorkshop.SteamBridge;
@@ -20,6 +21,9 @@ internal sealed class HostServer
         _workshop = workshop;
         _appId = appId;
     }
+
+    /// <summary>Whether this host's game publishes through the modern UGC Workshop (GMod).</summary>
+    private bool UsesUgc => KnownGames.FindByAppId(_appId)?.UsesUgcUpload ?? false;
 
     public void Run()
     {
@@ -150,8 +154,9 @@ internal sealed class HostServer
             $"contentFile='{edit.ContentFile}' contentExists={(!string.IsNullOrWhiteSpace(edit.ContentFile) && File.Exists(edit.ContentFile))} " +
             $"preview='{edit.PreviewImagePath}'");
 
-        // The bridge uploads the content/preview to Steam Cloud (RemoteStorage) directly from these
-        // file paths - no folder staging needed. A content file is required for a brand-new item.
+        // The bridge uploads the content/preview directly from these file paths (legacy Steam Cloud
+        // for L4D2, UGC item update for GMod) - no folder staging needed. A content file is
+        // required for a brand-new item.
         if (!string.IsNullOrWhiteSpace(edit.ContentFile) && !File.Exists(edit.ContentFile))
             return new PublishResult { Success = false, Error = $"Content file not found: {edit.ContentFile}" };
 
@@ -168,6 +173,7 @@ internal sealed class HostServer
             ContentFile = edit.ContentFile,
             PreviewImagePath = edit.PreviewImagePath,
             ChangeNote = edit.ChangeNote,
+            UseUgcUpload = UsesUgc,
         };
 
         var result = _workshop.Publish(bridgeEdit);
@@ -190,7 +196,7 @@ internal sealed class HostServer
             return new DeleteResult { Success = false, Error = "No published file id supplied." };
 
         Log($"Delete: id={req.PublishedFileId}");
-        var result = _workshop.DeletePublishedFile(req.PublishedFileId);
+        var result = _workshop.DeletePublishedFile(req.PublishedFileId, UsesUgc);
         Log($"Delete result: id={req.PublishedFileId} success={result.Success} error='{result.Error}'");
         return new DeleteResult { Success = result.Success, Error = result.Error };
     }

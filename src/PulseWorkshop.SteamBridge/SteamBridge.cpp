@@ -354,6 +354,154 @@ namespace {
         out.m_nNumStrings = static_cast<int32>(ptrs.size());
     }
 
+    // Publishes through the modern ISteamUGC Workshop (GMod). Mirrors Crowbar's UsesSteamUGC path
+    // and Facepunch's gmpublish: CreateItem (new items) then StartItemUpdate -> SetItem* ->
+    // SetItemContent with the .gma FILE path itself (single file, not a folder) -> SubmitItemUpdate.
+    // The .gma is uploaded raw - no LZMA. GMod content published through the legacy RemoteStorage
+    // path appears to succeed but subscribers cannot download it (the legacy delivery path expects
+    // LZMA-compressed files), so GMod must always come through here.
+    BridgePublishResult^ PublishViaUgc(BridgeEdit^ edit)
+    {
+        BridgePublishResult^ result = gcnew BridgePublishResult();
+        result->Success = false;
+
+        ISteamUGC* ugc = SteamUGC();
+        AppId_t appId = SteamUtils()->GetAppID();
+
+        bool hasContent = !String::IsNullOrEmpty(edit->ContentFile);
+        bool hasPreview = !String::IsNullOrEmpty(edit->PreviewImagePath);
+
+        PublishedFileId_t fileId = static_cast<PublishedFileId_t>(edit->PublishedFileId);
+
+        if (fileId == 0)
+        {
+            Console::Error->WriteLine("[publish] creating new workshop item (UGC)...");
+            SteamAPICall_t createCall = ugc->CreateItem(appId, k_EWorkshopFileTypeCommunity);
+            CreateItemResult_t created;
+            if (!WaitForCall(createCall, created, 60000))
+            {
+                result->Error = "Timed out creating the workshop item.";
+                return result;
+            }
+            if (created.m_eResult != k_EResultOK)
+            {
+                result->Error = "CreateItem failed (EResult " +
+                    (static_cast<int>(created.m_eResult)).ToString() + ").";
+                return result;
+            }
+            fileId = created.m_nPublishedFileId;
+            result->NeedsLegalAgreement = created.m_bUserNeedsToAcceptWorkshopLegalAgreement;
+        }
+        result->PublishedFileId = static_cast<UInt64>(fileId);
+
+        UGCUpdateHandle_t handle = ugc->StartItemUpdate(appId, fileId);
+        if (handle == k_UGCUpdateHandleInvalid)
+        {
+            result->Error = "StartItemUpdate failed.";
+            return result;
+        }
+
+        std::string title = ToNative(edit->Title);
+        std::string desc = ToNative(edit->Description);
+        if (!String::IsNullOrEmpty(edit->Title))
+            ugc->SetItemTitle(handle, title.c_str());
+        if (edit->Description != nullptr)
+            ugc->SetItemDescription(handle, desc.c_str());
+        ugc->SetItemVisibility(handle, ToSteamVisibility(edit->Visibility));
+
+        std::vector<std::string> tagStore;
+        std::vector<const char*> tagPtrs;
+        SteamParamStringArray_t tags;
+        BuildTagArray(edit->Tags, tagStore, tagPtrs, tags);
+        if (tags.m_nNumStrings > 0)
+            ugc->SetItemTags(handle, &tags);
+
+        std::string contentPath = hasContent ? ToNative(edit->ContentFile) : "";
+        std::string previewPath = hasPreview ? ToNative(edit->PreviewImagePath) : "";
+        if (hasContent && !ugc->SetItemContent(handle, contentPath.c_str()))
+        {
+            result->Error = "SetItemContent failed.";
+            return result;
+        }
+        if (hasPreview && !ugc->SetItemPreview(handle, previewPath.c_str()))
+        {
+            result->Error = "SetItemPreview failed.";
+            return result;
+        }
+
+        Console::Error->WriteLine(String::Format(
+            "[publish] submitting item update for {0} (UGC)...", static_cast<UInt64>(fileId)));
+        std::string note = ToNative(edit->ChangeNote);
+        SteamAPICall_t submitCall = ugc->SubmitItemUpdate(handle, note.empty() ? nullptr : note.c_str());
+
+        // Pump callbacks until the submit completes, surfacing upload progress to stderr in the
+        // same "[upload]" format the RemoteStorage path uses so the App's live log stays uniform.
+        ISteamUtils* utils = SteamUtils();
+        const double mb = 1024.0 * 1024.0;
+        bool failed = false;
+        int waited = 0;
+        int lastPercent = -1;
+        EItemUpdateStatus lastStatus = k_EItemUpdateStatusInvalid;
+        while (!utils->IsAPICallCompleted(submitCall, &failed))
+        {
+            SteamAPI_RunCallbacks();
+
+            uint64 processed = 0, total = 0;
+            EItemUpdateStatus status = ugc->GetItemUpdateProgress(handle, &processed, &total);
+            if (status != lastStatus)
+            {
+                lastStatus = status;
+                const char* label =
+                    status == k_EItemUpdateStatusPreparingConfig ? "preparing config" :
+                    status == k_EItemUpdateStatusPreparingContent ? "preparing content" :
+                    status == k_EItemUpdateStatusUploadingContent ? "uploading content" :
+                    status == k_EItemUpdateStatusUploadingPreviewFile ? "uploading preview" :
+                    status == k_EItemUpdateStatusCommittingChanges ? "committing changes" : nullptr;
+                if (label != nullptr)
+                    Console::Error->WriteLine(String::Format("[upload] {0}...", gcnew String(label)));
+            }
+            if (status == k_EItemUpdateStatusUploadingContent && total > 0)
+            {
+                int percent = static_cast<int>((processed * 100) / total);
+                if (percent != lastPercent)
+                {
+                    lastPercent = percent;
+                    Console::Error->WriteLine(String::Format(
+                        "[upload] content: {0:0.0} / {1:0.0} MB ({2}%)",
+                        processed / mb, total / mb, percent));
+                }
+            }
+
+            ::Sleep(100);
+            waited += 100;
+            if (waited >= 1800000)
+            {
+                result->Error = "Timed out submitting the item update.";
+                return result;
+            }
+        }
+
+        SubmitItemUpdateResult_t submitted;
+        bool ioFailure = false;
+        if (!utils->GetAPICallResult(submitCall, &submitted, sizeof(submitted),
+                                     SubmitItemUpdateResult_t::k_iCallback, &ioFailure) ||
+            ioFailure || failed)
+        {
+            result->Error = "SubmitItemUpdate did not return a result.";
+            return result;
+        }
+
+        result->NeedsLegalAgreement = result->NeedsLegalAgreement ||
+            submitted.m_bUserNeedsToAcceptWorkshopLegalAgreement;
+        result->Success = (submitted.m_eResult == k_EResultOK);
+        if (!result->Success)
+            result->Error = "Submit failed (EResult " +
+                (static_cast<int>(submitted.m_eResult)).ToString() + ").";
+        else
+            Console::Error->WriteLine("[upload] content: upload complete.");
+        return result;
+    }
+
 } // anonymous namespace
 
 BridgePublishResult^ SteamWorkshop::Publish(BridgeEdit^ edit)
@@ -366,11 +514,15 @@ BridgePublishResult^ SteamWorkshop::Publish(BridgeEdit^ edit)
         return result;
     }
 
+    // GMod's Workshop is served by the modern UGC backend, so it publishes via ISteamUGC.
+    if (edit->UseUgcUpload)
+        return PublishViaUgc(edit);
+
     ISteamRemoteStorage* rs = SteamRemoteStorage();
     AppId_t appId = SteamUtils()->GetAppID();
 
-    // L4D2 / GMod use the legacy Steam Cloud (RemoteStorage) Workshop - there is no upload depot,
-    // so ISteamUGC::SubmitItemUpdate fails with "no workshop depot found". Mirror Crowbar: push the
+    // L4D2 uses the legacy Steam Cloud (RemoteStorage) Workshop - there is no upload depot, so
+    // ISteamUGC::SubmitItemUpdate fails with "no workshop depot found". Mirror Crowbar: push the
     // content (and preview) into Steam Cloud, then publish/update the item referencing them.
 
     bool hasContent = !String::IsNullOrEmpty(edit->ContentFile);
@@ -517,7 +669,7 @@ BridgePublishResult^ SteamWorkshop::Publish(BridgeEdit^ edit)
     return result;
 }
 
-BridgeDeleteResult^ SteamWorkshop::DeletePublishedFile(System::UInt64 publishedFileId)
+BridgeDeleteResult^ SteamWorkshop::DeletePublishedFile(System::UInt64 publishedFileId, bool useUgc)
 {
     BridgeDeleteResult^ result = gcnew BridgeDeleteResult();
     result->Success = false;
@@ -532,13 +684,31 @@ BridgeDeleteResult^ SteamWorkshop::DeletePublishedFile(System::UInt64 publishedF
         return result;
     }
 
-    // L4D2 / GMod are legacy RemoteStorage Workshop items, so deletion goes through
-    // ISteamRemoteStorage::DeletePublishedFile (the same interface that published them).
-    ISteamRemoteStorage* rs = SteamRemoteStorage();
     PublishedFileId_t fileId = static_cast<PublishedFileId_t>(publishedFileId);
 
     Console::Error->WriteLine(String::Format(
         "[delete] deleting workshop item {0}...", static_cast<UInt64>(fileId)));
+
+    // GMod items live on the modern UGC Workshop, so delete through ISteamUGC (mirrors Crowbar).
+    if (useUgc)
+    {
+        SteamAPICall_t ugcCall = SteamUGC()->DeleteItem(fileId);
+        DeleteItemResult_t ugcDeleted;
+        if (!WaitForCall(ugcCall, ugcDeleted))
+        {
+            result->Error = "Timed out deleting the workshop item.";
+            return result;
+        }
+        result->Success = (ugcDeleted.m_eResult == k_EResultOK);
+        if (!result->Success)
+            result->Error = "Delete failed (EResult " +
+                (static_cast<int>(ugcDeleted.m_eResult)).ToString() + ").";
+        return result;
+    }
+
+    // L4D2 items are legacy RemoteStorage Workshop items, so deletion goes through
+    // ISteamRemoteStorage::DeletePublishedFile (the same interface that published them).
+    ISteamRemoteStorage* rs = SteamRemoteStorage();
 
     SteamAPICall_t call = rs->DeletePublishedFile(fileId);
     RemoteStorageDeletePublishedFileResult_t deleted;

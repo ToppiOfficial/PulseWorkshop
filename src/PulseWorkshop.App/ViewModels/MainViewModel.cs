@@ -59,22 +59,19 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         NewItemCommand = new RelayCommand(NewItem, () => !IsBusy && IsConnected);
         RevertCommand = new RelayCommand(Revert, () => CanRevert);
         PublishCommand = new AsyncRelayCommand(PublishAsync, CanPublish);
-        ToggleConsoleCommand = new RelayCommand(() => IsConsoleVisible = !IsConsoleVisible);
-        ClearConsoleCommand = new RelayCommand(ClearConsole);
 
-        // Stream the Steam host's log + upload progress into the Workshop terminal.
+        // Stream the Steam host's log + upload progress into the shared console.
         _service.HostOutput += OnHostOutput;
 
-        // The Compile tab reuses Game Setup's tool paths. It owns its own embedded terminal for
-        // studiomdl's output, kept separate from this Workshop terminal. The Advanced sub-tab shares
-        // the same Game Setup roster but drives a project-based, multi-entry compile.
-        Compile = new CompileViewModel(GameSetup);
+        // The Compile / Package tabs reuse Game Setup's tool paths. Every tab writes to the one shared
+        // console (rendered by the detached ConsoleWindow), so it's created first and handed to each.
+        Compile = new CompileViewModel(GameSetup, Console);
 
         // Compile - Advanced and Package - Advanced share one open .pw_mdlproject via this session, so
         // both edit the same project (different lists) without clobbering each other.
         AdvancedProject = new AdvancedProjectSession(GameSetup);
-        CompileAdvanced = new CompileAdvancedViewModel(AdvancedProject);
-        PackageAdvanced = new PackageAdvancedViewModel(AdvancedProject);
+        CompileAdvanced = new CompileAdvancedViewModel(AdvancedProject, Console);
+        PackageAdvanced = new PackageAdvancedViewModel(AdvancedProject, Console);
 
         // Live-filtered views over each list.
         PublishedView = CollectionViewSource.GetDefaultView(PublishedItems);
@@ -239,8 +236,9 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     public RelayCommand NewItemCommand { get; }
     public RelayCommand RevertCommand { get; }
     public AsyncRelayCommand PublishCommand { get; }
-    public RelayCommand ToggleConsoleCommand { get; }
-    public RelayCommand ClearConsoleCommand { get; }
+
+    /// <summary>The single, app-wide console every tab writes to (shown by the detached ConsoleWindow).</summary>
+    public ConsoleViewModel Console { get; } = new();
 
     public GameConfig SelectedGame
     {
@@ -265,57 +263,14 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         private set => SetField(ref _statusMessage, value);
     }
 
-    // --- Live console (streams the Steam host's log + upload progress) ----------------------
+    // --- Live console (streams the Steam host's log + upload progress into the shared console) ------
 
-    private const int MaxConsoleLines = 1000;
-    private bool _isConsoleVisible;
-    private string _consoleText = string.Empty;
+    /// <summary>Appends a timestamped line authored by the App itself (host lines arrive raw via
+    /// <see cref="OnHostOutput"/>). Severity is auto-classified from the text.</summary>
+    private void ConsoleLog(string message) => Console.Log(message);
 
-    // Backing line buffer (oldest first). Kept so the line cap can be enforced; the UI binds to
-    // ConsoleText, a plain multi-line string, so the terminal is fully selectable for copy/paste.
-    private readonly List<string> _consoleLines = new();
-
-    /// <summary>The console drawer's full text, one log line per row, oldest first.</summary>
-    public string ConsoleText
-    {
-        get => _consoleText;
-        private set => SetField(ref _consoleText, value);
-    }
-
-    /// <summary>Whether the Workshop terminal drawer is expanded.</summary>
-    public bool IsConsoleVisible
-    {
-        get => _isConsoleVisible;
-        set => SetField(ref _isConsoleVisible, value);
-    }
-
-    /// <summary>Appends a line authored by the App itself (host lines arrive via <see cref="OnHostOutput"/>).</summary>
-    private void ConsoleLog(string message) => AppendConsoleLine($"[{DateTime.Now:HH:mm:ss}] {message}");
-
-    private void ClearConsole()
-    {
-        _consoleLines.Clear();
-        ConsoleText = string.Empty;
-    }
-
-    // Host output fires on a background (thread-pool) thread; marshal to the UI thread before
-    // touching the line buffer bound to the console.
-    private void OnHostOutput(string line)
-    {
-        var dispatcher = Application.Current?.Dispatcher;
-        if (dispatcher is null || dispatcher.CheckAccess())
-            AppendConsoleLine(line);
-        else
-            dispatcher.BeginInvoke(() => AppendConsoleLine(line));
-    }
-
-    private void AppendConsoleLine(string line)
-    {
-        _consoleLines.Add(line);
-        while (_consoleLines.Count > MaxConsoleLines)
-            _consoleLines.RemoveAt(0);
-        ConsoleText = string.Join(Environment.NewLine, _consoleLines);
-    }
+    // Host output can fire on a background thread; the shared console marshals to the UI thread itself.
+    private void OnHostOutput(string line) => Console.Append(line);
 
     // --- Logged-in Steam profile (top-right) -----------------------------------------------
 

@@ -3,17 +3,22 @@ using System.Text.Json;
 namespace PulseWorkshop.Core.Storage;
 
 /// <summary>
-/// Persisted UI preferences (currently the console drawer's open state and height). Stored as a
+/// Persisted UI preferences (the detached console window's open state and bounds). Stored as a
 /// single <c>settings.json</c>; load and save are best-effort and never throw - a missing or corrupt
 /// file just yields defaults.
 /// </summary>
 public sealed class UiSettings
 {
-    /// <summary>Whether the console drawer was open when the app last closed.</summary>
+    /// <summary>Whether the console window was open when the app last closed.</summary>
     public bool ConsoleVisible { get; set; }
 
-    /// <summary>The console drawer's height in pixels (remembers the user's drag).</summary>
-    public double ConsoleHeight { get; set; } = 180;
+    /// <summary>The console window's size in pixels (remembers the user's resize).</summary>
+    public double ConsoleWindowWidth { get; set; } = 900;
+    public double ConsoleWindowHeight { get; set; } = 400;
+
+    /// <summary>The console window's last position; null centres it on the main window.</summary>
+    public double? ConsoleWindowLeft { get; set; }
+    public double? ConsoleWindowTop { get; set; }
 
     private static readonly JsonSerializerOptions Options = new() { WriteIndented = true };
 

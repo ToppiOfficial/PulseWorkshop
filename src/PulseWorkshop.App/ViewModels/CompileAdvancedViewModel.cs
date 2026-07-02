@@ -14,30 +14,30 @@ namespace PulseWorkshop.App.ViewModels;
 /// The Compile - Advanced tab: a project-directory workflow on top of the same studiomdl pipeline as
 /// the Simple tab. Project state (path, game, save) lives in the shared <see cref="AdvancedProjectSession"/>
 /// so the Package tab can edit the same <c>.pw_mdlproject</c> without clobbering it; this view model
-/// owns only the compile-specific concerns: the model-entry list, the project's compile options, the
-/// embedded terminal, and the compile run. Reuses <see cref="ModelCompileService"/> and
-/// <see cref="MaterialCopyService"/>.
+/// owns only the compile-specific concerns: the model-entry list, the project's compile options, and
+/// the compile run. Output streams into the shared app-wide console. Reuses
+/// <see cref="ModelCompileService"/> and <see cref="MaterialCopyService"/>.
 /// </summary>
 public sealed class CompileAdvancedViewModel : ObservableObject
 {
     private readonly AdvancedProjectSession _session;
+    private readonly ConsoleViewModel _console;
     private readonly string _modelToolPath;
 
     private ModelEntryViewModel? _selectedEntry;
     private bool _isCompiling;
-    private bool _isTerminalVisible;
     private string _statusMessage = "No project open.";
     private CancellationTokenSource? _cancelSource;
 
-    public CompileAdvancedViewModel(AdvancedProjectSession session)
+    public CompileAdvancedViewModel(AdvancedProjectSession session, ConsoleViewModel console)
     {
         _session = session;
+        _console = console;
         _modelToolPath = ToolLocator.ResolveModelToolPath();
 
         AddEntryCommand = new RelayCommand(AddEntry, () => IsProjectOpen);
         CompileAllCommand = new AsyncRelayCommand(CompileAllAsync, () => CanCompileAll);
         CancelCommand = new RelayCommand(Cancel, () => IsCompiling);
-        ClearConsoleCommand = new RelayCommand(ClearConsole);
 
         // This tab persists the compile entry list into the shared project on every save.
         _session.RegisterSync(() => _session.Project.Entries = Entries.Select(e => e.Model).ToList());
@@ -56,7 +56,6 @@ public sealed class CompileAdvancedViewModel : ObservableObject
     public RelayCommand AddEntryCommand { get; }
     public AsyncRelayCommand CompileAllCommand { get; }
     public RelayCommand CancelCommand { get; }
-    public RelayCommand ClearConsoleCommand { get; }
 
     /// <summary>The shared Game Setup roster (game name + resolved tool paths) used for the dropdown.</summary>
     public ObservableCollection<GameSetupEntryViewModel> Games => _session.Games;
@@ -264,13 +263,6 @@ public sealed class CompileAdvancedViewModel : ObservableObject
         private set => SetField(ref _statusMessage, value);
     }
 
-    /// <summary>Whether the embedded terminal drawer is shown (toggleable, like the Workshop terminal).</summary>
-    public bool IsTerminalVisible
-    {
-        get => _isTerminalVisible;
-        set => SetField(ref _isTerminalVisible, value);
-    }
-
     // --- Path helpers (used by entries; delegated to the session) -----------------------------
 
     /// <summary>Resolves a stored (relative or absolute) path against the project folder.</summary>
@@ -361,7 +353,6 @@ public sealed class CompileAdvancedViewModel : ObservableObject
         if (!IsGameReady)
             return;
 
-        ClearConsole(); // A single-entry compile starts with a clean terminal.
         _cancelSource = new CancellationTokenSource();
         var ct = _cancelSource.Token;
         IsCompiling = true;
@@ -394,9 +385,6 @@ public sealed class CompileAdvancedViewModel : ObservableObject
         if (!ConfirmCompileAll(targets.Count))
             return;
 
-        // Clear once at the start of the batch; the per-entry compiles below append so the whole
-        // run stays in one transcript.
-        ClearConsole();
         _cancelSource = new CancellationTokenSource();
         var ct = _cancelSource.Token;
         IsCompiling = true;
@@ -660,48 +648,12 @@ public sealed class CompileAdvancedViewModel : ObservableObject
         }
     }
 
-    // --- Embedded terminal (studiomdl / ModelTool output) -------------------------------------
+    // --- Shared console (studiomdl / ModelTool output) ----------------------------------------
 
-    private const int MaxConsoleLines = 1000;
-    private readonly List<string> _consoleLines = new();
-    private string _consoleText = string.Empty;
+    // Output arrives one line at a time on background threads, thousands per verbose compile; the
+    // shared console buffers and coalesces them, so we just forward each line.
+    private void Log(string line) => _console.Append(line);
 
-    /// <summary>The Advanced terminal's full text, one output line per row, oldest first.</summary>
-    public string ConsoleText
-    {
-        get => _consoleText;
-        private set => SetField(ref _consoleText, value);
-    }
-
-    private void ClearConsole()
-    {
-        _consoleLines.Clear();
-        ConsoleText = string.Empty;
-    }
-
-    // studiomdl / ModelTool output arrives on background threads; marshal to the UI thread before
-    // touching the line buffer bound to the terminal.
-    private void Log(string line)
-    {
-        var dispatcher = Application.Current?.Dispatcher;
-        if (dispatcher is null || dispatcher.CheckAccess())
-            AppendConsoleLine(line);
-        else
-            dispatcher.BeginInvoke(() => AppendConsoleLine(line));
-    }
-
-    // Awaiting a Background-priority no-op guarantees all background-queued log lines have been
-    // appended before we write our own marker lines on the UI thread.
-    private static Task FlushLogAsync() =>
-        Application.Current.Dispatcher
-            .InvokeAsync(static () => { }, System.Windows.Threading.DispatcherPriority.Background)
-            .Task;
-
-    private void AppendConsoleLine(string line)
-    {
-        _consoleLines.Add(line);
-        while (_consoleLines.Count > MaxConsoleLines)
-            _consoleLines.RemoveAt(0);
-        ConsoleText = string.Join(Environment.NewLine, _consoleLines);
-    }
+    // Ensures queued background output is on screen before we write our own marker lines.
+    private Task FlushLogAsync() => _console.FlushAsync();
 }

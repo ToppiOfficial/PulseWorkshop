@@ -74,6 +74,9 @@ namespace SteamBridge {
         property System::String^ ContentFile;       // absolute path to the .vpk/.gma; may be null
         property System::String^ PreviewImagePath;  // absolute path; may be null
         property System::String^ ChangeNote;
+        // True for games whose Workshop uses the modern ISteamUGC upload (GMod); false for the
+        // legacy Steam Cloud Workshop (L4D2).
+        property bool UseUgcUpload;
     };
 
     public ref class BridgeProgress
@@ -122,8 +125,9 @@ namespace SteamBridge {
         /// <summary>Creates (if PublishedFileId==0) or updates an item and starts the upload.</summary>
         BridgePublishResult^ Publish(BridgeEdit^ edit);
 
-        /// <summary>Permanently deletes the user's published Workshop item. Irreversible.</summary>
-        BridgeDeleteResult^ DeletePublishedFile(System::UInt64 publishedFileId);
+        /// <summary>Permanently deletes the user's published Workshop item. Irreversible.
+        /// Pass useUgc=true for games on the modern UGC Workshop (GMod).</summary>
+        BridgeDeleteResult^ DeletePublishedFile(System::UInt64 publishedFileId, bool useUgc);
 
         /// <summary>Progress of the most recent <see cref="Publish"/> upload.</summary>
         BridgeProgress^ GetProgress();

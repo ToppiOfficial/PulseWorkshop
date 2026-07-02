@@ -60,6 +60,16 @@ public sealed class AssetPipelineService
                 continue;
             }
 
+            // Source engine hardcodes vtf/vmt lookups to materials/, so a VTF asset written anywhere
+            // else would never be found at runtime.
+            if (asset.Kind == AssetKind.Image && asset.ImageFormat == ImageTargetFormat.Vtf
+                && !IsMaterialsRooted(asset.OutputDir))
+            {
+                Output?.Invoke($"[asset] Skipped: VTF output dir must start with 'materials' (got '{asset.OutputDir}').");
+                allOk = false;
+                continue;
+            }
+
             var fileName = string.IsNullOrWhiteSpace(asset.OutputFileName)
                 ? Path.GetFileName(input)
                 : asset.OutputFileName;
@@ -77,7 +87,7 @@ public sealed class AssetPipelineService
                 Directory.CreateDirectory(destDir);
                 var ok = asset.Kind == AssetKind.Text
                     ? ApplyText(asset, input, dest)
-                    : await ApplyImageAsync(asset, input, dest, destDir, vtf, ct);
+                    : await ApplyImageAsync(asset, input, dest, destDir, root, resolveInput, vtf, ct);
                 allOk &= ok;
             }
             catch (OperationCanceledException)
@@ -123,7 +133,7 @@ public sealed class AssetPipelineService
     // --- Image ----------------------------------------------------------------------------------
 
     private async Task<bool> ApplyImageAsync(PackageAsset asset, string input, string dest, string destDir,
-        VtfToolConfig vtf, CancellationToken ct)
+        string root, Func<string, string> resolveInput, VtfToolConfig vtf, CancellationToken ct)
     {
         // If the user left out the extension on the output name, append the one implied by the format.
         if (string.IsNullOrEmpty(Path.GetExtension(dest)))
@@ -156,7 +166,11 @@ public sealed class AssetPipelineService
             {
                 effectiveVtf = vtf;
             }
-            return await ConvertToVtfAsync(input, dest, destDir, effectiveVtf, ct);
+            if (!await ConvertToVtfAsync(input, dest, destDir, effectiveVtf, ct))
+                return false;
+            if (asset.CreateVmt)
+                WriteVmt(asset, dest, root, resolveInput);
+            return true;
         }
 
         if (asset.ImageFormat == ImageTargetFormat.Copy)
@@ -264,9 +278,83 @@ public sealed class AssetPipelineService
         return true;
     }
 
+    // --- VMT ------------------------------------------------------------------------------------
+
+    /// <summary>Writes a <c>.vmt</c> next to the produced <paramref name="vtfDest"/> (same dir, same
+    /// name), pointing <c>$basetexture</c> at the VTF - a path relative to <c>materials/</c> with no
+    /// extension and forward slashes. Reads <see cref="PackageAsset.VmtTemplatePath"/> as the base (its
+    /// existing <c>$basetexture</c> is rewritten, or one is inserted); a minimal material is generated
+    /// when the template is blank or missing.</summary>
+    private void WriteVmt(PackageAsset asset, string vtfDest, string root, Func<string, string> resolveInput)
+    {
+        var vmtPath = Path.ChangeExtension(vtfDest, ".vmt");
+        var baseTexture = MaterialBaseTexturePath(root, vtfDest);
+
+        string? template = null;
+        if (!string.IsNullOrWhiteSpace(asset.VmtTemplatePath))
+        {
+            var resolved = resolveInput(asset.VmtTemplatePath);
+            if (!string.IsNullOrWhiteSpace(resolved) && File.Exists(resolved))
+                template = File.ReadAllText(resolved);
+            else
+                Output?.Invoke($"[asset] VMT template not found ({asset.VmtTemplatePath}) - generating a minimal material.");
+        }
+
+        var vmt = BuildVmt(template, baseTexture);
+        File.WriteAllText(vmtPath, vmt);
+        Output?.Invoke($"[asset] vmt -> {vmtPath} ($basetexture \"{baseTexture}\")");
+    }
+
+    /// <summary>The <c>$basetexture</c> value for a VTF at <paramref name="vtfDest"/>: its path relative
+    /// to the entry's <c>materials/</c> folder, forward-slashed and without the <c>.vtf</c> extension.
+    /// A VTF asset's output dir is always rooted at <c>materials</c> (enforced upstream), so the first
+    /// path segment is dropped.</summary>
+    private static string MaterialBaseTexturePath(string root, string vtfDest)
+    {
+        var rel = Path.GetRelativePath(root, vtfDest).Replace('\\', '/').TrimStart('/');
+        var slash = rel.IndexOf('/');
+        if (slash >= 0)
+            rel = rel[(slash + 1)..]; // drop the leading "materials/" segment
+        if (rel.EndsWith(".vtf", StringComparison.OrdinalIgnoreCase))
+            rel = rel[..^4];
+        return rel;
+    }
+
+    private static readonly System.Text.RegularExpressions.Regex BaseTextureLine = new(
+        @"^(?<indent>[ \t]*)(?<q>""?)\$basetexture\k<q>[ \t]+(?:""[^""\r\n]*""|\S+).*$",
+        System.Text.RegularExpressions.RegexOptions.IgnoreCase
+        | System.Text.RegularExpressions.RegexOptions.Multiline
+        | System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    /// <summary>Produces VMT text with <c>$basetexture</c> set to <paramref name="baseTexture"/>. If the
+    /// template already declares a <c>$basetexture</c> its value is replaced (indentation preserved);
+    /// otherwise one is inserted after the material's opening brace. A blank template yields a minimal
+    /// <c>VertexLitGeneric</c> material.</summary>
+    internal static string BuildVmt(string? template, string baseTexture)
+    {
+        if (string.IsNullOrWhiteSpace(template))
+            return $"\"VertexLitGeneric\"\r\n{{\r\n\t\"$basetexture\" \"{baseTexture}\"\r\n}}\r\n";
+
+        if (BaseTextureLine.IsMatch(template))
+            return BaseTextureLine.Replace(template,
+                m => $"{m.Groups["indent"].Value}\"$basetexture\" \"{baseTexture}\"", 1);
+
+        // No $basetexture in the template - insert one just after the first opening brace.
+        var brace = template.IndexOf('{');
+        if (brace >= 0)
+        {
+            var insert = $"\r\n\t\"$basetexture\" \"{baseTexture}\"";
+            return template.Insert(brace + 1, insert);
+        }
+
+        // Malformed template (no brace) - fall back to a generated material.
+        return $"\"VertexLitGeneric\"\r\n{{\r\n\t\"$basetexture\" \"{baseTexture}\"\r\n}}\r\n";
+    }
+
     /// <summary>The absolute output dir for <paramref name="outputDir"/> under <paramref name="root"/>,
-    /// or null if it would escape the folder (the asset output is always sandboxed inside the entry).</summary>
-    private static string? SandboxedDir(string root, string outputDir)
+    /// or null if it would escape the folder (the asset output is always sandboxed inside the entry).
+    /// Internal (not private) so the UI can run the same check live, before packaging.</summary>
+    internal static string? SandboxedDir(string root, string outputDir)
     {
         var fullRoot = Path.GetFullPath(root);
         if (string.IsNullOrWhiteSpace(outputDir))
@@ -286,5 +374,20 @@ public sealed class AssetPipelineService
             || combined.StartsWith(fullRoot + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
             return combined;
         return null;
+    }
+
+    /// <summary>True when <paramref name="outputDir"/>'s first path segment is "materials" (case-insensitive).
+    /// Source engine hardcodes vtf/vmt lookups relative to materials/, so a VTF asset outside it would
+    /// never be found by the game at runtime. Internal (not private) so the UI can run the same check
+    /// live, before packaging.</summary>
+    internal static bool IsMaterialsRooted(string outputDir)
+    {
+        if (string.IsNullOrWhiteSpace(outputDir))
+            return false;
+
+        var normalized = outputDir.Replace('\\', '/').Trim('/');
+        var slashIndex = normalized.IndexOf('/');
+        var first = slashIndex < 0 ? normalized : normalized[..slashIndex];
+        return string.Equals(first, "materials", StringComparison.OrdinalIgnoreCase);
     }
 }

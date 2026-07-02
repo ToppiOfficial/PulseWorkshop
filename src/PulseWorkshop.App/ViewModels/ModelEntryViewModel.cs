@@ -136,6 +136,8 @@ public sealed class ModelEntryViewModel : ObservableObject
             {
                 Model.OutputMode = _selectedOutputMode.Mode;
                 OnPropertyChanged(nameof(ShowSubfolder));
+                OnPropertyChanged(nameof(OutputModeLabel));
+                OnPropertyChanged(nameof(OutputModeTooltip));
                 _parent.Save();
                 _parent.RefreshCommands();
             }
@@ -158,6 +160,22 @@ public sealed class ModelEntryViewModel : ObservableObject
     }
 
     public bool ShowSubfolder => Model.OutputMode == CompileOutputMode.Subfolder;
+
+    /// <summary>Short badge text for the entries list: which of the two output destinations this
+    /// entry compiles to.</summary>
+    public string OutputModeLabel => Model.OutputMode switch
+    {
+        CompileOutputMode.Subfolder => "Subfolder",
+        CompileOutputMode.LeaveInGame => "In-game",
+        _ => "Custom",
+    };
+
+    public string OutputModeTooltip => Model.OutputMode switch
+    {
+        CompileOutputMode.Subfolder => "Compiles to a subfolder under the project.",
+        CompileOutputMode.LeaveInGame => "Leaves the compiled files where studiomdl wrote them, in the game's models folder.",
+        _ => "Custom output destination.",
+    };
 
     /// <summary>Per-entry busy flag (true while this single entry, or a "compile all" pass, runs).
     /// Drives the blue "compiling" outline.</summary>

@@ -102,8 +102,26 @@ public sealed class PackageEntryViewModel : ObservableObject
                 Model.FolderPath = value ?? string.Empty;
                 OnPropertyChanged();
                 OnPropertyChanged(nameof(ResolvedFolderPath));
+                // The sandbox/materials checks are resolved against this folder, so every asset's
+                // live validation needs to be re-evaluated.
+                foreach (var asset in Assets)
+                    asset.RefreshValidation();
                 _parent.Save();
                 _parent.RefreshCommands();
+            }
+        }
+    }
+
+    public string OutputName
+    {
+        get => Model.OutputName;
+        set
+        {
+            if (Model.OutputName != (value ?? string.Empty))
+            {
+                Model.OutputName = value ?? string.Empty;
+                OnPropertyChanged();
+                _parent.Save();
             }
         }
     }

@@ -19,6 +19,12 @@ public sealed class PackageEntry
     /// <summary>Path to the folder to package, relative to the project file's folder, or absolute.</summary>
     public string FolderPath { get; set; } = string.Empty;
 
+    /// <summary>Optional override for the produced package's file name. After packing, the
+    /// <c>.vpk</c>/<c>.gma</c> the packer writes (named after the folder) is renamed to this. The
+    /// packer's extension is kept when omitted; an existing file of that name is overwritten. Blank
+    /// keeps the packer's default name.</summary>
+    public string OutputName { get; set; } = string.Empty;
+
     /// <summary>Whether "Package all" includes this entry.</summary>
     public bool IncludeInAll { get; set; } = true;
 
@@ -33,6 +39,7 @@ public sealed class PackageEntry
     {
         Name = Name,
         FolderPath = FolderPath,
+        OutputName = OutputName,
         IncludeInAll = IncludeInAll,
         Command = Command,
         Assets = Assets.Select(a => a.Clone()).ToList(),
@@ -96,6 +103,17 @@ public sealed class PackageAsset
     /// launching the VTF tool for this asset. Supports the same placeholders.</summary>
     public string VtfCommand { get; set; } = string.Empty;
 
+    /// <summary>When true and <see cref="ImageFormat"/> is <see cref="ImageTargetFormat.Vtf"/>, a
+    /// <c>.vmt</c> material is written next to the produced VTF (same directory, same name). Its
+    /// <c>$basetexture</c> is pointed at the VTF (path relative to <c>materials/</c>, no extension).</summary>
+    public bool CreateVmt { get; set; }
+
+    /// <summary>Path to a <c>.vmt</c> file used as the base when <see cref="CreateVmt"/> is set,
+    /// relative to the project file's folder or absolute (shared, never mutated). Its
+    /// <c>$basetexture</c> value is rewritten to the produced VTF (one is inserted if absent). When
+    /// blank or missing, a minimal <c>VertexLitGeneric</c> material is generated.</summary>
+    public string VmtTemplatePath { get; set; } = string.Empty;
+
     /// <summary>A deep copy with a fresh <see cref="Id"/>.</summary>
     public PackageAsset Clone() => new()
     {
@@ -106,6 +124,8 @@ public sealed class PackageAsset
         RegexReplaces = RegexReplaces.Select(r => r.Clone()).ToList(),
         ImageFormat = ImageFormat,
         VtfCommand = VtfCommand,
+        CreateVmt = CreateVmt,
+        VmtTemplatePath = VmtTemplatePath,
     };
 }
 

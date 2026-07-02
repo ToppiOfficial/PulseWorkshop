@@ -17,23 +17,11 @@
     </Window.Resources>
 
     <Grid Margin="10,2,10,10">
-        <Grid.RowDefinitions>
-            <RowDefinition Height="*" />
-            <!-- Drag-handle row: the GridSplitter that resizes the top block (editor) vs the terminal
-                 drawer. Its own dedicated row directly between them, so PreviousAndNext resizes the
-                 editor (Row 0) and the drawer (Row 2) and the splitter reliably grabs the mouse.
-                 Collapses to 0 with the drawer (driven in MainWindow.xaml.cs). The Terminal toggle
-                 button overlays the editor's bottom-right corner so it stays visible when collapsed. -->
-            <RowDefinition x:Name="ConsoleSplitterRowDef" Height="0" />
-            <!-- Terminal drawer: collapses to 0 height when the terminal is hidden. -->
-            <RowDefinition x:Name="ConsoleRowDef" Height="0" MinHeight="0" />
-        </Grid.RowDefinitions>
-
         <!-- Top-level tabs (the outer container): the Workshop tool, and an About page. The
              Game picker + Connect live inside the Workshop tab - they're Workshop-only; other
-             tabs are for tools unrelated to the Steam Workshop connection. -->
-        <TabControl Grid.Row="0" x:Name="MainTabs" Background="Transparent" BorderThickness="0" Padding="0"
-                    SelectionChanged="MainTabs_SelectionChanged">
+             tabs are for tools unrelated to the Steam Workshop connection. The live output console
+             is a detached window (ConsoleWindow), toggled with the ~ key - not a drawer here. -->
+        <TabControl x:Name="MainTabs" Background="Transparent" BorderThickness="0" Padding="0">
           <TabItem Header="Workshop" x:Name="WorkshopTab">
             <DockPanel Margin="0,8,0,0">
             <!-- Connection bar: game picker + connect (Workshop-only). -->
@@ -625,10 +613,6 @@
                 </StackPanel>
 
                 <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right">
-                    <!-- Terminal toggle: lives in the Workshop action bar so it's always visible and
-                         inherently Workshop-only. Toggles the drawer at the window bottom. -->
-                    <Button Content="Terminal" Command="{Binding ToggleConsoleCommand}" Margin="0,0,8,0"
-                            ToolTip="Show/hide the live Steam host log and upload progress. Shortcut: ~" />
                     <TextBlock Text="{Binding PublishRequirementsHint}" Style="{StaticResource MutedText}"
                                VerticalAlignment="Center" Margin="0,0,12,0"
                                Visibility="{Binding PublishRequirementsHint, Converter={StaticResource StringToVis}}" />
@@ -928,14 +912,11 @@
 
               <TabControl Background="Transparent" BorderThickness="0" Padding="0">
 
-                <!-- SIMPLE: the working compile form (top) above a fixed, always-visible terminal that
-                     shows only this compile's studiomdl output - separate from the Workshop terminal. -->
+                <!-- SIMPLE: the working compile form. Live studiomdl output goes to the detached
+                     console window (~), so there's no embedded terminal here anymore. -->
                 <TabItem Header="Simple" x:Name="CompileSimpleTab">
-                  <!-- Form on top, terminal below - merged as one panel (no resizable split). The form
-                       sizes to its content; the terminal fills the remaining height. -->
                   <Grid Margin="0,8,0,4">
                     <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto" />
                         <RowDefinition Height="*" MinHeight="100" />
                         <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
@@ -1091,40 +1072,8 @@
                     </ScrollViewer>
                   </Border>
 
-                  <!-- Embedded Compile terminal: live studiomdl output only. Part of the same panel as
-                       the form above (no drag handle) - the form and terminal are merged. -->
-                  <Border Grid.Row="1" Margin="0,8,0,0" Background="{StaticResource BgBrush}"
-                          BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
-                          CornerRadius="3">
-                    <Grid>
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto" />
-                            <RowDefinition Height="*" />
-                        </Grid.RowDefinitions>
-
-                        <!-- Header strip: title + clear -->
-                        <Grid Grid.Row="0" Background="{StaticResource PanelAltBrush}">
-                            <TextBlock Text="Terminal" Margin="10,5" FontWeight="SemiBold"
-                                       VerticalAlignment="Center" />
-                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right"
-                                        VerticalAlignment="Center" Margin="0,2,6,2">
-                                <Button Content="Clear" Padding="10,2" Command="{Binding ClearConsoleCommand}"
-                                        ToolTip="Clear the compile output." />
-                            </StackPanel>
-                        </Grid>
-
-                        <!-- Log text: monospace, read-only but fully selectable, auto-scrolled (code-behind). -->
-                        <TextBox Grid.Row="1" x:Name="CompileConsoleBox" Text="{Binding ConsoleText, Mode=OneWay}"
-                                 IsReadOnly="True" IsReadOnlyCaretVisible="True" IsUndoEnabled="False"
-                                 Background="Transparent" BorderThickness="0" Padding="8,2"
-                                 FontFamily="Consolas" FontSize="12" Foreground="{StaticResource TextBrush}"
-                                 TextWrapping="NoWrap" VerticalContentAlignment="Top"
-                                 VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
-                                 TextChanged="OnCompileConsoleTextChanged" />
-                    </Grid>
-                  </Border>
                   <!-- "Go to file" button: appears after a successful compile; opens Explorer with the .mdl selected. -->
-                  <Button Grid.Row="2" Content="Go to file" Command="{Binding GoToMdlCommand}"
+                  <Button Grid.Row="1" Content="Go to file" Command="{Binding GoToMdlCommand}"
                           HorizontalAlignment="Left" Margin="0,6,0,0" Padding="12,6"
                           Visibility="{Binding LastMdlPath, Converter={StaticResource StringToVis}}"
                           ToolTip="{Binding LastMdlPath}" />
@@ -1159,15 +1108,12 @@
                     </Border>
 
                     <!-- Project open: bar + settings (top), the entries list (with its compile-all
-                         action bar) fills the middle, then a drag handle + a toggleable, resizable
-                         terminal drawer at the bottom (mirrors the Workshop terminal). -->
+                         action bar) fills the rest. Live output goes to the detached console (~). -->
                     <Grid Visibility="{Binding IsProjectOpen, Converter={StaticResource BoolToVis}}">
                       <Grid.RowDefinitions>
                           <RowDefinition Height="Auto" />
                           <RowDefinition Height="Auto" />
                           <RowDefinition Height="*" MinHeight="160" />
-                          <RowDefinition x:Name="AdvConsoleSplitterRowDef" Height="0" />
-                          <RowDefinition x:Name="AdvConsoleRowDef" Height="0" MinHeight="0" />
                       </Grid.RowDefinitions>
 
                       <!-- Project bar: name + path, with New / Open / Close. -->
@@ -1181,7 +1127,7 @@
                             </Grid.ColumnDefinitions>
                             <StackPanel>
                                 <TextBlock Text="{Binding ProjectName}" FontWeight="SemiBold" />
-                                <TextBlock Text="{Binding ProjectPath, Converter={StaticResource PathEllipsis}, ConverterParameter=70}"
+                                <TextBlock Text="{Binding ProjectPath}" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"
                                            Style="{StaticResource MutedText}" ToolTip="{Binding ProjectPath}" />
                             </StackPanel>
                             <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
@@ -1285,7 +1231,7 @@
                                like Game Setup. The sidebar shows the entry name + which .qc it uses. -->
                           <Grid Grid.Row="0">
                               <Grid.ColumnDefinitions>
-                                  <ColumnDefinition Width="230" MinWidth="180" />
+                                  <ColumnDefinition Width="340" MinWidth="230" />
                                   <ColumnDefinition Width="8" />
                                   <ColumnDefinition Width="*" />
                               </Grid.ColumnDefinitions>
@@ -1314,7 +1260,7 @@
                                              ScrollViewer.HorizontalScrollBarVisibility="Disabled">
                                         <ListBox.ItemTemplate>
                                             <DataTemplate>
-                                                <Grid Margin="2,4">
+                                                <Grid Margin="2,8">
                                                     <Grid.ColumnDefinitions>
                                                         <ColumnDefinition Width="Auto" />
                                                         <ColumnDefinition Width="Auto" />
@@ -1334,8 +1280,36 @@
                                                     <StackPanel Grid.Column="2" VerticalAlignment="Center">
                                                         <TextBlock Text="{Binding Name}" FontWeight="SemiBold"
                                                                    TextTrimming="CharacterEllipsis" />
-                                                        <TextBlock Text="{Binding QcSummary}" Style="{StaticResource MutedText}"
-                                                                   TextTrimming="CharacterEllipsis" ToolTip="{Binding ResolvedQcPath}" />
+                                                        <StackPanel Orientation="Horizontal">
+                                                            <TextBlock Text="{Binding QcSummary}" Style="{StaticResource MutedText}"
+                                                                       TextTrimming="CharacterEllipsis" ToolTip="{Binding ResolvedQcPath}" />
+                                                            <!-- Output-destination badge: Subfolder vs in-game (no move). -->
+                                                            <Border Margin="6,0,0,0" Padding="5,0" CornerRadius="8" BorderThickness="1"
+                                                                    VerticalAlignment="Center" ToolTip="{Binding OutputModeTooltip}">
+                                                                <Border.Style>
+                                                                    <Style TargetType="Border">
+                                                                        <Setter Property="BorderBrush" Value="{StaticResource MutedTextBrush}" />
+                                                                        <Style.Triggers>
+                                                                            <DataTrigger Binding="{Binding ShowSubfolder}" Value="True">
+                                                                                <Setter Property="BorderBrush" Value="{StaticResource AccentBrush}" />
+                                                                            </DataTrigger>
+                                                                        </Style.Triggers>
+                                                                    </Style>
+                                                                </Border.Style>
+                                                                <TextBlock Text="{Binding OutputModeLabel}" FontSize="9">
+                                                                    <TextBlock.Style>
+                                                                        <Style TargetType="TextBlock">
+                                                                            <Setter Property="Foreground" Value="{StaticResource MutedTextBrush}" />
+                                                                            <Style.Triggers>
+                                                                                <DataTrigger Binding="{Binding ShowSubfolder}" Value="True">
+                                                                                    <Setter Property="Foreground" Value="{StaticResource AccentBrush}" />
+                                                                                </DataTrigger>
+                                                                            </Style.Triggers>
+                                                                        </Style>
+                                                                    </TextBlock.Style>
+                                                                </TextBlock>
+                                                            </Border>
+                                                        </StackPanel>
                                                     </StackPanel>
                                                     <!-- Status dot: blue while compiling, red after a failed compile. -->
                                                     <Ellipse Grid.Column="3" Width="8" Height="8" Margin="4,0" VerticalAlignment="Center">
@@ -1509,44 +1483,7 @@
                                                    Visibility="{Binding IsCompiling, Converter={StaticResource BoolToVis}}" />
                                   </StackPanel>
                               </StackPanel>
-                              <ToggleButton Content="Terminal" HorizontalAlignment="Right" VerticalAlignment="Center"
-                                            Padding="12,6" IsChecked="{Binding IsTerminalVisible}"
-                                            ToolTip="Show or hide the compile output terminal (toggle with the ~ key)." />
                           </Grid>
-                        </Grid>
-                      </Border>
-
-                      <!-- Drag handle between the entries panel and the terminal drawer (mirrors the
-                           Workshop terminal). Its row + the drawer row are sized in MainWindow.xaml.cs. -->
-                      <GridSplitter Grid.Row="3" Height="12" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
-                                    ResizeBehavior="PreviousAndNext" ResizeDirection="Rows"
-                                    Background="Transparent" Cursor="SizeNS" ToolTip="Drag to resize the terminal."
-                                    Visibility="{Binding IsTerminalVisible, Converter={StaticResource BoolToVis}}" />
-
-                      <!-- Resizable, toggleable terminal drawer: studiomdl / ModelTool output for this project. -->
-                      <Border Grid.Row="4" Margin="0,2,0,0" Background="{StaticResource BgBrush}"
-                              BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="3"
-                              Visibility="{Binding IsTerminalVisible, Converter={StaticResource BoolToVis}}">
-                        <Grid>
-                            <Grid.RowDefinitions>
-                                <RowDefinition Height="Auto" />
-                                <RowDefinition Height="*" />
-                            </Grid.RowDefinitions>
-                            <Grid Grid.Row="0" Background="{StaticResource PanelAltBrush}">
-                                <TextBlock Text="Terminal" Margin="10,5" FontWeight="SemiBold" VerticalAlignment="Center" />
-                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right"
-                                            VerticalAlignment="Center" Margin="0,2,6,2">
-                                    <Button Content="Clear" Padding="10,2" Command="{Binding ClearConsoleCommand}"
-                                            ToolTip="Clear the compile output." />
-                                </StackPanel>
-                            </Grid>
-                            <TextBox Grid.Row="1" x:Name="AdvancedConsoleBox" Text="{Binding ConsoleText, Mode=OneWay}"
-                                     IsReadOnly="True" IsReadOnlyCaretVisible="True" IsUndoEnabled="False"
-                                     Background="Transparent" BorderThickness="0" Padding="8,2"
-                                     FontFamily="Consolas" FontSize="12" Foreground="{StaticResource TextBrush}"
-                                     TextWrapping="NoWrap" VerticalContentAlignment="Top"
-                                     VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
-                                     TextChanged="OnAdvancedConsoleTextChanged" />
                         </Grid>
                       </Border>
                     </Grid>
@@ -1600,15 +1537,13 @@
                       </StackPanel>
                     </Border>
 
-                    <!-- Project open: bar + settings (top), the entries list fills the middle, then a
-                         drag handle + toggleable terminal drawer at the bottom. -->
+                    <!-- Project open: bar + settings (top), the entries list fills the rest.
+                         Live output goes to the detached console (~). -->
                     <Grid Visibility="{Binding IsProjectOpen, Converter={StaticResource BoolToVis}}">
                       <Grid.RowDefinitions>
                           <RowDefinition Height="Auto" />
                           <RowDefinition Height="Auto" />
                           <RowDefinition Height="*" MinHeight="160" />
-                          <RowDefinition x:Name="PkgConsoleSplitterRowDef" Height="0" />
-                          <RowDefinition x:Name="PkgConsoleRowDef" Height="0" MinHeight="0" />
                       </Grid.RowDefinitions>
 
                       <!-- Project bar: name + path, with New / Open / Close. -->
@@ -1622,7 +1557,7 @@
                             </Grid.ColumnDefinitions>
                             <StackPanel>
                                 <TextBlock Text="{Binding ProjectName}" FontWeight="SemiBold" />
-                                <TextBlock Text="{Binding ProjectPath, Converter={StaticResource PathEllipsis}, ConverterParameter=70}"
+                                <TextBlock Text="{Binding ProjectPath}" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"
                                            Style="{StaticResource MutedText}" ToolTip="{Binding ProjectPath}" />
                             </StackPanel>
                             <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
@@ -1662,7 +1597,7 @@
                                like Game Setup. The sidebar shows just folder name + asset count. -->
                           <Grid Grid.Row="0">
                               <Grid.ColumnDefinitions>
-                                  <ColumnDefinition Width="230" MinWidth="180" />
+                                  <ColumnDefinition Width="340" MinWidth="230" />
                                   <ColumnDefinition Width="8" />
                                   <ColumnDefinition Width="*" />
                               </Grid.ColumnDefinitions>
@@ -1691,7 +1626,7 @@
                                              ScrollViewer.HorizontalScrollBarVisibility="Disabled">
                                         <ListBox.ItemTemplate>
                                             <DataTemplate>
-                                                <Grid Margin="2,4">
+                                                <Grid Margin="2,8">
                                                     <Grid.ColumnDefinitions>
                                                         <ColumnDefinition Width="Auto" />
                                                         <ColumnDefinition Width="Auto" />
@@ -1832,6 +1767,18 @@
                                                               Command="{Binding BrowseFolderCommand}" />
                                                   </Grid>
 
+                                                  <!-- Output file name override -->
+                                                  <Grid Margin="0,8,0,0">
+                                                      <Grid.ColumnDefinitions>
+                                                          <ColumnDefinition Width="Auto" />
+                                                          <ColumnDefinition Width="*" />
+                                                      </Grid.ColumnDefinitions>
+                                                      <TextBlock Text="Output" Style="{StaticResource PkgEntryLabel}" />
+                                                      <TextBox Grid.Column="1" Text="{Binding OutputName, UpdateSourceTrigger=PropertyChanged}"
+                                                               Tag="Rename the produced .vpk/.gma to this (extension kept if omitted; overwrites an existing file). Blank keeps the packer's default name."
+                                                               VerticalContentAlignment="Center" />
+                                                  </Grid>
+
                                                   <!-- Per-entry packer command -->
                                                   <Grid Margin="0,8,0,0">
                                                       <Grid.ColumnDefinitions>
@@ -1859,8 +1806,26 @@
                                                       <ItemsControl ItemsSource="{Binding Assets}">
                                                         <ItemsControl.ItemTemplate>
                                                           <DataTemplate>
-                                                            <Border Background="{StaticResource PanelAltBrush}" CornerRadius="3"
-                                                                    Padding="8" Margin="0,0,0,6">
+                                                            <!-- Outline: red live whenever this asset would fail (or be skipped) if packaged right now. -->
+                                                            <Border CornerRadius="3" Padding="8" Margin="0,0,0,6" BorderThickness="2"
+                                                                    ToolTip="{Binding ValidationError}">
+                                                              <Border.Style>
+                                                                <Style TargetType="Border">
+                                                                  <Setter Property="Background" Value="{StaticResource PanelAltBrush}" />
+                                                                  <Setter Property="BorderBrush" Value="Transparent" />
+                                                                  <Style.Triggers>
+                                                                    <DataTrigger Binding="{Binding IsInvalid}" Value="True">
+                                                                      <Setter Property="BorderBrush" Value="{StaticResource DangerBrush}" />
+                                                                      <Setter Property="Effect">
+                                                                        <Setter.Value>
+                                                                          <DropShadowEffect Color="{StaticResource DangerColor}"
+                                                                                            BlurRadius="9" ShadowDepth="0" Opacity="0.7" />
+                                                                        </Setter.Value>
+                                                                      </Setter>
+                                                                    </DataTrigger>
+                                                                  </Style.Triggers>
+                                                                </Style>
+                                                              </Border.Style>
                                                               <Grid>
                                                                 <Grid.ColumnDefinitions>
                                                                   <ColumnDefinition Width="Auto" />
@@ -1946,6 +1911,28 @@
                                                                              VerticalContentAlignment="Center" />
                                                                 </Grid>
 
+                                                                <!-- VTF: create a matching .vmt, with an optional template path inline -->
+                                                                <Grid Margin="0,6,0,0"
+                                                                      Visibility="{Binding IsVtf, Converter={StaticResource BoolToVis}}">
+                                                                    <Grid.ColumnDefinitions>
+                                                                        <ColumnDefinition Width="Auto" />
+                                                                        <ColumnDefinition Width="*" />
+                                                                        <ColumnDefinition Width="Auto" />
+                                                                    </Grid.ColumnDefinitions>
+                                                                    <CheckBox Content="Create VMT" IsChecked="{Binding CreateVmt}"
+                                                                              VerticalAlignment="Center" Margin="0,0,8,0"
+                                                                              Foreground="{StaticResource TextBrush}"
+                                                                              ToolTip="Write a .vmt next to the VTF (same name). Its $basetexture is pointed at this VTF (path under materials/, no extension)." />
+                                                                    <TextBox Grid.Column="1"
+                                                                             Text="{Binding VmtTemplatePath, UpdateSourceTrigger=PropertyChanged}"
+                                                                             Tag="Base .vmt template (relative to the project, or absolute). Its $basetexture is rewritten to this VTF; blank = a minimal VertexLitGeneric material."
+                                                                             VerticalContentAlignment="Center"
+                                                                             Visibility="{Binding ShowVmtTemplate, Converter={StaticResource BoolToVis}}" />
+                                                                    <Button Grid.Column="2" Content="Browse..." Margin="6,0,0,0"
+                                                                            Command="{Binding BrowseVmtTemplateCommand}"
+                                                                            Visibility="{Binding ShowVmtTemplate, Converter={StaticResource BoolToVis}}" />
+                                                                </Grid>
+
                                                                 <!-- Text: regex replaces -->
                                                                 <StackPanel Margin="0,6,0,0"
                                                                             Visibility="{Binding IsText, Converter={StaticResource BoolToVis}}">
@@ -2019,43 +2006,7 @@
                                                    Visibility="{Binding IsPackaging, Converter={StaticResource BoolToVis}}" />
                                   </StackPanel>
                               </StackPanel>
-                              <ToggleButton Content="Terminal" HorizontalAlignment="Right" VerticalAlignment="Center"
-                                            Padding="12,6" IsChecked="{Binding IsTerminalVisible}"
-                                            ToolTip="Show or hide the package output terminal (toggle with the ~ key)." />
                           </Grid>
-                        </Grid>
-                      </Border>
-
-                      <!-- Drag handle between the entries panel and the terminal drawer. -->
-                      <GridSplitter Grid.Row="3" Height="12" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
-                                    ResizeBehavior="PreviousAndNext" ResizeDirection="Rows"
-                                    Background="Transparent" Cursor="SizeNS" ToolTip="Drag to resize the terminal."
-                                    Visibility="{Binding IsTerminalVisible, Converter={StaticResource BoolToVis}}" />
-
-                      <!-- Resizable, toggleable terminal drawer: packer / asset output for this project. -->
-                      <Border Grid.Row="4" Margin="0,2,0,0" Background="{StaticResource BgBrush}"
-                              BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="3"
-                              Visibility="{Binding IsTerminalVisible, Converter={StaticResource BoolToVis}}">
-                        <Grid>
-                            <Grid.RowDefinitions>
-                                <RowDefinition Height="Auto" />
-                                <RowDefinition Height="*" />
-                            </Grid.RowDefinitions>
-                            <Grid Grid.Row="0" Background="{StaticResource PanelAltBrush}">
-                                <TextBlock Text="Terminal" Margin="10,5" FontWeight="SemiBold" VerticalAlignment="Center" />
-                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right"
-                                            VerticalAlignment="Center" Margin="0,2,6,2">
-                                    <Button Content="Clear" Padding="10,2" Command="{Binding ClearConsoleCommand}"
-                                            ToolTip="Clear the package output." />
-                                </StackPanel>
-                            </Grid>
-                            <TextBox Grid.Row="1" x:Name="PackageConsoleBox" Text="{Binding ConsoleText, Mode=OneWay}"
-                                     IsReadOnly="True" IsReadOnlyCaretVisible="True" IsUndoEnabled="False"
-                                     Background="Transparent" BorderThickness="0" Padding="8,2"
-                                     FontFamily="Consolas" FontSize="12" Foreground="{StaticResource TextBrush}"
-                                     TextWrapping="NoWrap" VerticalContentAlignment="Top"
-                                     VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
-                                     TextChanged="OnPackageConsoleTextChanged" />
                         </Grid>
                       </Border>
                     </Grid>
@@ -2122,47 +2073,5 @@
           </TabItem>
         </TabControl>
 
-        <!-- Drag handle (own dedicated row, directly between the editor and the drawer): resizes the
-             editor block (Row 0) vs the terminal drawer (Row 2). Only shown while the terminal is
-             visible; its row collapses to 0 with the drawer (driven in MainWindow.xaml.cs). -->
-        <GridSplitter Grid.Row="1" Height="12" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
-                      ResizeBehavior="PreviousAndNext" ResizeDirection="Rows"
-                      Background="Transparent" Cursor="SizeNS"
-                      ToolTip="Drag to resize the terminal."
-                      Visibility="{Binding IsConsoleVisible, Converter={StaticResource BoolToVis}}" />
-
-        <!-- Console drawer: live log of the Steam host + upload progress -->
-        <Border Grid.Row="2" Background="{StaticResource BgBrush}"
-                BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
-                CornerRadius="3" Margin="0,2,0,0"
-                Visibility="{Binding IsConsoleVisible, Converter={StaticResource BoolToVis}}">
-            <Grid>
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto" />
-                    <RowDefinition Height="*" />
-                </Grid.RowDefinitions>
-
-                <!-- Header strip: title + clear -->
-                <Grid Grid.Row="0" Background="{StaticResource PanelAltBrush}">
-                    <TextBlock Text="Terminal" Margin="10,5" FontWeight="SemiBold"
-                               VerticalAlignment="Center" />
-                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right"
-                                VerticalAlignment="Center" Margin="0,2,6,2">
-                        <Button Content="Clear" Padding="10,2" Command="{Binding ClearConsoleCommand}"
-                                ToolTip="Clear the console output." />
-                    </StackPanel>
-                </Grid>
-
-                <!-- Log text: monospace, read-only but fully selectable for copy/paste, auto-scrolled
-                     to the newest line (see code-behind). -->
-                <TextBox Grid.Row="1" x:Name="ConsoleBox" Text="{Binding ConsoleText, Mode=OneWay}"
-                         IsReadOnly="True" IsReadOnlyCaretVisible="True" IsUndoEnabled="False"
-                         Background="Transparent" BorderThickness="0" Padding="8,2"
-                         FontFamily="Consolas" FontSize="12" Foreground="{StaticResource TextBrush}"
-                         TextWrapping="NoWrap" VerticalContentAlignment="Top"
-                         VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
-                         TextChanged="OnConsoleTextChanged" />
-            </Grid>
-        </Border>
     </Grid>
 </Window>

@@ -16,13 +16,12 @@ namespace PulseWorkshop.App.ViewModels;
 /// entry (for its studiomdl + gameinfo.txt paths), runs studiomdl on one .qc with live output, and
 /// gathers the compiled model files to the chosen destination.
 ///
-/// Live studiomdl output streams into this VM's own terminal (<see cref="ConsoleText"/>), embedded
-/// in the Compile - Simple tab. It is deliberately separate from the Workshop terminal so the two
-/// tools' output never mixes.
+/// Live studiomdl output streams into the shared app-wide console (the detached ConsoleWindow).
 /// </summary>
 public sealed class CompileViewModel : ObservableObject
 {
     private readonly GameSetupViewModel _gameSetup;
+    private readonly ConsoleViewModel _console;
     private readonly CompileConfig _config;
     private readonly string _modelToolPath;
 
@@ -39,9 +38,10 @@ public sealed class CompileViewModel : ObservableObject
     private string _statusMessage = "Ready.";
     private string? _lastMdlPath;
 
-    public CompileViewModel(GameSetupViewModel gameSetup)
+    public CompileViewModel(GameSetupViewModel gameSetup, ConsoleViewModel console)
     {
         _gameSetup = gameSetup;
+        _console = console;
         _config = CompileConfig.Load();
         _modelToolPath = ToolLocator.ResolveModelToolPath();
 
@@ -63,27 +63,9 @@ public sealed class CompileViewModel : ObservableObject
         BrowseQcCommand = new RelayCommand(BrowseQc);
         BrowseWorkFolderCommand = new RelayCommand(BrowseWorkFolder);
         CompileCommand = new AsyncRelayCommand(CompileAsync, () => CanCompile);
-        ClearConsoleCommand = new RelayCommand(ClearConsole);
         GoToMdlCommand = new RelayCommand(GoToMdl, () => !string.IsNullOrEmpty(LastMdlPath));
     }
 
-    // --- Embedded terminal (studiomdl output only) -----------------------------------------
-
-    private const int MaxConsoleLines = 1000;
-
-    // Backing line buffer (oldest first), kept so the line cap can be enforced; the UI binds to
-    // ConsoleText, a plain multi-line string, so the terminal is fully selectable for copy/paste.
-    private readonly List<string> _consoleLines = new();
-    private string _consoleText = string.Empty;
-
-    /// <summary>The Compile terminal's full text, one studiomdl line per row, oldest first.</summary>
-    public string ConsoleText
-    {
-        get => _consoleText;
-        private set => SetField(ref _consoleText, value);
-    }
-
-    public RelayCommand ClearConsoleCommand { get; }
     public RelayCommand GoToMdlCommand { get; }
 
     /// <summary>The .mdl produced by the last successful compile - used to show the "Go to file" button.</summary>
@@ -104,38 +86,13 @@ public sealed class CompileViewModel : ObservableObject
             { UseShellExecute = true });
     }
 
-    private void ClearConsole()
-    {
-        _consoleLines.Clear();
-        ConsoleText = string.Empty;
-    }
+    // studiomdl / ModelTool output arrives one line at a time on background threads, thousands per
+    // compile; the shared console buffers and coalesces them, so we just forward each line (its
+    // severity is auto-classified there).
+    private void Log(string line) => _console.Append(line);
 
-    // studiomdl / ModelTool output arrives on background threads (Process.OutputDataReceived);
-    // marshal to the UI thread before touching the line buffer bound to the terminal.
-    private void Log(string line)
-    {
-        var dispatcher = Application.Current?.Dispatcher;
-        if (dispatcher is null || dispatcher.CheckAccess())
-            AppendConsoleLine(line);
-        else
-            dispatcher.BeginInvoke(() => AppendConsoleLine(line));
-    }
-
-    // Yields a Background-priority item to the dispatcher. Because BeginInvoke uses Normal
-    // priority, awaiting this guarantees that all background-queued log lines have been
-    // appended before we write our own marker lines on the UI thread.
-    private static System.Threading.Tasks.Task FlushLogAsync() =>
-        Application.Current.Dispatcher
-            .InvokeAsync(static () => { }, System.Windows.Threading.DispatcherPriority.Background)
-            .Task;
-
-    private void AppendConsoleLine(string line)
-    {
-        _consoleLines.Add(line);
-        while (_consoleLines.Count > MaxConsoleLines)
-            _consoleLines.RemoveAt(0);
-        ConsoleText = string.Join(Environment.NewLine, _consoleLines);
-    }
+    // Ensures queued background output is on screen before we write our own marker lines.
+    private Task FlushLogAsync() => _console.FlushAsync();
 
     /// <summary>The shared Game Setup roster (game name + resolved tool paths) used for the dropdown.</summary>
     public ObservableCollection<GameSetupEntryViewModel> Games => _gameSetup.Games;
@@ -423,7 +380,6 @@ public sealed class CompileViewModel : ObservableObject
 
         IsCompiling = true;
         LastMdlPath = null;
-        ClearConsole(); // A fresh compile starts with a clean terminal.
         StatusMessage = $"Compiling {Path.GetFileName(QcPath)}...";
         Log($"=== Compiling {QcPath} ===");
 

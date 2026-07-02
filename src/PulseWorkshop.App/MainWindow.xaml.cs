@@ -20,17 +20,12 @@ public partial class MainWindow : Window
 {
     private readonly MainViewModel _vm = new();
 
-    // Persisted UI preferences (console open state + height), loaded on startup, saved on close.
+    // Persisted UI preferences (console window open state + bounds), loaded on startup, saved on close.
     private readonly UiSettings _settings = UiSettings.Load();
 
-    // Remembered console drawer height (px) so toggling hide/show restores the user's drag size.
-    private double _consoleHeightPx = 180;
-
-    // Same, for the Compile - Advanced tab's own terminal drawer.
-    private double _advConsoleHeightPx = 200;
-
-    // Same, for the Package - Advanced tab's own terminal drawer.
-    private double _pkgConsoleHeightPx = 200;
+    // The detached, shared output console. Created lazily on first show and kept for the app's lifetime
+    // (so hiding it with the X or ~ preserves its history and scroll position).
+    private ConsoleWindow? _consoleWindow;
 
     public MainWindow()
     {
@@ -42,126 +37,150 @@ public partial class MainWindow : Window
         _vm.SelectDraftRequested += id => SelectRow(DraftsList, _vm.Drafts.FirstOrDefault(d => d.Draft.Id == id));
         _vm.SelectTemplateRequested += id => SelectRow(TemplatesList, _vm.Templates.FirstOrDefault(t => t.Template.Id == id));
         _vm.PropertyChanged += OnViewModelPropertyChanged;
-        _vm.CompileAdvanced.PropertyChanged += OnAdvancedVmPropertyChanged;
-        _vm.PackageAdvanced.PropertyChanged += OnPackageAdvancedVmPropertyChanged;
+        _vm.Console.PropertyChanged += OnConsolePropertyChanged;
 
-        // Restore the console drawer state. Height must be set before IsConsoleVisible so the toggle
-        // expands the rows to the remembered size.
-        if (_settings.ConsoleHeight > 0)
-            _consoleHeightPx = _settings.ConsoleHeight;
-        _vm.IsConsoleVisible = _settings.ConsoleVisible;
+        // Reopen the console window if it was open last time - deferred to Loaded so this window (the
+        // owner) exists first.
+        Loaded += (_, _) =>
+        {
+            if (_settings.ConsoleVisible)
+                _vm.Console.IsVisible = true;
+        };
 
         Closed += async (_, _) =>
         {
             SaveUiSettings();
+            if (_consoleWindow is not null)
+            {
+                _consoleWindow.AllowClose();
+                _consoleWindow.Close();
+            }
             await _vm.DisposeAsync();
         };
     }
 
+    /// <summary>
+    /// Handles a shell file-association open - either this launch (a <c>.pw_mdlproject</c> passed on the
+    /// command line) or one forwarded from a second instance. Brings the window to the front and, when a
+    /// project path is given, switches to Compile - Advanced and opens it there. An empty message
+    /// (<see cref="SingleInstanceSignal.ActivateOnly"/>) just activates the window.
+    /// </summary>
+    public void HandleShellOpen(string? projectPath)
+    {
+        BringToFront();
+
+        if (string.IsNullOrWhiteSpace(projectPath))
+            return;
+
+        if (_vm.AdvancedProject.OpenProjectFromPath(projectPath))
+        {
+            // Select the outer Compile tab and its Advanced sub-tab (the project workflow lives there).
+            CompileTab.IsSelected = true;
+            CompileAdvancedTab.IsSelected = true;
+        }
+        else
+        {
+            MessageBox.Show(this,
+                $"Couldn't open the project file:\n\n{projectPath}\n\nIt may be missing or not a valid PulseWorkshop project.",
+                "Open project", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+    }
+
+    /// <summary>Restores (if minimized) and brings the window to the foreground.</summary>
+    private void BringToFront()
+    {
+        if (WindowState == WindowState.Minimized)
+            WindowState = WindowState.Normal;
+
+        Activate();
+        // Briefly toggling Topmost forces the window above others without leaving it pinned.
+        Topmost = true;
+        Topmost = false;
+        Focus();
+    }
+
     private void SaveUiSettings()
     {
-        if (_vm.IsConsoleVisible && WorkshopTab.IsSelected && ConsoleRowDef.ActualHeight > 1)
-            _consoleHeightPx = ConsoleRowDef.ActualHeight;
-        _settings.ConsoleVisible = _vm.IsConsoleVisible;
-        _settings.ConsoleHeight = _consoleHeightPx;
+        _settings.ConsoleVisible = _vm.Console.IsVisible;
+        if (_consoleWindow is not null)
+        {
+            // RestoreBounds gives the normal (non-maximized/minimized) placement.
+            var bounds = _consoleWindow.WindowState == WindowState.Normal
+                ? new Rect(_consoleWindow.Left, _consoleWindow.Top, _consoleWindow.Width, _consoleWindow.Height)
+                : _consoleWindow.RestoreBounds;
+            if (bounds.Width > 0 && bounds.Height > 0)
+            {
+                _settings.ConsoleWindowLeft = bounds.Left;
+                _settings.ConsoleWindowTop = bounds.Top;
+                _settings.ConsoleWindowWidth = bounds.Width;
+                _settings.ConsoleWindowHeight = bounds.Height;
+            }
+        }
         _settings.Save();
     }
 
-    // --- Workshop terminal: Workshop-tab-only --------------------------------------------------
-
-    /// <summary>
-    /// Reacts to tab switches (the Compile inner tabs bubble their SelectionChanged up here too).
-    /// The bottom terminal drawer + its toggle belong to the Workshop tab only; every other tab
-    /// hides them (Game Setup has no terminal; Compile has its own embedded one).
-    /// </summary>
-    private void MainTabs_SelectionChanged(object sender, SelectionChangedEventArgs e)
-    {
-        // Selector.SelectionChanged also bubbles up from combo boxes / list boxes - only react to
-        // actual tab switches.
-        if (e.OriginalSource is not TabControl)
-            return;
-
-        UpdateWorkshopTerminalVisibility();
-    }
-
-    /// <summary>
-    /// Collapses the Workshop terminal drawer on non-Workshop tabs. (The toggle button itself lives
-    /// inside the Workshop tab's action bar, so it's already Workshop-only - only the bottom drawer,
-    /// which spans the whole window, needs hiding here.)
-    /// </summary>
-    private void UpdateWorkshopTerminalVisibility() => UpdateConsoleRowHeights();
-
-    // --- Console drawer ------------------------------------------------------------------------
+    // --- Detached console window ---------------------------------------------------------------
 
     private void OnViewModelPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
-        if (e.PropertyName == nameof(MainViewModel.IsConsoleVisible))
-            UpdateConsoleRowHeights();
-        else if (e.PropertyName == nameof(MainViewModel.Editor))
+        if (e.PropertyName == nameof(MainViewModel.Editor))
             // Reset to the first tab when the open editor changes. The TabControl otherwise keeps its
             // SelectedIndex, so leaving it on "Danger zone" then opening a template/draft (where that
             // tab is collapsed) would leave a hidden tab selected with no matching header.
             EditorTabs.SelectedIndex = 0;
     }
 
-    /// <summary>
-    /// Expands/collapses the console rows. RowDefinition.Height can't bind cleanly to a bool, so the
-    /// toggle is driven here; the dragged height is remembered across hide/show.
-    /// </summary>
-    private void UpdateConsoleRowHeights()
+    private void OnConsolePropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
-        // The drawer lives at the window bottom but is a Workshop-only tool, so it stays collapsed
-        // on every other tab regardless of the toggle state. (The drag handle lives in the always-on
-        // terminal bar and hides itself via binding when the drawer is collapsed.)
-        if (_vm.IsConsoleVisible && WorkshopTab.IsSelected)
+        if (e.PropertyName == nameof(ConsoleViewModel.IsVisible))
+            ApplyConsoleVisibility();
+    }
+
+    // Shows or hides the detached console window to match the shared console's IsVisible flag (toggled
+    // by the ~ key or the window's own X).
+    private void ApplyConsoleVisibility()
+    {
+        if (_vm.Console.IsVisible)
         {
-            ConsoleSplitterRowDef.Height = new GridLength(12);
-            ConsoleRowDef.Height = new GridLength(_consoleHeightPx);
-            ConsoleRowDef.MinHeight = 80;
-            ScrollConsoleToEnd();
+            if (_consoleWindow is null)
+            {
+                _consoleWindow = new ConsoleWindow(_vm.Console) { Owner = this };
+                ApplySavedConsoleBounds(_consoleWindow);
+            }
+            _consoleWindow.Show();
+            _consoleWindow.Activate();
         }
         else
         {
-            // Preserve the current (possibly dragged) height before collapsing.
-            if (ConsoleRowDef.ActualHeight > 1)
-                _consoleHeightPx = ConsoleRowDef.ActualHeight;
-            ConsoleRowDef.MinHeight = 0;
-            ConsoleRowDef.Height = new GridLength(0);
-            ConsoleSplitterRowDef.Height = new GridLength(0);
+            _consoleWindow?.Hide();
         }
     }
 
-    // Auto-scroll to the newest line as the log grows, but only when the caret/view is already at the
-    // bottom - otherwise a user scrolled up to read (or select) older output would keep getting yanked
-    // down on every new line.
-    private void OnConsoleTextChanged(object sender, TextChangedEventArgs e)
+    private void ApplySavedConsoleBounds(ConsoleWindow window)
     {
-        if (ConsoleBox.VerticalOffset >= ConsoleBox.ExtentHeight - ConsoleBox.ViewportHeight - 1)
-            ConsoleBox.ScrollToEnd();
+        if (_settings.ConsoleWindowWidth > 0)
+            window.Width = _settings.ConsoleWindowWidth;
+        if (_settings.ConsoleWindowHeight > 0)
+            window.Height = _settings.ConsoleWindowHeight;
+
+        // Only honour a saved position that still lands on a visible screen; otherwise centre on owner.
+        if (_settings.ConsoleWindowLeft is { } left && _settings.ConsoleWindowTop is { } top
+            && IsOnScreen(left, top, window.Width, window.Height))
+        {
+            window.WindowStartupLocation = WindowStartupLocation.Manual;
+            window.Left = left;
+            window.Top = top;
+        }
     }
 
-    private void ScrollConsoleToEnd() => ConsoleBox.ScrollToEnd();
-
-    // Same auto-scroll behavior for the Compile tab's embedded terminal: follow the newest studiomdl
-    // line unless the user has scrolled up to read/select older output.
-    private void OnCompileConsoleTextChanged(object sender, TextChangedEventArgs e)
+    // True when the given rectangle overlaps the WPF virtual screen (guards against a saved position on
+    // a monitor that's since been disconnected).
+    private static bool IsOnScreen(double left, double top, double width, double height)
     {
-        if (CompileConsoleBox.VerticalOffset >= CompileConsoleBox.ExtentHeight - CompileConsoleBox.ViewportHeight - 1)
-            CompileConsoleBox.ScrollToEnd();
-    }
-
-    // Same auto-scroll behavior for the Compile - Advanced tab's embedded terminal.
-    private void OnAdvancedConsoleTextChanged(object sender, TextChangedEventArgs e)
-    {
-        if (AdvancedConsoleBox.VerticalOffset >= AdvancedConsoleBox.ExtentHeight - AdvancedConsoleBox.ViewportHeight - 1)
-            AdvancedConsoleBox.ScrollToEnd();
-    }
-
-    // Same auto-scroll behavior for the Package - Advanced tab's embedded terminal.
-    private void OnPackageConsoleTextChanged(object sender, TextChangedEventArgs e)
-    {
-        if (PackageConsoleBox.VerticalOffset >= PackageConsoleBox.ExtentHeight - PackageConsoleBox.ViewportHeight - 1)
-            PackageConsoleBox.ScrollToEnd();
+        var virtualScreen = new Rect(
+            SystemParameters.VirtualScreenLeft, SystemParameters.VirtualScreenTop,
+            SystemParameters.VirtualScreenWidth, SystemParameters.VirtualScreenHeight);
+        return virtualScreen.IntersectsWith(new Rect(left, top, width, height));
     }
 
     // Let the user drag the Advanced "Global" command box taller/shorter.
@@ -169,60 +188,6 @@ public partial class MainWindow : Window
     {
         var height = GlobalCommandBox.ActualHeight + e.VerticalChange;
         GlobalCommandBox.Height = Math.Clamp(height, 34, 400);
-    }
-
-    private void OnAdvancedVmPropertyChanged(object? sender, PropertyChangedEventArgs e)
-    {
-        if (e.PropertyName == nameof(CompileAdvancedViewModel.IsTerminalVisible))
-            UpdateAdvancedTerminalRows();
-    }
-
-    private void OnPackageAdvancedVmPropertyChanged(object? sender, PropertyChangedEventArgs e)
-    {
-        if (e.PropertyName == nameof(PackageAdvancedViewModel.IsTerminalVisible))
-            UpdatePackageTerminalRows();
-    }
-
-    /// <summary>Expands/collapses the Package terminal drawer rows (mirrors
-    /// <see cref="UpdateAdvancedTerminalRows"/>).</summary>
-    private void UpdatePackageTerminalRows()
-    {
-        if (_vm.PackageAdvanced.IsTerminalVisible)
-        {
-            PkgConsoleSplitterRowDef.Height = new GridLength(12);
-            PkgConsoleRowDef.Height = new GridLength(_pkgConsoleHeightPx);
-            PkgConsoleRowDef.MinHeight = 80;
-            PackageConsoleBox.ScrollToEnd();
-        }
-        else
-        {
-            if (PkgConsoleRowDef.ActualHeight > 1)
-                _pkgConsoleHeightPx = PkgConsoleRowDef.ActualHeight;
-            PkgConsoleRowDef.MinHeight = 0;
-            PkgConsoleRowDef.Height = new GridLength(0);
-            PkgConsoleSplitterRowDef.Height = new GridLength(0);
-        }
-    }
-
-    /// <summary>Expands/collapses the Advanced terminal drawer rows, remembering the dragged height
-    /// across hide/show (mirrors <see cref="UpdateConsoleRowHeights"/>).</summary>
-    private void UpdateAdvancedTerminalRows()
-    {
-        if (_vm.CompileAdvanced.IsTerminalVisible)
-        {
-            AdvConsoleSplitterRowDef.Height = new GridLength(12);
-            AdvConsoleRowDef.Height = new GridLength(_advConsoleHeightPx);
-            AdvConsoleRowDef.MinHeight = 80;
-            AdvancedConsoleBox.ScrollToEnd();
-        }
-        else
-        {
-            if (AdvConsoleRowDef.ActualHeight > 1)
-                _advConsoleHeightPx = AdvConsoleRowDef.ActualHeight;
-            AdvConsoleRowDef.MinHeight = 0;
-            AdvConsoleRowDef.Height = new GridLength(0);
-            AdvConsoleSplitterRowDef.Height = new GridLength(0);
-        }
     }
 
     // --- Advanced entries drag-to-reorder ---------------------------------------------------------
@@ -426,9 +391,9 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// Toggle the terminal drawer with the <c>~</c> / backtick key (like the Source engine console).
-    /// Ignored while a text field has focus so the character can still be typed into titles,
-    /// descriptions, paths, etc.
+    /// Toggle the shared console window with the <c>~</c> / backtick key (like the Source engine
+    /// console), from any tab. Ignored while a text field has focus so the character can still be typed
+    /// into titles, descriptions, paths, etc.
     /// </summary>
     protected override void OnPreviewKeyDown(KeyEventArgs e)
     {
@@ -436,23 +401,8 @@ public partial class MainWindow : Window
         if (e.Key != Key.OemTilde || Keyboard.FocusedElement is TextBox or PasswordBox)
             return;
 
-        // ~ toggles whichever terminal the current tab owns: the Workshop drawer, or the
-        // Compile - Advanced drawer when that tab is showing.
-        if (WorkshopTab.IsSelected)
-        {
-            _vm.IsConsoleVisible = !_vm.IsConsoleVisible;
-            e.Handled = true;
-        }
-        else if (CompileTab.IsSelected && CompileAdvancedTab.IsSelected)
-        {
-            _vm.CompileAdvanced.IsTerminalVisible = !_vm.CompileAdvanced.IsTerminalVisible;
-            e.Handled = true;
-        }
-        else if (PackageTab.IsSelected && PackageAdvancedTab.IsSelected)
-        {
-            _vm.PackageAdvanced.IsTerminalVisible = !_vm.PackageAdvanced.IsTerminalVisible;
-            e.Handled = true;
-        }
+        _vm.Console.IsVisible = !_vm.Console.IsVisible;
+        e.Handled = true;
     }
 
     /// <summary>

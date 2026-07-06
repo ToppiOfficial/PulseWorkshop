@@ -84,6 +84,18 @@ public sealed class ModelCompileService
         return sb.ToString();
     }
 
+    /// <summary>
+    /// Flattens and joins several option strings into one (game-setup default + per-compile /
+    /// per-entry options), collapsing runs of whitespace and dropping empty parts. Order is
+    /// preserved: earlier parts (the game-wide default) come first.
+    /// </summary>
+    public static string CombineOptions(params string?[] parts)
+    {
+        static string Flatten(string? s) =>
+            string.Join(' ', (s ?? string.Empty).Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        return string.Join(' ', parts.Select(Flatten).Where(s => s.Length > 0)).Trim();
+    }
+
     /// <summary>Drops <c>-quiet</c> (incompatible with the verbose output we rely on) and any
     /// duplicate <c>-verbose</c> from the user's options; everything else is kept as-is.</summary>
     private static IEnumerable<string> SanitizeOptions(string extraOptions)

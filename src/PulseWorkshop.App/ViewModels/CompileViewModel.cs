@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Reflection;
@@ -25,7 +26,6 @@ public sealed class CompileViewModel : ObservableObject
     private readonly CompileConfig _config;
     private readonly string _modelToolPath;
 
-    private GameSetupEntryViewModel? _selectedGame;
     private string _qcPath;
     private string _extraOptions;
     private OutputModeChoice _selectedOutputMode;
@@ -37,6 +37,7 @@ public sealed class CompileViewModel : ObservableObject
     private bool _isCompiling;
     private string _statusMessage = "Ready.";
     private string? _lastMdlPath;
+    private string? _mdlInfo;
 
     public CompileViewModel(GameSetupViewModel gameSetup, ConsoleViewModel console)
     {
@@ -53,9 +54,6 @@ public sealed class CompileViewModel : ObservableObject
             : _config.SubfolderName;
         _selectedOutputMode = OutputModes.FirstOrDefault(o => o.Mode == _config.OutputMode)
             ?? OutputModes[0];
-        _selectedGame = _config.LastGameId is { } id
-            ? _gameSetup.Games.FirstOrDefault(g => g.Model.Id == id)
-            : _gameSetup.Games.FirstOrDefault();
         _getMaterialOnCompile = _config.GetMaterialOnCompile;
         _localizeMaterials = _config.LocalizeMaterials;
         _flatPatchShader = _config.FlatPatchShader;
@@ -64,9 +62,48 @@ public sealed class CompileViewModel : ObservableObject
         BrowseWorkFolderCommand = new RelayCommand(BrowseWorkFolder);
         CompileCommand = new AsyncRelayCommand(CompileAsync, () => CanCompile);
         GoToMdlCommand = new RelayCommand(GoToMdl, () => !string.IsNullOrEmpty(LastMdlPath));
+        ViewModelCommand = new RelayCommand(ViewModel, () => !string.IsNullOrEmpty(LastMdlPath));
+        OpenQcCommand = new RelayCommand(OpenQc, () => CanOpenQc);
+
+        // The game dropdown is shared with Package - Simple and Model View: react when either of them
+        // (or Game Setup) changes the active game so this tab's selection and command preview follow.
+        _gameSetup.PropertyChanged += OnGameSetupChanged;
+    }
+
+    private void OnGameSetupChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(GameSetupViewModel.ActiveGame))
+        {
+            OnPropertyChanged(nameof(SelectedGame));
+            OnInputsChanged();
+        }
     }
 
     public RelayCommand GoToMdlCommand { get; }
+
+    /// <summary>Sends the last compiled .mdl to the Model View tab (without launching the viewer).</summary>
+    public RelayCommand ViewModelCommand { get; }
+
+    /// <summary>Raised when the user clicks "View Model": the compiled .mdl path to hand to the
+    /// Model View tab. Wired by <c>MainViewModel</c> to assign the path and switch tabs.</summary>
+    public event Action<string>? ViewModelRequested;
+
+    private void ViewModel()
+    {
+        if (!string.IsNullOrEmpty(LastMdlPath))
+            ViewModelRequested?.Invoke(LastMdlPath);
+    }
+
+    /// <summary>Opens the .qc in the OS default editor (whatever is associated with .qc).</summary>
+    public RelayCommand OpenQcCommand { get; }
+
+    private bool CanOpenQc => !string.IsNullOrWhiteSpace(QcPath) && File.Exists(QcPath);
+
+    private void OpenQc()
+    {
+        if (!CanOpenQc) return;
+        Process.Start(new ProcessStartInfo(QcPath) { UseShellExecute = true });
+    }
 
     /// <summary>The .mdl produced by the last successful compile - used to show the "Go to file" button.</summary>
     public string? LastMdlPath
@@ -75,7 +112,10 @@ public sealed class CompileViewModel : ObservableObject
         private set
         {
             if (SetField(ref _lastMdlPath, value))
+            {
                 GoToMdlCommand.RaiseCanExecuteChanged();
+                ViewModelCommand.RaiseCanExecuteChanged();
+            }
         }
     }
 
@@ -84,6 +124,27 @@ public sealed class CompileViewModel : ObservableObject
         if (string.IsNullOrEmpty(LastMdlPath)) return;
         Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{LastMdlPath}\"")
             { UseShellExecute = true });
+    }
+
+    /// <summary>The compiled .mdl summary (bones, hitboxes, poly count, dependencies) from the last
+    /// successful compile, read by ModelTool and shown read-only under the editor. Not persisted.</summary>
+    public string? MdlInfo
+    {
+        get => _mdlInfo;
+        private set => SetField(ref _mdlInfo, value);
+    }
+
+    /// <summary>Reads the just-compiled .mdl's stats into <see cref="MdlInfo"/>. Best-effort.</summary>
+    private async Task ScanMdlInfoAsync()
+    {
+        if (string.IsNullOrEmpty(LastMdlPath))
+        {
+            MdlInfo = null;
+            return;
+        }
+        var result = await new ModelInfoService()
+            .GetInfoAsync(new ModelInfoRequest(_modelToolPath, LastMdlPath));
+        MdlInfo = result.Success ? result.Text : $"Model info unavailable: {result.Error}";
     }
 
     // studiomdl / ModelTool output arrives one line at a time on background threads, thousands per
@@ -109,18 +170,12 @@ public sealed class CompileViewModel : ObservableObject
     public RelayCommand BrowseWorkFolderCommand { get; }
     public AsyncRelayCommand CompileCommand { get; }
 
+    /// <summary>The shared active game (see <see cref="GameSetupViewModel.ActiveGame"/>). Setting it
+    /// here also updates Package - Simple and Model View, which bind to the same shared selection.</summary>
     public GameSetupEntryViewModel? SelectedGame
     {
-        get => _selectedGame;
-        set
-        {
-            if (SetField(ref _selectedGame, value))
-            {
-                _config.LastGameId = value?.Model.Id;
-                Save();
-                OnInputsChanged();
-            }
-        }
+        get => _gameSetup.ActiveGame;
+        set => _gameSetup.ActiveGame = value;
     }
 
     public string QcPath
@@ -133,6 +188,7 @@ public sealed class CompileViewModel : ObservableObject
                 _config.QcPath = _qcPath;
                 Save();
                 OnInputsChanged();
+                OpenQcCommand.RaiseCanExecuteChanged();
             }
         }
     }
@@ -274,9 +330,14 @@ public sealed class CompileViewModel : ObservableObject
                 || string.IsNullOrWhiteSpace(QcPath))
                 return "Select a game, gameinfo.txt, and a .qc to preview the command.";
 
-            return $"\"{studio}\" {ModelCompileService.BuildArguments(gameInfoDir, QcPath, ExtraOptions)}";
+            return $"\"{studio}\" {ModelCompileService.BuildArguments(gameInfoDir, QcPath, EffectiveOptions)}";
         }
     }
+
+    /// <summary>The per-compile options combined with the selected game's default compiler command
+    /// (Game Setup). The game-wide default comes first, then the options typed on this tab.</summary>
+    private string EffectiveOptions =>
+        ModelCompileService.CombineOptions(SelectedGame?.ModelCompilerCommand, ExtraOptions);
 
     /// <summary>The resolved gameinfo.txt directory (the studiomdl <c>-game</c> argument), or null.</summary>
     private string? GameInfoDir
@@ -372,7 +433,7 @@ public sealed class CompileViewModel : ObservableObject
             StudioMdlPath: SelectedGame.ModelCompiler.ResolvedPath ?? string.Empty,
             GameInfoDir: gameInfoDir,
             QcPath: QcPath,
-            ExtraOptions: ExtraOptions,
+            ExtraOptions: EffectiveOptions,
             DestinationBase: destination);
 
         var service = new ModelCompileService();
@@ -390,6 +451,7 @@ public sealed class CompileViewModel : ObservableObject
 
             if (!result.Success)
             {
+                MdlInfo = null;
                 StatusMessage = $"Compile failed: {result.Error}";
                 Log($"FAILED: {result.Error}");
                 return;
@@ -406,6 +468,9 @@ public sealed class CompileViewModel : ObservableObject
             LastMdlPath = result.CopiedFiles.FirstOrDefault(f =>
                               f.EndsWith(".mdl", StringComparison.OrdinalIgnoreCase))
                           ?? result.CompiledMdls.FirstOrDefault();
+
+            // Same trigger as "Go to file": read the compiled .mdl's stats for the info panel.
+            await ScanMdlInfoAsync();
 
             if (GetMaterialOnCompile && result.CompiledMdls.Count > 0)
             {
@@ -455,6 +520,12 @@ public sealed class CompileViewModel : ObservableObject
         var matDest = compileDest;
 
         Log("--- Material copy ---");
+
+        // The game's vpk.exe lets ModelTool tell "missing" apart from "shipped in a game VPK".
+        var vpkExe = VpkLocator.FindVpkExe(SelectedGame?.PackerTool.ResolvedPath, gameInfoPath);
+        if (vpkExe is null)
+            Log("[Materials] No vpk.exe found for this game - files inside game VPKs will be reported as missing.");
+
         var svc = new MaterialCopyService();
         svc.Output += Log;
         try
@@ -467,7 +538,8 @@ public sealed class CompileViewModel : ObservableObject
                     GameInfoPath: gameInfoPath,
                     DestDir:      matDest,
                     Localize:     LocalizeMaterials,
-                    FlatPatch:    FlatPatchShader);
+                    FlatPatch:    FlatPatchShader,
+                    VpkExePath:   vpkExe);
 
                 var r = await svc.CopyAsync(req);
                 await FlushLogAsync();

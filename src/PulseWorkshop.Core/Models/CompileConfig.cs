@@ -12,9 +12,6 @@ namespace PulseWorkshop.Core.Models;
 /// </summary>
 public sealed class CompileConfig
 {
-    /// <summary>The Game Setup entry last used to compile (resolved back to a game on load).</summary>
-    public Guid? LastGameId { get; set; }
-
     public string QcPath { get; set; } = string.Empty;
 
     /// <summary>Extra studiomdl options the user typed (sanitized at compile time).</summary>

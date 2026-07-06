@@ -177,7 +177,11 @@ internal sealed class HostServer
         };
 
         var result = _workshop.Publish(bridgeEdit);
-        Log($"Publish result: id={result.PublishedFileId} success={result.Success} error='{result.Error}'");
+        // Only mention the error on failure - a literal error='' on a success line would make the
+        // App's console auto-classifier colour the line red.
+        Log(result.Success
+            ? $"Publish result: id={result.PublishedFileId} success=True"
+            : $"Publish result: id={result.PublishedFileId} success=False error='{result.Error}'");
         return new PublishResult
         {
             PublishedFileId = result.PublishedFileId,
@@ -197,7 +201,9 @@ internal sealed class HostServer
 
         Log($"Delete: id={req.PublishedFileId}");
         var result = _workshop.DeletePublishedFile(req.PublishedFileId, UsesUgc);
-        Log($"Delete result: id={req.PublishedFileId} success={result.Success} error='{result.Error}'");
+        Log(result.Success
+            ? $"Delete result: id={req.PublishedFileId} success=True"
+            : $"Delete result: id={req.PublishedFileId} success=False error='{result.Error}'");
         return new DeleteResult { Success = result.Success, Error = result.Error };
     }
 

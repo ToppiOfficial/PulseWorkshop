@@ -1,5 +1,6 @@
 using System.IO;
 using System.Reflection;
+using System.Security.Cryptography;
 
 namespace PulseWorkshop.App.Services;
 
@@ -43,8 +44,10 @@ public static class HostLocator
 
     /// <summary>
     /// In a single-file build the host is bundled into this assembly as an embedded resource. Extract
-    /// it once to a length-stamped cache folder under %LocalAppData% and reuse it on later launches.
-    /// The extracted host is itself a self-extracting single file - it unpacks its own native and
+    /// it once to a content-stamped cache folder under %LocalAppData% and reuse it on later launches.
+    /// The cache key is a hash of the embedded bytes, not their length: a rebuilt host that happens to
+    /// keep the same file size would otherwise collide with the stale copy and never be picked up. The
+    /// extracted host is itself a self-extracting single file - it unpacks its own native and
     /// C++/CLI dependencies (steam_api64.dll, the bridge, Ijwhost) to a temp dir when it runs.
     /// </summary>
     private static bool TryExtractEmbeddedHost(out string hostExePath)
@@ -61,21 +64,25 @@ public static class HostLocator
         if (stream is null)
             return false;
 
-        // Stamp the cache folder with the payload length so a new host build extracts to a fresh
-        // path instead of fighting a possibly-locked older copy.
+        // Read the embedded bytes once and stamp the cache folder with their content hash so a new
+        // host build always extracts to a fresh path instead of reusing a stale same-size copy.
+        using var mem = new MemoryStream();
+        stream.CopyTo(mem);
+        var bytes = mem.ToArray();
+        var hash  = Convert.ToHexString(SHA256.HashData(bytes)).Substring(0, 16).ToLowerInvariant();
+
         var cacheDir = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "PulseWorkshop", "host", stream.Length.ToString());
+            "PulseWorkshop", "host", hash);
         var target = Path.Combine(cacheDir, HostExeName);
 
-        if (!File.Exists(target) || new FileInfo(target).Length != stream.Length)
+        if (!File.Exists(target) || new FileInfo(target).Length != bytes.Length)
         {
             Directory.CreateDirectory(cacheDir);
             // Write to a temp file in the same folder, then atomically move into place so a half-written
             // exe is never observed (and concurrent launches don't clobber each other).
             var temp = Path.Combine(cacheDir, HostExeName + "." + Guid.NewGuid().ToString("N") + ".tmp");
-            using (var file = File.Create(temp))
-                stream.CopyTo(file);
+            File.WriteAllBytes(temp, bytes);
 
             try
             {

@@ -1,0 +1,37 @@
+<Window x:Class="PulseWorkshop.App.TextPreviewWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Background="{StaticResource BgBrush}"
+        Width="720" Height="560"
+        MinWidth="320" MinHeight="200"
+        WindowStartupLocation="CenterOwner"
+        ShowInTaskbar="False">
+
+    <!-- Raw-text preview opened by clicking a text asset's thumbnail. Shows the file's contents in a
+         read-only monospace box (set in code-behind); Esc closes. Title carries the file name; the
+         bottom caption shows format, line count, and file size. -->
+    <DockPanel Margin="8">
+
+        <!-- Info caption pinned to the bottom. -->
+        <Border DockPanel.Dock="Bottom" Margin="0,6,0,0"
+                Background="{StaticResource PanelBrush}" BorderBrush="{StaticResource BorderBrush}"
+                BorderThickness="1" CornerRadius="3" Padding="8,3">
+            <TextBlock x:Name="InfoText" Foreground="{StaticResource MutedTextBrush}" FontSize="12" />
+        </Border>
+
+        <TextBox x:Name="PreviewText"
+                 IsReadOnly="True"
+                 IsReadOnlyCaretVisible="True"
+                 FontFamily="Consolas, Courier New, monospace"
+                 FontSize="13"
+                 Background="{StaticResource PanelBrush}"
+                 Foreground="{StaticResource TextBrush}"
+                 BorderBrush="{StaticResource BorderBrush}"
+                 BorderThickness="1"
+                 Padding="6"
+                 TextWrapping="NoWrap"
+                 AcceptsReturn="True"
+                 VerticalScrollBarVisibility="Auto"
+                 HorizontalScrollBarVisibility="Auto" />
+    </DockPanel>
+</Window>

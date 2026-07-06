@@ -48,6 +48,13 @@ public sealed record GameConfig
     public required string ContentFileExtension { get; init; } // e.g. ".vpk", ".gma"
 
     /// <summary>
+    /// Candidate process names (without the ".exe") of the game's running executable. Used by the
+    /// App's "Launch game" flow to detect when the game has actually started before it re-hooks the
+    /// Steam session. Empty when unknown (the flow then just reconnects after launching).
+    /// </summary>
+    public IReadOnlyList<string> ProcessNames { get; init; } = Array.Empty<string>();
+
+    /// <summary>
     /// True when the game's Workshop uses the modern ISteamUGC upload path (CreateItem +
     /// SubmitItemUpdate); false for the legacy Steam Cloud (ISteamRemoteStorage) Workshop.
     /// GMod is UGC (mirrors Crowbar's UsesSteamUGC and gmpublish); L4D2 has no upload depot and
@@ -77,6 +84,7 @@ public static class KnownGames
         AppId = LeftForDead2AppId,
         DisplayName = "Left 4 Dead 2",
         ContentFileExtension = ".vpk",
+        ProcessNames = new[] { "left4dead2" },
         TagCategories = new[]
         {
             new TagCategory("Survivors", new[]
@@ -119,6 +127,8 @@ public static class KnownGames
         DisplayName = "Garry's Mod",
         ContentFileExtension = ".gma",
         UsesUgcUpload = true,
+        // The x86-64 branch runs gmod.exe; the default 32-bit branch runs hl2.exe.
+        ProcessNames = new[] { "gmod", "hl2" },
         TagCategories = new[]
         {
             new TagCategory("Type", new[]

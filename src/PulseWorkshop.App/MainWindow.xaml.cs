@@ -34,17 +34,45 @@ public partial class MainWindow : Window
         Title = $"PulseWorkshop v{AppVersion}";
         _vm.NavigateToDrafts += () => DraftsTab.IsSelected = true;
         _vm.NavigateToTemplates += () => TemplatesTab.IsSelected = true;
+        _vm.NavigateToModelView += () => ModelViewTab.IsSelected = true;
+        _vm.NavigateToUnpack += () => UnpackTab.IsSelected = true;
         _vm.SelectDraftRequested += id => SelectRow(DraftsList, _vm.Drafts.FirstOrDefault(d => d.Draft.Id == id));
         _vm.SelectTemplateRequested += id => SelectRow(TemplatesList, _vm.Templates.FirstOrDefault(t => t.Template.Id == id));
         _vm.PropertyChanged += OnViewModelPropertyChanged;
         _vm.Console.PropertyChanged += OnConsolePropertyChanged;
 
-        // Reopen the console window if it was open last time - deferred to Loaded so this window (the
-        // owner) exists first.
+        // "Go to file" selects a row after navigating - bring it into view.
+        _vm.Unpack.ScrollFileIntoView += row =>
+            Dispatcher.BeginInvoke(() => UnpackFiles.ScrollIntoView(row),
+                System.Windows.Threading.DispatcherPriority.Background);
+
+        // Reopen the console window if it was open last time - deferred to Loaded so the main window
+        // is up first.
         Loaded += (_, _) =>
         {
             if (_settings.ConsoleVisible)
                 _vm.Console.IsVisible = true;
+
+            // Restore the last-active top-level tab (out-of-range indices are ignored by WPF).
+            if (_settings.MainTabIndex >= 0 && _settings.MainTabIndex < MainTabs.Items.Count)
+                MainTabs.SelectedIndex = _settings.MainTabIndex;
+
+            // Restore the last-active Simple/Advanced sub-tab of the Compile and Package tabs.
+            if (_settings.CompileSubTabIndex >= 0 && _settings.CompileSubTabIndex < CompileTabs.Items.Count)
+                CompileTabs.SelectedIndex = _settings.CompileSubTabIndex;
+            if (_settings.PackageSubTabIndex >= 0 && _settings.PackageSubTabIndex < PackageTabs.Items.Count)
+                PackageTabs.SelectedIndex = _settings.PackageSubTabIndex;
+        };
+
+        // Files referenced by package assets can be created or deleted while the user is in another
+        // program; re-check them whenever the window regains focus so thumbnails and validation
+        // catch up without the path having to be retyped.
+        Activated += (_, _) =>
+        {
+            _vm.Package.RefreshFileState();
+            _vm.PackageAdvanced.RefreshFileState();
+            _vm.Textures.RefreshFileState();
+            _vm.ModelView.RefreshFileState();
         };
 
         Closed += async (_, _) =>
@@ -60,19 +88,38 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// Handles a shell file-association open - either this launch (a <c>.pw_mdlproject</c> passed on the
-    /// command line) or one forwarded from a second instance. Brings the window to the front and, when a
-    /// project path is given, switches to Compile - Advanced and opens it there. An empty message
-    /// (<see cref="SingleInstanceSignal.ActivateOnly"/>) just activates the window.
+    /// Handles a shell file-association / "Open with" open - either this launch (a path passed on the
+    /// command line) or one forwarded from a second instance. Brings the window to the front and opens
+    /// the file in the tab that owns its type: <c>.pw_textureproject</c> -> Textures,
+    /// <c>.pw_mdlproject</c> -> Compile - Advanced, <c>.vpk</c>/<c>.gma</c>/<c>gameinfo.txt</c> ->
+    /// Unpack. An empty message (<see cref="SingleInstanceSignal.ActivateOnly"/>) just activates the
+    /// window.
     /// </summary>
-    public void HandleShellOpen(string? projectPath)
+    public void HandleShellOpen(string? openPath)
     {
         BringToFront();
 
-        if (string.IsNullOrWhiteSpace(projectPath))
+        if (string.IsNullOrWhiteSpace(openPath))
             return;
 
-        if (_vm.AdvancedProject.OpenProjectFromPath(projectPath))
+        // Packed archives (and a game's gameinfo.txt) open in the Unpack tab.
+        if (PulseWorkshop.Core.Unpack.PackedArchiveLoader.CanOpen(openPath))
+        {
+            UnpackTab.IsSelected = true;
+            _ = _vm.Unpack.OpenFromPathAsync(openPath);
+            return;
+        }
+
+        if (openPath.EndsWith(".pw_textureproject", StringComparison.OrdinalIgnoreCase))
+        {
+            if (_vm.Textures.OpenProjectFromPath(openPath))
+                TexturesTab.IsSelected = true;
+            else
+                ShellOpenFailed(openPath);
+            return;
+        }
+
+        if (_vm.AdvancedProject.OpenProjectFromPath(openPath))
         {
             // Select the outer Compile tab and its Advanced sub-tab (the project workflow lives there).
             CompileTab.IsSelected = true;
@@ -80,11 +127,55 @@ public partial class MainWindow : Window
         }
         else
         {
-            MessageBox.Show(this,
-                $"Couldn't open the project file:\n\n{projectPath}\n\nIt may be missing or not a valid PulseWorkshop project.",
-                "Open project", MessageBoxButton.OK, MessageBoxImage.Warning);
+            ShellOpenFailed(openPath);
         }
     }
+
+    // --- Window-level file drop -------------------------------------------------------------------
+    // Dropping a project file or an unpackable archive anywhere on the window (that isn't over a more
+    // specific drop zone - the editor's content/preview zones handle and mark their own drops) routes
+    // it to the tab that owns its type, exactly as a shell "Open with" launch does.
+
+    private void Window_DragOver(object sender, DragEventArgs e)
+    {
+        e.Effects = GetRoutableDroppedFile(e) is not null ? DragDropEffects.Copy : DragDropEffects.None;
+        e.Handled = true;
+    }
+
+    private void Window_Drop(object sender, DragEventArgs e)
+    {
+        if (GetRoutableDroppedFile(e) is { } path)
+        {
+            e.Handled = true;
+            HandleShellOpen(path);
+        }
+    }
+
+    /// <summary>The first dropped file the window can route to a tab (a <c>.pw_mdlproject</c> /
+    /// <c>.pw_textureproject</c> project, or a <c>.vpk</c>/<c>.gma</c>/<c>gameinfo.txt</c> archive),
+    /// or null if the drop carries no such file.</summary>
+    private static string? GetRoutableDroppedFile(DragEventArgs e)
+    {
+        if (!e.Data.GetDataPresent(DataFormats.FileDrop)
+            || e.Data.GetData(DataFormats.FileDrop) is not string[] files)
+            return null;
+
+        foreach (var file in files)
+        {
+            if (!File.Exists(file))
+                continue;
+            if (file.EndsWith(".pw_mdlproject", StringComparison.OrdinalIgnoreCase)
+                || file.EndsWith(".pw_textureproject", StringComparison.OrdinalIgnoreCase)
+                || PulseWorkshop.Core.Unpack.PackedArchiveLoader.CanOpen(file))
+                return file;
+        }
+        return null;
+    }
+
+    private void ShellOpenFailed(string projectPath) =>
+        MessageBox.Show(this,
+            $"Couldn't open the project file:\n\n{projectPath}\n\nIt may be missing or not a valid PulseWorkshop project.",
+            "Open project", MessageBoxButton.OK, MessageBoxImage.Warning);
 
     /// <summary>Restores (if minimized) and brings the window to the foreground.</summary>
     private void BringToFront()
@@ -102,6 +193,11 @@ public partial class MainWindow : Window
     private void SaveUiSettings()
     {
         _settings.ConsoleVisible = _vm.Console.IsVisible;
+        _settings.MainTabIndex = MainTabs.SelectedIndex;
+        _settings.CompileSubTabIndex = CompileTabs.SelectedIndex;
+        _settings.PackageSubTabIndex = PackageTabs.SelectedIndex;
+        // Remember the open Unpack archive so it can be reopened next session (lazily, on tab entry).
+        _settings.UnpackLastArchive = _vm.Unpack.IsArchiveOpen ? _vm.Unpack.ArchivePath : null;
         if (_consoleWindow is not null)
         {
             // RestoreBounds gives the normal (non-maximized/minimized) placement.
@@ -124,10 +220,12 @@ public partial class MainWindow : Window
     private void OnViewModelPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
         if (e.PropertyName == nameof(MainViewModel.Editor))
-            // Reset to the first tab when the open editor changes. The TabControl otherwise keeps its
-            // SelectedIndex, so leaving it on "Danger zone" then opening a template/draft (where that
-            // tab is collapsed) would leave a hidden tab selected with no matching header.
-            EditorTabs.SelectedIndex = 0;
+            // Preserve the user's current editor tab across entry changes. The only tab that can
+            // disappear is "Danger zone" (index 2, shown only for published items); if it's selected
+            // and the new editor isn't a published item, fall back to the first tab so we don't leave
+            // a collapsed tab selected with no matching header.
+            if (EditorTabs.SelectedIndex == 2 && _vm.Editor?.IsEditingPublished != true)
+                EditorTabs.SelectedIndex = 0;
     }
 
     private void OnConsolePropertyChanged(object? sender, PropertyChangedEventArgs e)
@@ -144,7 +242,9 @@ public partial class MainWindow : Window
         {
             if (_consoleWindow is null)
             {
-                _consoleWindow = new ConsoleWindow(_vm.Console) { Owner = this };
+                // Deliberately not owned: an owned window minimizes/restores with its owner, and the
+                // console should live independently of the main window (it's closed explicitly at shutdown).
+                _consoleWindow = new ConsoleWindow(_vm.Console);
                 ApplySavedConsoleBounds(_consoleWindow);
             }
             _consoleWindow.Show();
@@ -163,7 +263,7 @@ public partial class MainWindow : Window
         if (_settings.ConsoleWindowHeight > 0)
             window.Height = _settings.ConsoleWindowHeight;
 
-        // Only honour a saved position that still lands on a visible screen; otherwise centre on owner.
+        // Only honour a saved position that still lands on a visible screen; otherwise centre on screen.
         if (_settings.ConsoleWindowLeft is { } left && _settings.ConsoleWindowTop is { } top
             && IsOnScreen(left, top, window.Width, window.Height))
         {
@@ -340,6 +440,79 @@ public partial class MainWindow : Window
         return (source as ListBoxItem)?.DataContext as PackageEntryViewModel;
     }
 
+    // --- Texture groups drag-to-reorder (mirrors the Package entries reorder) ----------------------
+
+    private DragAdorner? _texDragAdorner;
+    private AdornerLayer? _texDragLayer;
+
+    private void TextureGroups_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (e.OriginalSource is not FrameworkElement { Tag: "DragHandle" } handle
+            || handle.DataContext is not TextureGroupViewModel item)
+            return;
+
+        if (TextureGroupsList.ItemContainerGenerator.ContainerFromItem(item) is UIElement container)
+        {
+            _texDragLayer = AdornerLayer.GetAdornerLayer(TextureGroupsList);
+            if (_texDragLayer is not null)
+            {
+                _texDragAdorner = new DragAdorner(TextureGroupsList, container);
+                _texDragLayer.Add(_texDragAdorner);
+            }
+        }
+
+        try
+        {
+            DragDrop.DoDragDrop(TextureGroupsList, item, DragDropEffects.Move);
+        }
+        finally
+        {
+            if (_texDragAdorner is not null)
+            {
+                _texDragLayer?.Remove(_texDragAdorner);
+                _texDragAdorner = null;
+                _texDragLayer = null;
+            }
+        }
+    }
+
+    private void TextureGroups_DragOver(object sender, DragEventArgs e)
+    {
+        if (_texDragAdorner is not null)
+        {
+            var pos = e.GetPosition(TextureGroupsList);
+            _texDragAdorner.SetPosition(pos.X, pos.Y);
+        }
+        e.Effects = DragDropEffects.Move;
+    }
+
+    private void TextureGroups_Drop(object sender, DragEventArgs e)
+    {
+        if (e.Data.GetData(typeof(TextureGroupViewModel)) is not TextureGroupViewModel dragged
+            || DataContext is not MainViewModel vm)
+            return;
+
+        var list = vm.Textures.Groups;
+        var oldIndex = list.IndexOf(dragged);
+        if (oldIndex < 0)
+            return;
+
+        var target = FindTextureGroupUnder(e.OriginalSource as DependencyObject);
+        var newIndex = target is null ? list.Count - 1 : list.IndexOf(target);
+        if (newIndex < 0 || newIndex == oldIndex)
+            return;
+
+        list.Move(oldIndex, newIndex);
+        vm.Textures.Save();
+    }
+
+    private static TextureGroupViewModel? FindTextureGroupUnder(DependencyObject? source)
+    {
+        while (source is not null and not ListBoxItem)
+            source = VisualTreeHelper.GetParent(source);
+        return (source as ListBoxItem)?.DataContext as TextureGroupViewModel;
+    }
+
     /// <summary>A translucent ghost of the dragged row, drawn in the adorner layer and moved to
     /// follow the cursor - so it's obvious a reorder is in progress.</summary>
     private sealed class DragAdorner : Adorner
@@ -388,6 +561,166 @@ public partial class MainWindow : Window
             group.Children.Add(new TranslateTransform(_left, _top));
             return group;
         }
+    }
+
+    /// <summary>
+    /// Opens the preview for a package asset's thumbnail: the full-size image when the thumbnail
+    /// shows real pixels, or the raw text in a <see cref="TextPreviewWindow"/> for a text asset.
+    /// Only acts when the input file still exists on disk.
+    /// </summary>
+    private void AssetThumbnail_Click(object sender, MouseButtonEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is not PackageAssetViewModel asset
+            || asset.ResolvedInputPath() is not { } path)
+            return;
+
+        if (asset.HasImagePreview)
+            ImagePreviewWindow.ShowPreview(this, path);
+        else if (asset.HasTextPreview)
+            TextPreviewWindow.ShowPreview(this, path);
+    }
+
+    // --- Unpack tab -------------------------------------------------------------------------------
+
+    // Guards the one-shot lazy reopen of the last-session Unpack archive: we restore it the first
+    // time the tab is entered, never again (so a manual Close stays closed).
+    private bool _unpackRestored;
+
+    /// <summary>
+    /// Fires when the outer tab strip changes. The only thing it drives is the lazy Unpack restore:
+    /// reopening the last-session archive is deferred until the user actually enters the Unpack tab,
+    /// so restoring a heavy gameinfo mount never slows the app's launch.
+    /// </summary>
+    private void MainTabs_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        // SelectionChanged bubbles from the inner tab controls (Compile/Package/editor) too - only
+        // react to the outer strip's own selection.
+        if (!ReferenceEquals(e.OriginalSource, MainTabs))
+            return;
+        TryRestoreUnpackArchive();
+    }
+
+    private void TryRestoreUnpackArchive()
+    {
+        // UnpackTab can still be null if a selection event fires mid-InitializeComponent.
+        if (_unpackRestored || UnpackTab is null || !UnpackTab.IsSelected)
+            return;
+        _unpackRestored = true; // one-shot, even if the reopen below is skipped or fails
+
+        var path = _settings.UnpackLastArchive;
+        // Nothing saved, something already open, or the file is gone since last session: skip
+        // silently rather than surface an error just for entering the tab.
+        if (string.IsNullOrEmpty(path) || _vm.Unpack.IsArchiveOpen || !File.Exists(path))
+            return;
+        _ = _vm.Unpack.OpenFromPathAsync(path);
+    }
+
+    /// <summary>Mirrors the Unpack tree's read-only SelectedItem into the view model. Only a real
+    /// folder becomes the selection; a transition to null comes from the view model dropping the
+    /// tree's visual selection when the file list takes over as the active pane, so it is ignored
+    /// (the current folder stays the navigation context and the list stays populated).</summary>
+    private void UnpackTree_SelectedItemChanged(object sender, RoutedPropertyChangedEventArgs<object> e)
+    {
+        if (e.NewValue is UnpackFolderViewModel folder)
+            _vm.Unpack.SelectedFolder = folder;
+    }
+
+    /// <summary>
+    /// Double-click in the file list: a folder row navigates into that folder (Explorer-style); a
+    /// file row extracts to a temp file and opens it with the user's default application for that
+    /// type (so a .vtf lands in their VTF viewer instead of an internal raw-binary dump). Windows
+    /// shows its "Open with" picker when no handler is registered.
+    /// </summary>
+    private async void UnpackFiles_MouseDoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        // MouseDoubleClick fires for any button - only the left one opens/navigates, so a
+        // double right-click (which also raises this) doesn't get treated as a left action.
+        if (e.ChangedButton != MouseButton.Left)
+            return;
+
+        // Only act when the double-click landed on a real row (not the empty list area).
+        if (e.OriginalSource is not DependencyObject origin
+            || ItemsControl.ContainerFromElement(UnpackFiles, origin)
+               is not ListBoxItem { DataContext: UnpackFileViewModel row })
+            return;
+
+        if (row.Folder is { } folder)
+        {
+            _vm.Unpack.NavigateToFolder(folder);
+            return;
+        }
+        if (row.Entry is not { } entry)
+            return;
+
+        var path = await _vm.Unpack.ExtractForPreviewAsync(entry);
+        if (path is null)
+            return;
+
+        try
+        {
+            // UseShellExecute routes through the shell so the file opens in whatever app the user
+            // has associated (or the "Open with" dialog when there's no handler).
+            Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            _vm.Unpack.ReportPreviewOpenFailed(entry, ex);
+        }
+    }
+
+    /// <summary>Enter in the Unpack search box: skip the debounce and search right away.</summary>
+    private void UnpackFilter_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Enter)
+            return;
+        // Push the in-progress text through the binding first (it updates on PropertyChanged, but
+        // be explicit so Enter always searches what is on screen).
+        (sender as TextBox)?.GetBindingExpression(TextBox.TextProperty)?.UpdateSource();
+        _vm.Unpack.ApplyFilterNow();
+        e.Handled = true;
+    }
+
+    /// <summary>Column-header click: sort the file list by the header's column (Tag names it).</summary>
+    private void UnpackSort_Click(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.Tag is string tag
+            && Enum.TryParse<UnpackSortColumn>(tag, out var column))
+            _vm.Unpack.SortBy(column);
+    }
+
+    /// <summary>Right-click in the file list selects the row under the cursor (unless it is already
+    /// part of the current multi-selection), so the context menu acts on what was clicked.</summary>
+    private void UnpackFiles_PreviewMouseRightButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (e.OriginalSource is not DependencyObject origin
+            || ItemsControl.ContainerFromElement(UnpackFiles, origin) is not ListBoxItem item)
+            return;
+        if (!item.IsSelected)
+        {
+            UnpackFiles.SelectedItems.Clear();
+            item.IsSelected = true;
+        }
+    }
+
+    /// <summary>Context menu "Export selected...": export the highlighted rows (same as the button).</summary>
+    private void UnpackExportMenu_Click(object sender, RoutedEventArgs e)
+    {
+        if (_vm.Unpack.ExportSelectedCommand.CanExecute(null))
+            _vm.Unpack.ExportSelectedCommand.Execute(null);
+    }
+
+    /// <summary>Tree context menu "Export folder...": export the right-clicked folder recursively.</summary>
+    private void UnpackExportFolderMenu_Click(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is UnpackFolderViewModel folder)
+            _ = _vm.Unpack.ExportFolderAsync(folder);
+    }
+
+    /// <summary>Context menu "Go to file": navigate to the folder that contains the clicked row.</summary>
+    private void UnpackGoToMenu_Click(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is UnpackFileViewModel row)
+            _vm.Unpack.GoToFile(row);
     }
 
     /// <summary>
@@ -607,6 +940,42 @@ public partial class MainWindow : Window
             _vm.CloneDraft(item.Draft);
     }
 
+    private void DraftClearSelection_Click(object sender, RoutedEventArgs e) => _vm.SetAllDraftsSelected(false);
+
+    /// <summary>
+    /// Bulk publish/save: confirms first (spelling out how many are edits vs new items), then
+    /// publishes every ticked draft. New-item drafts missing requirements are skipped and reported.
+    /// </summary>
+    private async void PublishSelectedDrafts_Click(object sender, RoutedEventArgs e)
+    {
+        if (!_vm.HasDraftSelection || _vm.IsBusy)
+            return;
+
+        var summary = _vm.DescribeSelectedDraftPublish();
+        var message =
+            $"This will {summary} for the {_vm.SelectedDraftCount} selected draft(s).\n\n" +
+            "New-item drafts still missing a title, description, content file, or preview image are " +
+            "skipped. Continue?";
+
+        if (Confirm("Publish selected drafts", message))
+            await _vm.PublishSelectedDraftsAsync();
+    }
+
+    private void DeleteSelectedDrafts_Click(object sender, RoutedEventArgs e)
+    {
+        if (!_vm.HasDraftSelection || _vm.IsBusy)
+            return;
+
+        var message =
+            $"Revert the {_vm.SelectedDraftCount} selected draft(s)?\n\n" +
+            "For drafts that track edits to a published item, this discards the unsaved edits and " +
+            "reverts to the published item. Unpublished drafts are removed. The Workshop items " +
+            "themselves are NOT deleted.";
+
+        if (Confirm("Revert selected drafts", message))
+            _vm.DeleteSelectedDrafts();
+    }
+
     private void TemplateUse_Click(object sender, RoutedEventArgs e)
     {
         if (_vm.IsBusy || RowData<TemplateListItemViewModel>(sender) is not { } item)
@@ -691,6 +1060,19 @@ public partial class MainWindow : Window
         if (Editor is null)
             return;
 
+        // Directory mode (editing a published item with a known filename): pick a folder and let the
+        // editor auto-resolve the published file from it.
+        if (Editor.UsesDirectoryContentInput)
+        {
+            var folder = new OpenFolderDialog
+            {
+                Title = $"Choose the folder containing {Editor.PublishedContentFileName}",
+            };
+            if (folder.ShowDialog(this) == true)
+                Editor.ContentDirectory = folder.FolderName;
+            return;
+        }
+
         var ext = Editor.ContentFileExtension; // e.g. ".vpk"
         var dialog = new OpenFileDialog
         {
@@ -704,7 +1086,11 @@ public partial class MainWindow : Window
 
     private void ContentDrop_DragOver(object sender, DragEventArgs e)
     {
-        e.Effects = IsSingleFileDrop(e, Editor?.ContentFileExtension) ? DragDropEffects.Copy : DragDropEffects.None;
+        // Directory mode accepts a folder (auto-pick) or a content file (swap entirely).
+        bool ok = Editor is { UsesDirectoryContentInput: true }
+            ? GetDroppedDirectory(e) is not null || IsSingleFileDrop(e, Editor.ContentFileExtension)
+            : IsSingleFileDrop(e, Editor?.ContentFileExtension);
+        e.Effects = ok ? DragDropEffects.Copy : DragDropEffects.None;
         e.Handled = true;
     }
 
@@ -712,9 +1098,20 @@ public partial class MainWindow : Window
     {
         if (Editor is null)
             return;
-        var path = GetDroppedFile(e, Editor.ContentFileExtension);
-        if (path is not null)
-            Editor.ContentFile = path;
+
+        if (Editor.UsesDirectoryContentInput)
+        {
+            // A dropped folder or a dropped content file both flow through ContentDirectory, which
+            // resolves a file path as-is and a folder by auto-picking the published filename.
+            var path = GetDroppedDirectory(e) ?? GetDroppedFile(e, Editor.ContentFileExtension);
+            if (path is not null)
+                Editor.ContentDirectory = path;
+            return;
+        }
+
+        var file = GetDroppedFile(e, Editor.ContentFileExtension);
+        if (file is not null)
+            Editor.ContentFile = file;
     }
 
     // --- Preview image zone --------------------------------------------------------------------
@@ -755,6 +1152,16 @@ public partial class MainWindow : Window
 
     private static bool IsSingleFileDrop(DragEventArgs e, params string?[] allowedExts) =>
         GetDroppedFile(e, allowedExts) is not null;
+
+    /// <summary>The path of a single dropped folder, or null if the drop isn't exactly one directory.</summary>
+    private static string? GetDroppedDirectory(DragEventArgs e)
+    {
+        if (!e.Data.GetDataPresent(DataFormats.FileDrop))
+            return null;
+        if (e.Data.GetData(DataFormats.FileDrop) is not string[] paths || paths.Length != 1)
+            return null;
+        return Directory.Exists(paths[0]) ? paths[0] : null;
+    }
 
     private static string? GetDroppedFile(DragEventArgs e, params string?[] allowedExts)
     {

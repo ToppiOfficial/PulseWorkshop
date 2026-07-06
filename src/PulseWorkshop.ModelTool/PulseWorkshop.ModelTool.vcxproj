@@ -63,16 +63,20 @@
   <ItemGroup>
     <ClInclude Include="kv_parser.h" />
     <ClInclude Include="mdl_reader.h" />
+    <ClInclude Include="model_stats.h" />
     <ClInclude Include="gameinfo.h" />
     <ClInclude Include="material_copy.h" />
+    <ClInclude Include="vpk_index.h" />
   </ItemGroup>
 
   <ItemGroup>
     <ClCompile Include="main.cpp" />
     <ClCompile Include="kv_parser.cpp" />
     <ClCompile Include="mdl_reader.cpp" />
+    <ClCompile Include="model_stats.cpp" />
     <ClCompile Include="gameinfo.cpp" />
     <ClCompile Include="material_copy.cpp" />
+    <ClCompile Include="vpk_index.cpp" />
   </ItemGroup>
 
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

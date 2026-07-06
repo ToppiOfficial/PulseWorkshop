@@ -1,17 +1,21 @@
 using System.ComponentModel;
 using System.Runtime.InteropServices;
+using System.Text.RegularExpressions;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
+using System.Windows.Threading;
 using PulseWorkshop.App.ViewModels;
 
 namespace PulseWorkshop.App;
 
 /// <summary>
 /// Detached, Source-engine-style console shared by every tab. Renders the app-wide
-/// <see cref="ConsoleViewModel"/> as a colour-coded, selectable log with a command input line.
+/// <see cref="ConsoleViewModel"/> as a colour-coded, selectable log with a command input line and
+/// a regex display filter (hides non-matching lines without touching the retained history).
 /// Toggled with the ~ key; the window's X just hides it (the instance lives for the app's lifetime,
 /// so history and scroll position survive a hide/show).
 /// </summary>
@@ -25,6 +29,17 @@ public partial class ConsoleWindow : Window
 
     // Set by the owner at app shutdown so the "X hides instead of closes" behaviour is bypassed.
     private bool _allowClose;
+
+    // Active display filter (null = show everything). Only affects what's rendered - the view
+    // model's retained lines are untouched, so clearing the filter restores the full log.
+    private Regex? _filter;
+
+    // Active severity filter (null = every severity). Combined with the regex: a line must pass both.
+    private ConsoleSeverity? _severityFilter;
+
+    // False until the constructor finishes wiring the view model, so the dropdown's initial
+    // SelectionChanged (raised during InitializeComponent) doesn't re-render against a null VM.
+    private readonly bool _ready;
 
     public ConsoleWindow(ConsoleViewModel vm)
     {
@@ -40,9 +55,13 @@ public partial class ConsoleWindow : Window
         LogBox.Document = new FlowDocument { PagePadding = new Thickness(0) };
 
         Append(vm.Snapshot());
-        LogBox.ScrollToEnd();
+        // ScrollToEnd here is a no-op: the RichTextBox has no scrollable extent until it's laid out,
+        // so a console first opened after a busy run would otherwise render scrolled to the top. Defer
+        // the scroll until after the initial layout pass so it lands on the newest line.
+        Dispatcher.BeginInvoke(new Action(() => LogBox.ScrollToEnd()), DispatcherPriority.Loaded);
         vm.BatchAppended += OnBatchAppended;
         vm.Cleared += OnCleared;
+        _ready = true;
     }
 
     /// <summary>Allows the next <see cref="Window.Close"/> to actually close (used at app shutdown).</summary>
@@ -50,12 +69,9 @@ public partial class ConsoleWindow : Window
 
     private void OnBatchAppended(IReadOnlyList<ConsoleLine> batch)
     {
-        // Follow the newest line only when already at the bottom - otherwise a user who scrolled up to
-        // read or select older output would keep getting yanked down on every new line.
-        var atBottom = LogBox.VerticalOffset >= LogBox.ExtentHeight - LogBox.ViewportHeight - 2;
+        // Always follow the newest line so live output (compiles, uploads) never scrolls out of view.
         Append(batch);
-        if (atBottom)
-            LogBox.ScrollToEnd();
+        LogBox.ScrollToEnd();
     }
 
     private void OnCleared() => LogBox.Document.Blocks.Clear();
@@ -65,6 +81,10 @@ public partial class ConsoleWindow : Window
         var blocks = LogBox.Document.Blocks;
         foreach (var line in lines)
         {
+            if (_severityFilter is { } sev && line.Severity != sev)
+                continue;
+            if (_filter is not null && !_filter.IsMatch(line.Text))
+                continue;
             blocks.Add(new Paragraph(new Run(line.Text))
             {
                 Margin = new Thickness(0),
@@ -75,6 +95,63 @@ public partial class ConsoleWindow : Window
         // Trim to the model's cap so the visual document can't grow without bound.
         while (blocks.Count > ConsoleViewModel.MaxLines && blocks.FirstBlock is { } first)
             blocks.Remove(first);
+    }
+
+    private void FilterBox_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        var pattern = FilterBox.Text;
+        Regex? next = null;
+        if (pattern.Length > 0)
+        {
+            try
+            {
+                next = new Regex(pattern, RegexOptions.IgnoreCase);
+            }
+            catch (ArgumentException)
+            {
+                // Mid-typing / invalid pattern: flag it in red and keep the last valid filter applied.
+                FilterBox.Foreground = _errorBrush;
+                return;
+            }
+        }
+
+        FilterBox.Foreground = _normalBrush;
+        _filter = next;
+        ReRender();
+    }
+
+    private void SeverityBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        // SelectedIndex maps to the dropdown order: 0 = All (no restriction), 1 = Warning, 2 = Error.
+        _severityFilter = SeverityBox.SelectedIndex switch
+        {
+            1 => ConsoleSeverity.Warning,
+            2 => ConsoleSeverity.Error,
+            _ => null,
+        };
+        ReRender();
+    }
+
+    // Re-render the whole retained log through the current filters (hidden lines come back when the
+    // filters no longer exclude them).
+    private void ReRender()
+    {
+        // The severity dropdown fires its initial SelectionChanged during InitializeComponent, before
+        // the constructor has wired up the view model; there's nothing to re-render yet in that case.
+        if (!_ready)
+            return;
+        LogBox.Document.Blocks.Clear();
+        Append(_vm.Snapshot());
+        LogBox.ScrollToEnd();
+    }
+
+    private void FilterBox_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Escape)
+        {
+            FilterBox.Clear(); // TextChanged then restores the unfiltered log.
+            e.Handled = true;
+        }
     }
 
     private Brush BrushFor(ConsoleSeverity severity) => severity switch

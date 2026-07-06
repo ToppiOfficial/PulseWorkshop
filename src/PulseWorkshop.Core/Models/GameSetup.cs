@@ -42,6 +42,11 @@ public sealed class GameSetupEntry
 
     public PathRef ModelCompiler { get; set; } = new();
 
+    /// <summary>Default studiomdl options applied to every compile for this game (the model-compiler
+    /// analogue of <see cref="VtfToolCommand"/>). Empty by default; the Compile tab combines these
+    /// with the per-compile / per-entry options before building the studiomdl argument line.</summary>
+    public string ModelCompilerCommand { get; set; } = string.Empty;
+
     public PathRef ModelViewer { get; set; } = new();
 
     public PathRef PackerTool { get; set; } = new();
@@ -60,6 +65,7 @@ public sealed class GameSetupEntry
         Engine = Engine,
         GameInfoTxt = GameInfoTxt.Clone(),
         ModelCompiler = ModelCompiler.Clone(),
+        ModelCompilerCommand = ModelCompilerCommand,
         ModelViewer = ModelViewer.Clone(),
         PackerTool = PackerTool.Clone(),
         VtfTool = VtfTool.Clone(),
@@ -77,6 +83,10 @@ public sealed class GameSetupConfig
     public List<SteamLibrary> Libraries { get; set; } = new();
 
     public List<GameSetupEntry> Games { get; set; } = new();
+
+    /// <summary>The game shared across the pipeline tabs that sync their selection (Compile - Simple,
+    /// Package - Simple, Model View); resolved back to a game on load. Null selects the first game.</summary>
+    public Guid? ActiveGameId { get; set; }
 
     private static readonly JsonSerializerOptions Options = new() { WriteIndented = true };
 

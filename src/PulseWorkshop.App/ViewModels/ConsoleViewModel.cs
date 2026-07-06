@@ -150,7 +150,11 @@ public sealed class ConsoleViewModel : ObservableObject
         if (text.StartsWith("==="))
             return ConsoleSeverity.Info;
 
-        var lower = text.ToLowerInvariant();
+        // An empty error field on a status line (e.g. "success=True error=''") is not an error,
+        // and a line that explicitly reports success wins over an incidental "error" mention.
+        var lower = text.ToLowerInvariant().Replace("error=''", "");
+        if (lower.Contains("success=true"))
+            return ConsoleSeverity.Normal;
         if ((lower.Contains("error") && !lower.Contains("0 error") && !lower.Contains("no error"))
             || lower.Contains("failed") || lower.Contains("fatal"))
             return ConsoleSeverity.Error;

@@ -20,6 +20,7 @@ public sealed class EditorViewModel : ObservableObject
     private string _title = string.Empty;
     private string _description = string.Empty;
     private string? _contentFile;
+    private string? _contentDirectory;
     private string? _previewImagePath;
     private string _changeNote = string.Empty;
     private WorkshopVisibility _visibility = WorkshopVisibility.Private;
@@ -34,15 +35,19 @@ public sealed class EditorViewModel : ObservableObject
     /// shown in the preview box when no local preview image is chosen.</param>
     /// <param name="publishedContentInfo">Name/size of the already-published content file, shown in
     /// the content box (as info, not a pending upload) when no new local file is chosen.</param>
+    /// <param name="publishedContentFileName">Cloud filename of the already-published content file
+    /// (e.g. "bill.vpk"). When known, the content input switches to directory mode: the user points
+    /// at a folder and the editor auto-picks this file from it (see <see cref="ContentDirectory"/>).</param>
     public EditorViewModel(GameConfig game, ItemEdit? source = null, ItemEdit? baseline = null,
         Guid? templateId = null, string? templateName = null, string? fallbackPreviewUrl = null,
-        string? publishedContentInfo = null)
+        string? publishedContentInfo = null, string? publishedContentFileName = null)
     {
         Game = game;
         PublishedFileId = source?.PublishedFileId;
         TemplateId = templateId;
         FallbackPreviewUrl = fallbackPreviewUrl;
         PublishedContentInfo = publishedContentInfo;
+        PublishedContentFileName = publishedContentFileName;
         _original = (baseline ?? source ?? new ItemEdit { AppId = game.AppId }).Clone();
 
         var selectedTags = source?.Tags ?? new List<string>();
@@ -68,6 +73,11 @@ public sealed class EditorViewModel : ObservableObject
             _changeNote = source.ChangeNote;
             _visibility = source.Visibility;
         }
+
+        // In directory mode, show the folder a resumed draft's content file was resolved from so the
+        // input isn't blank while a file is already chosen.
+        if (UsesDirectoryContentInput && !string.IsNullOrWhiteSpace(_contentFile))
+            _contentDirectory = Path.GetDirectoryName(_contentFile);
 
         // In template mode the Title field IS the template name.
         if (templateId is not null && !string.IsNullOrEmpty(templateName))
@@ -126,6 +136,8 @@ public sealed class EditorViewModel : ObservableObject
                 OnPropertyChanged(nameof(ContentFileSizeDisplay));
                 OnPropertyChanged(nameof(ShowPublishedContentInfo));
                 OnPropertyChanged(nameof(ShowContentPlaceholder));
+                OnPropertyChanged(nameof(ContentDirectoryInvalid));
+                OnPropertyChanged(nameof(ShowContentDirectoryError));
                 RaiseChanged();
             }
         }
@@ -144,12 +156,101 @@ public sealed class EditorViewModel : ObservableObject
     /// Shown as info (this stays the content unless a new file is chosen), null if unknown.</summary>
     public string? PublishedContentInfo { get; }
 
-    /// <summary>Show the published-file info line: there's a published file and no new upload chosen.</summary>
-    public bool ShowPublishedContentInfo =>
-        !HasContentFile && !string.IsNullOrWhiteSpace(PublishedContentInfo);
+    /// <summary>Cloud filename of the already-published content file, e.g. "bill.vpk" (null if unknown).</summary>
+    public string? PublishedContentFileName { get; }
 
-    /// <summary>Show the empty "drop a file" placeholder: no new upload and nothing published to describe.</summary>
-    public bool ShowContentPlaceholder => !HasContentFile && !ShowPublishedContentInfo;
+    /// <summary>
+    /// True when the content input is a folder picker instead of a file picker: editing a published
+    /// item whose content filename we know. The user points at a folder; the editor auto-picks the
+    /// published filename from it (so re-uploading an unchanged build is just "choose the folder").
+    /// </summary>
+    public bool UsesDirectoryContentInput =>
+        IsEditingPublished && !string.IsNullOrWhiteSpace(PublishedContentFileName);
+
+    /// <summary>
+    /// The content input in directory mode. Accepts either a folder - the published filename is
+    /// auto-picked from it (the common "same build, unchanged file" case) - or a full file path to
+    /// swap the content entirely. Setting it resolves to <see cref="ContentFile"/>, or clears the
+    /// upload and flags the input invalid (<see cref="ContentDirectoryInvalid"/>) when neither works.
+    /// </summary>
+    public string? ContentDirectory
+    {
+        get => _contentDirectory;
+        set
+        {
+            var normalized = string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+            if (SetField(ref _contentDirectory, normalized))
+            {
+                ResolveDirectoryContent();
+                OnPropertyChanged(nameof(HasContentDirectory));
+                OnPropertyChanged(nameof(ContentDirectoryInvalid));
+                OnPropertyChanged(nameof(ShowContentDirectoryError));
+                OnPropertyChanged(nameof(ContentDirectoryError));
+                OnPropertyChanged(nameof(ShowPublishedContentInfo));
+                OnPropertyChanged(nameof(ShowContentPlaceholder));
+            }
+        }
+    }
+
+    public bool HasContentDirectory => !string.IsNullOrWhiteSpace(_contentDirectory);
+
+    /// <summary>Resolve <see cref="_contentDirectory"/> to a content file: a full file path is used
+    /// as-is (swap the file entirely); a folder auto-picks the published filename from it. Neither
+    /// resolving clears the upload and leaves the input flagged invalid.</summary>
+    private void ResolveDirectoryContent()
+    {
+        if (!UsesDirectoryContentInput)
+            return;
+
+        var input = _contentDirectory;
+        if (string.IsNullOrWhiteSpace(input))
+        {
+            ContentFile = null; // nothing chosen - keep the currently-published file
+            return;
+        }
+
+        // A full file path swaps the content entirely; otherwise treat it as a folder to pick from.
+        if (File.Exists(input))
+            ContentFile = input;
+        else
+        {
+            var candidate = Path.Combine(input, PublishedContentFileName!);
+            ContentFile = File.Exists(candidate) ? candidate : null;
+        }
+    }
+
+    /// <summary>True when the input resolves to no file (folder lacks the published file, or a bad
+    /// path was typed): the input turns red.</summary>
+    public bool ContentDirectoryInvalid =>
+        UsesDirectoryContentInput && HasContentDirectory && !HasContentFile;
+
+    public bool ShowContentDirectoryError => ContentDirectoryInvalid;
+
+    /// <summary>Message shown when the input doesn't resolve to a file (folder- vs. path-specific).</summary>
+    public string ContentDirectoryError =>
+        !string.IsNullOrWhiteSpace(_contentDirectory) && Directory.Exists(_contentDirectory)
+            ? $"'{PublishedContentFileName}' not found in this folder"
+            : "File or folder not found";
+
+    /// <summary>Hint under the published-info line: how to replace the content.</summary>
+    public string ContentReplaceHint => UsesDirectoryContentInput
+        ? $"Currently published - choose a folder with {PublishedContentFileName}, or a file, to replace"
+        : "Currently published - drop a file to replace";
+
+    /// <summary>Placeholder text for the empty content drop zone.</summary>
+    public string ContentPlaceholderText => UsesDirectoryContentInput
+        ? $"Drop or click to choose a folder with {PublishedContentFileName} - or paste a full file path"
+        : "Drop or click to choose content file";
+
+    /// <summary>Show the published-file info line: there's a published file and no new upload chosen,
+    /// and (in directory mode) no invalid folder is flagged.</summary>
+    public bool ShowPublishedContentInfo =>
+        !HasContentFile && !ContentDirectoryInvalid && !string.IsNullOrWhiteSpace(PublishedContentInfo);
+
+    /// <summary>Show the empty "drop a file" placeholder: no new upload, nothing published to describe,
+    /// and no invalid folder flagged.</summary>
+    public bool ShowContentPlaceholder =>
+        !HasContentFile && !ShowPublishedContentInfo && !ContentDirectoryInvalid;
 
     public string? PreviewImagePath
     {
@@ -254,11 +355,16 @@ public sealed class EditorViewModel : ObservableObject
         // Clear via the backing fields (NOT the setters) so this does not raise Changed - that event
         // would re-create the linked draft we just deleted after a successful publish.
         _contentFile = null;
+        _contentDirectory = null;
         _previewImagePath = null;
         OnPropertyChanged(nameof(ContentFile));
         OnPropertyChanged(nameof(HasContentFile));
         OnPropertyChanged(nameof(ContentFileName));
         OnPropertyChanged(nameof(ContentFileSizeDisplay));
+        OnPropertyChanged(nameof(ContentDirectory));
+        OnPropertyChanged(nameof(HasContentDirectory));
+        OnPropertyChanged(nameof(ContentDirectoryInvalid));
+        OnPropertyChanged(nameof(ShowContentDirectoryError));
         OnPropertyChanged(nameof(ShowPublishedContentInfo));
         OnPropertyChanged(nameof(ShowContentPlaceholder));
         OnPropertyChanged(nameof(PreviewImagePath));

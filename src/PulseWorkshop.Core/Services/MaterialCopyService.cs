@@ -3,14 +3,17 @@ using System.Text;
 
 namespace PulseWorkshop.Core.Services;
 
-/// <summary>Parameters for a single material copy invocation.</summary>
+/// <summary>Parameters for a single material copy invocation. <paramref name="VpkExePath"/> is the
+/// game's own vpk.exe; when set, files missing from the loose search paths are checked against the
+/// game's VPK archives and reported as natively provided instead of missing when found there.</summary>
 public sealed record MaterialCopyRequest(
     string ToolPath,
     string MdlPath,
     string GameInfoPath,
     string DestDir,
     bool Localize,
-    bool FlatPatch);
+    bool FlatPatch,
+    string? VpkExePath = null);
 
 /// <summary>Result returned by <see cref="MaterialCopyService.CopyAsync"/>.</summary>
 public sealed record MaterialCopyResult(bool Success, string? Error);
@@ -39,6 +42,8 @@ public sealed class MaterialCopyService
         args.Append($" \"{req.DestDir}\"");
         if (req.Localize)  args.Append(" --localize");
         if (req.FlatPatch) args.Append(" --flat-patch");
+        if (!string.IsNullOrWhiteSpace(req.VpkExePath))
+            args.Append($" --vpk-exe \"{req.VpkExePath}\"");
 
         var psi = new ProcessStartInfo(req.ToolPath, args.ToString())
         {

@@ -4,8 +4,8 @@
         Title="Console"
         Width="900" Height="400" MinWidth="420" MinHeight="200"
         Background="{StaticResource BgBrush}"
-        WindowStartupLocation="CenterOwner"
-        ShowInTaskbar="False">
+        WindowStartupLocation="CenterScreen"
+        ShowInTaskbar="True">
 
     <!-- Source-engine console: a colour-coded log fills the window with a command input line pinned
          to the bottom. Steam-flavoured palette (near-white / blue / yellow / red on dark grey). -->
@@ -18,13 +18,59 @@
 
     <Grid>
         <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
+        <!-- Filter bar: live, case-insensitive regex over the log plus a severity dropdown. Both
+             narrow what's rendered - the retained history is untouched, and emptying the box (or Esc)
+             brings everything back. The regex applies within whatever severity is selected. An invalid
+             pattern turns the text red and keeps the last valid filter. -->
+        <Border Grid.Row="0" Background="{StaticResource PanelAltBrush}"
+                BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,0,1">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+
+                <TextBox x:Name="FilterBox" Grid.Column="0" Background="Transparent" BorderThickness="0"
+                         Foreground="{StaticResource ConsoleNormalBrush}"
+                         CaretBrush="{StaticResource ConsoleInfoBrush}"
+                         FontFamily="Consolas" FontSize="12" Padding="8,6"
+                         VerticalContentAlignment="Center"
+                         TextChanged="FilterBox_TextChanged" KeyDown="FilterBox_KeyDown" />
+                <TextBlock Grid.Column="0" Text="Filter output (regex, case-insensitive)..." IsHitTestVisible="False"
+                           Foreground="{StaticResource MutedTextBrush}" FontFamily="Consolas" FontSize="12"
+                           Margin="10,0,0,0" VerticalAlignment="Center">
+                    <TextBlock.Style>
+                        <Style TargetType="TextBlock">
+                            <Setter Property="Visibility" Value="Collapsed" />
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding Text, ElementName=FilterBox}" Value="">
+                                    <Setter Property="Visibility" Value="Visible" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </TextBlock.Style>
+                </TextBlock>
+
+                <!-- Severity filter: restricts the log to All / Warning / Error lines. The regex above
+                     still applies within the chosen severity. -->
+                <ComboBox x:Name="SeverityBox" Grid.Column="1" Width="110" Height="26" Margin="4,2"
+                          BorderThickness="1" SelectedIndex="0"
+                          SelectionChanged="SeverityBox_SelectionChanged">
+                    <ComboBoxItem Content="All" />
+                    <ComboBoxItem Content="Warning" />
+                    <ComboBoxItem Content="Error" />
+                </ComboBox>
+            </Grid>
+        </Border>
+
         <!-- Log: coloured Runs (one Paragraph per line, set up in code-behind), read-only but fully
-             selectable for copy/paste, auto-scrolled to the newest line unless the user scrolled up. -->
-        <RichTextBox x:Name="LogBox" Grid.Row="0" IsReadOnly="True" IsReadOnlyCaretVisible="True"
+             selectable for copy/paste, auto-scrolled to the newest line on every append. -->
+        <RichTextBox x:Name="LogBox" Grid.Row="1" IsReadOnly="True" IsReadOnlyCaretVisible="True"
                      IsUndoEnabled="False" Background="{StaticResource BgBrush}"
                      Foreground="{StaticResource ConsoleNormalBrush}" BorderThickness="0" Padding="8,4"
                      FontFamily="Consolas" FontSize="12"
@@ -40,7 +86,7 @@
         </RichTextBox>
 
         <!-- Command input line (Source-style). Enter runs the command (handled in code-behind). -->
-        <Border Grid.Row="1" Background="{StaticResource PanelAltBrush}"
+        <Border Grid.Row="2" Background="{StaticResource PanelAltBrush}"
                 BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,1,0,0">
             <TextBox x:Name="InputBox" Background="Transparent" BorderThickness="0"
                      Foreground="{StaticResource ConsoleNormalBrush}"

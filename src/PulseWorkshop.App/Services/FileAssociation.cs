@@ -4,19 +4,25 @@ using Microsoft.Win32;
 namespace PulseWorkshop.App.Services;
 
 /// <summary>
-/// Registers PulseWorkshop as the default handler for <c>.pw_mdlproject</c> files for the current user
-/// (HKCU - no administrator rights needed), so double-clicking a project in Explorer launches the app
-/// with the file path as its argument (picked up in <c>App.OnStartup</c>).
+/// Registers PulseWorkshop as the default handler for its project files (<c>.pw_mdlproject</c> and
+/// <c>.pw_textureproject</c>) for the current user (HKCU - no administrator rights needed), so
+/// double-clicking a project in Explorer launches the app with the file path as its argument (picked up
+/// in <c>App.OnStartup</c>).
 ///
-/// Best-effort and idempotent: it only rewrites the registry (and notifies the shell) when the stored
-/// open command isn't already this exe, so a normal launch does no work once the association is set.
+/// Best-effort and idempotent: it only rewrites the registry (and notifies the shell) when a stored open
+/// command isn't already this exe, so a normal launch does no work once the associations are set.
 /// Windows-only; a no-op on other platforms.
 /// </summary>
 internal static class FileAssociation
 {
-    private const string Extension = ".pw_mdlproject";
-    private const string ProgId = "PulseWorkshop.mdlproject";
-    private const string FriendlyType = "PulseWorkshop Model Project";
+    /// <summary>One registered project file type: its extension, ProgId, and Explorer-friendly name.</summary>
+    private readonly record struct Association(string Extension, string ProgId, string FriendlyType);
+
+    private static readonly Association[] Associations =
+    {
+        new(".pw_mdlproject", "PulseWorkshop.mdlproject", "PulseWorkshop Model Project"),
+        new(".pw_textureproject", "PulseWorkshop.textureproject", "PulseWorkshop Textures Project"),
+    };
 
     public static void EnsureRegistered()
     {
@@ -35,34 +41,44 @@ internal static class FileAssociation
             if (classes is null)
                 return;
 
-            // Already pointing at this exe (extension -> our ProgId -> our command)? Nothing to do -
-            // this keeps every normal launch from rewriting the registry and refreshing the shell.
-            using (var existingCmd = classes.OpenSubKey($@"{ProgId}\shell\open\command"))
-            using (var existingExt = classes.OpenSubKey(Extension))
-            {
-                if (existingCmd?.GetValue(null) as string == command &&
-                    existingExt?.GetValue(null) as string == ProgId)
-                    return;
-            }
+            var changed = false;
+            foreach (var a in Associations)
+                changed |= EnsureOne(classes, a, command);
 
-            using (var progId = classes.CreateSubKey(ProgId))
-            {
-                progId.SetValue(null, FriendlyType);
-                using var cmd = progId.CreateSubKey(@"shell\open\command");
-                cmd.SetValue(null, command);
-            }
-
-            using (var ext = classes.CreateSubKey(Extension))
-                ext.SetValue(null, ProgId);
-
-            // Tell Explorer the association changed so the icon/handler updates without a re-login.
-            SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, IntPtr.Zero, IntPtr.Zero);
+            // Tell Explorer any changed association's icon/handler updates without a re-login.
+            if (changed)
+                SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, IntPtr.Zero, IntPtr.Zero);
         }
         catch
         {
             // A locked-down or roaming profile may deny the write. The app still works fully; it just
             // won't be wired up for double-click opening.
         }
+    }
+
+    /// <summary>Registers one extension -> ProgId -> command mapping. Returns whether anything changed
+    /// (already pointing at this exe is a no-op, so normal launches don't rewrite the registry).</summary>
+    private static bool EnsureOne(RegistryKey classes, Association a, string command)
+    {
+        using (var existingCmd = classes.OpenSubKey($@"{a.ProgId}\shell\open\command"))
+        using (var existingExt = classes.OpenSubKey(a.Extension))
+        {
+            if (existingCmd?.GetValue(null) as string == command &&
+                existingExt?.GetValue(null) as string == a.ProgId)
+                return false;
+        }
+
+        using (var progId = classes.CreateSubKey(a.ProgId))
+        {
+            progId.SetValue(null, a.FriendlyType);
+            using var cmd = progId.CreateSubKey(@"shell\open\command");
+            cmd.SetValue(null, command);
+        }
+
+        using (var ext = classes.CreateSubKey(a.Extension))
+            ext.SetValue(null, a.ProgId);
+
+        return true;
     }
 
     private const uint SHCNE_ASSOCCHANGED = 0x08000000;

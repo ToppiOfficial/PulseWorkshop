@@ -32,6 +32,7 @@ public sealed class PackageAdvancedViewModel : ObservableObject
 
         AddEntryCommand = new RelayCommand(AddEntry, () => IsProjectOpen);
         PackageAllCommand = new AsyncRelayCommand(PackageAllAsync, () => CanPackageAll);
+        PackageSelectedCommand = new AsyncRelayCommand(PackageSelectedAsync, () => CanPackageSelected);
         CancelCommand = new RelayCommand(Cancel, () => IsPackaging);
 
         // This tab persists the package entry list (with each entry's assets) into the shared project.
@@ -50,6 +51,10 @@ public sealed class PackageAdvancedViewModel : ObservableObject
     public RelayCommand CloseProjectCommand => _session.CloseProjectCommand;
     public RelayCommand AddEntryCommand { get; }
     public AsyncRelayCommand PackageAllCommand { get; }
+
+    /// <summary>Packages the entries highlighted in the list (multi-select with Ctrl/Shift). Replaces
+    /// the old per-entry "Package" button: a single-row selection behaves exactly like packaging one.</summary>
+    public AsyncRelayCommand PackageSelectedCommand { get; }
     public RelayCommand CancelCommand { get; }
 
     /// <summary>The shared Game Setup roster used for the dropdown.</summary>
@@ -119,14 +124,32 @@ public sealed class PackageAdvancedViewModel : ObservableObject
     /// <summary>Persists the project (best-effort) via the shared session.</summary>
     public void Save() => _session.Save();
 
+    /// <summary>Re-checks asset input files on disk across all entries (thumbnails + validation).
+    /// Called when the main window is activated, so files created or deleted in another program are
+    /// picked up without retyping the path.</summary>
+    public void RefreshFileState()
+    {
+        foreach (var entry in Entries)
+            entry.RefreshFileState();
+    }
+
     public void RefreshCommands()
     {
         PackageAllCommand.RaiseCanExecuteChanged();
+        PackageSelectedCommand.RaiseCanExecuteChanged();
         CancelCommand.RaiseCanExecuteChanged();
         AddEntryCommand.RaiseCanExecuteChanged();
-        foreach (var entry in Entries)
-            entry.RaiseCanPackageChanged();
     }
+
+    /// <summary>Called by an entry when its list selection toggles, so "Package selected" re-evaluates.</summary>
+    public void OnEntrySelectionChanged() => PackageSelectedCommand.RaiseCanExecuteChanged();
+
+    /// <summary>Raised when an entry's "View Package" is clicked: the packed file to hand to the Unpack
+    /// tab. Wired by <c>MainViewModel</c> to open it there and switch tabs.</summary>
+    public event Action<string>? ViewPackageRequested;
+
+    /// <summary>Forwards an entry's "View Package" request to the Unpack tab.</summary>
+    public void ViewPackage(string packagePath) => ViewPackageRequested?.Invoke(packagePath);
 
     // --- Project-level bound state -------------------------------------------------------------
 
@@ -164,6 +187,9 @@ public sealed class PackageAdvancedViewModel : ObservableObject
 
     public bool CanPackageAll =>
         IsProjectOpen && !IsPackaging && IsGameReady && Entries.Any(e => e.IncludeInAll);
+
+    public bool CanPackageSelected =>
+        IsProjectOpen && !IsPackaging && IsGameReady && Entries.Any(e => e.IsSelected);
 
     public string StatusMessage
     {
@@ -246,28 +272,6 @@ public sealed class PackageAdvancedViewModel : ObservableObject
         StatusMessage = "Cancelling...";
     }
 
-    public async Task PackageEntryAsync(PackageEntryViewModel entry)
-    {
-        if (!IsGameReady)
-            return;
-
-        _cancelSource = new CancellationTokenSource();
-        var ct = _cancelSource.Token;
-        IsPackaging = true;
-        entry.IsPackaging = true;
-        try
-        {
-            await PackageOneAsync(entry, ct);
-        }
-        finally
-        {
-            entry.IsPackaging = false;
-            IsPackaging = false;
-            _cancelSource.Dispose();
-            _cancelSource = null;
-        }
-    }
-
     private async Task PackageAllAsync()
     {
         if (!IsGameReady)
@@ -279,13 +283,40 @@ public sealed class PackageAdvancedViewModel : ObservableObject
             StatusMessage = "No entries flagged for 'Package all'.";
             return;
         }
-        if (!ConfirmPackageAll(targets.Count))
+        if (!ConfirmBatch("Package all", targets.Count))
             return;
 
+        await PackageBatchAsync(targets, "Package all");
+    }
+
+    private async Task PackageSelectedAsync()
+    {
+        if (!IsGameReady)
+            return;
+
+        var targets = Entries.Where(e => e.IsSelected).ToList();
+        if (targets.Count == 0)
+        {
+            StatusMessage = "No entries selected.";
+            return;
+        }
+
+        // A single-row selection packages straight away (like the old per-entry button); only a
+        // multi-entry batch asks first.
+        if (targets.Count > 1 && !ConfirmBatch("Package selected", targets.Count))
+            return;
+
+        await PackageBatchAsync(targets, "Package selected");
+    }
+
+    /// <summary>Packages a set of entries in order, streaming progress and a final tally to the console.
+    /// Used by both "Package all" and "Package selected".</summary>
+    private async Task PackageBatchAsync(IReadOnlyList<PackageEntryViewModel> targets, string label)
+    {
         _cancelSource = new CancellationTokenSource();
         var ct = _cancelSource.Token;
         IsPackaging = true;
-        Log($"=== Package all ({targets.Count} entr{(targets.Count == 1 ? "y" : "ies")}) ===");
+        Log($"=== {label} ({targets.Count} entr{(targets.Count == 1 ? "y" : "ies")}) ===");
         try
         {
             var ok = 0;
@@ -309,8 +340,8 @@ public sealed class PackageAdvancedViewModel : ObservableObject
                 if (cancelled) break;
             }
             StatusMessage = cancelled
-                ? $"Package all cancelled: {ok}/{targets.Count} done."
-                : $"Package all done: {ok}/{targets.Count} succeeded.";
+                ? $"{label} cancelled: {ok}/{targets.Count} done."
+                : $"{label} done: {ok}/{targets.Count} succeeded.";
             Log($"=== {StatusMessage} ===");
         }
         finally
@@ -321,14 +352,14 @@ public sealed class PackageAdvancedViewModel : ObservableObject
         }
     }
 
-    private bool ConfirmPackageAll(int count)
+    private bool ConfirmBatch(string title, int count)
     {
-        var message = $"Package all {count} flagged entr{(count == 1 ? "y" : "ies")} in order?";
+        var message = $"{title}: run {count} entr{(count == 1 ? "y" : "ies")} in order?";
         var owner = Application.Current?.MainWindow;
         var result = owner is not null
-            ? MessageBox.Show(owner, message, "Package all",
+            ? MessageBox.Show(owner, message, title,
                 MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.Yes)
-            : MessageBox.Show(message, "Package all",
+            : MessageBox.Show(message, title,
                 MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.Yes);
         return result == MessageBoxResult.Yes;
     }

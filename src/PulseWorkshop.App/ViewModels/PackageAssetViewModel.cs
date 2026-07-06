@@ -24,6 +24,7 @@ public sealed class PackageAssetViewModel : ObservableObject
     private AssetKindChoice _selectedKind;
     private ImageFormatChoice _selectedImageFormat;
     private ImageSource? _thumbnailSource;
+    private bool _thumbnailIsFileIcon;
 
     public PackageAssetViewModel(PackageEntryViewModel entry, PackageAsset model)
     {
@@ -92,8 +93,22 @@ public sealed class PackageAssetViewModel : ObservableObject
     public bool IsText => Model.Kind == AssetKind.Text;
     public bool IsImage => Model.Kind == AssetKind.Image;
 
-    /// <summary>Loaded thumbnail when Kind=Image and the input path resolves to a readable image file; null otherwise.</summary>
+    /// <summary>Preview for the input file: the image itself when Kind=Image and the file decodes,
+    /// the file's shell icon otherwise (text assets, or image formats WPF can't decode); null when
+    /// the file is missing or the path is blank.</summary>
     public ImageSource? ThumbnailSource => _thumbnailSource;
+
+    /// <summary>True when <see cref="ThumbnailSource"/> is the file-type shell icon rather than the
+    /// image's own pixels - the view renders icons small and centered instead of filling the box.</summary>
+    public bool ThumbnailIsFileIcon => _thumbnailIsFileIcon;
+
+    /// <summary>True when the thumbnail shows the image's own pixels - clicking it then opens the
+    /// full-size preview window.</summary>
+    public bool HasImagePreview => _thumbnailSource is not null && !_thumbnailIsFileIcon;
+
+    /// <summary>True when this is a text asset with an existing input file - clicking its thumbnail
+    /// opens the raw text in a <see cref="TextPreviewWindow"/>.</summary>
+    public bool HasTextPreview => IsText && ResolvedInputPath() is not null;
 
     private void RefreshThumbnail()
     {
@@ -101,25 +116,62 @@ public sealed class PackageAssetViewModel : ObservableObject
         if (ReferenceEquals(_thumbnailSource, next)) return;
         _thumbnailSource = next;
         OnPropertyChanged(nameof(ThumbnailSource));
+        OnPropertyChanged(nameof(ThumbnailIsFileIcon));
+        OnPropertyChanged(nameof(HasImagePreview));
+        OnPropertyChanged(nameof(HasTextPreview));
+    }
+
+    /// <summary>
+    /// Re-checks the input file on disk: reloads the thumbnail when the file has appeared or
+    /// disappeared since the last load, and re-raises validation. Called by the owning entry when
+    /// the app regains focus, so a path typed before the file existed catches up without the user
+    /// having to re-enter it.
+    /// </summary>
+    public void RefreshFileState()
+    {
+        if ((ResolvedInputPath() is not null) != (_thumbnailSource is not null))
+            RefreshThumbnail();
+        RefreshValidation();
+    }
+
+    /// <summary>The input path resolved against the project when it points at an existing file;
+    /// null otherwise (blank path, unresolvable, or missing file).</summary>
+    public string? ResolvedInputPath()
+    {
+        if (string.IsNullOrWhiteSpace(Model.InputPath)) return null;
+        var resolved = _entry.ResolveAgainst(Model.InputPath);
+        return !string.IsNullOrEmpty(resolved) && File.Exists(resolved) ? resolved : null;
     }
 
     private ImageSource? LoadThumbnail()
     {
-        if (!IsImage || string.IsNullOrWhiteSpace(Model.InputPath)) return null;
+        _thumbnailIsFileIcon = false;
+        if (string.IsNullOrWhiteSpace(Model.InputPath)) return null;
         var resolved = _entry.ResolveAgainst(Model.InputPath);
         if (string.IsNullOrEmpty(resolved) || !File.Exists(resolved)) return null;
-        try
+
+        if (IsImage)
         {
-            var bmp = new BitmapImage();
-            bmp.BeginInit();
-            bmp.UriSource = new Uri(resolved, UriKind.Absolute);
-            bmp.CacheOption = BitmapCacheOption.OnLoad;
-            bmp.DecodePixelWidth = 64;
-            bmp.EndInit();
-            bmp.Freeze();
-            return bmp;
+            try
+            {
+                var bmp = new BitmapImage();
+                bmp.BeginInit();
+                bmp.UriSource = new Uri(resolved, UriKind.Absolute);
+                bmp.CacheOption = BitmapCacheOption.OnLoad;
+                bmp.DecodePixelWidth = 64;
+                bmp.EndInit();
+                bmp.Freeze();
+                return bmp;
+            }
+            catch
+            {
+                // Not decodable by WPF (e.g. .tga/.dds/.vtf) - fall through to the shell icon.
+            }
         }
-        catch { return null; }
+
+        var icon = ShellIcon.GetFileIcon(resolved);
+        _thumbnailIsFileIcon = icon is not null;
+        return icon;
     }
 
     public ImageFormatChoice SelectedImageFormat

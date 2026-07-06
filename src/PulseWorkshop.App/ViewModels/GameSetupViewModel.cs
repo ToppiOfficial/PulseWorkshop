@@ -15,6 +15,7 @@ public sealed class GameSetupViewModel : ObservableObject
 {
     private readonly GameSetupConfig _config;
     private GameSetupEntryViewModel? _selectedGame;
+    private GameSetupEntryViewModel? _activeGame;
 
     public GameSetupViewModel()
     {
@@ -31,6 +32,9 @@ public sealed class GameSetupViewModel : ObservableObject
             Games.Add(CreateEntryVm(g));
 
         _selectedGame = Games.FirstOrDefault();
+        _activeGame = _config.ActiveGameId is { } activeId
+            ? Games.FirstOrDefault(g => g.Model.Id == activeId) ?? Games.FirstOrDefault()
+            : Games.FirstOrDefault();
 
         AddGameCommand = new RelayCommand(AddGame);
         AddLibraryCommand = new RelayCommand(AddLibrary);
@@ -65,6 +69,25 @@ public sealed class GameSetupViewModel : ObservableObject
 
     public bool HasSelectedGame => _selectedGame is not null;
 
+    /// <summary>
+    /// The game shared across the pipeline tabs that sync their selection (Compile - Simple,
+    /// Package - Simple, Model View). Changing it in one of those tabs updates the others, since they
+    /// all bind their game dropdown to this one property. Distinct from <see cref="SelectedGame"/>,
+    /// which is the entry currently being edited in this panel.
+    /// </summary>
+    public GameSetupEntryViewModel? ActiveGame
+    {
+        get => _activeGame;
+        set
+        {
+            if (SetField(ref _activeGame, value))
+            {
+                _config.ActiveGameId = value?.Model.Id;
+                Save();
+            }
+        }
+    }
+
     private GameSetupEntryViewModel CreateEntryVm(GameSetupEntry entry) =>
         new(entry, LibraryChoices, Absolute, Save);
 
@@ -84,6 +107,9 @@ public sealed class GameSetupViewModel : ObservableObject
         var vm = CreateEntryVm(entry);
         Games.Add(vm);
         SelectedGame = vm;
+        // The synced pipeline tabs need something selected: adopt the first game added to an empty roster.
+        if (ActiveGame is null)
+            ActiveGame = vm;
         Save();
     }
 
@@ -107,10 +133,14 @@ public sealed class GameSetupViewModel : ObservableObject
             return;
 
         var wasSelected = ReferenceEquals(SelectedGame, game);
+        var wasActive = ReferenceEquals(ActiveGame, game);
         _config.Games.Remove(game.Model);
         Games.Remove(game);
         if (wasSelected)
             SelectedGame = Games.Count == 0 ? null : Games[Math.Min(idx, Games.Count - 1)];
+        // Keep the synced pipeline tabs off the removed game - fall back to a remaining game (or none).
+        if (wasActive)
+            ActiveGame = Games.Count == 0 ? null : Games[Math.Min(idx, Games.Count - 1)];
         Save();
     }
 
@@ -219,6 +249,22 @@ public sealed class GameSetupEntryViewModel : ObservableObject
             if (Model.VtfToolCommand != (value ?? string.Empty))
             {
                 Model.VtfToolCommand = value ?? string.Empty;
+                OnPropertyChanged();
+                _onChanged();
+            }
+        }
+    }
+
+    /// <summary>Default studiomdl options applied to every compile for this game (empty by default).
+    /// The Compile tab combines these with the per-compile / per-entry options.</summary>
+    public string ModelCompilerCommand
+    {
+        get => Model.ModelCompilerCommand;
+        set
+        {
+            if (Model.ModelCompilerCommand != (value ?? string.Empty))
+            {
+                Model.ModelCompilerCommand = value ?? string.Empty;
                 OnPropertyChanged();
                 _onChanged();
             }

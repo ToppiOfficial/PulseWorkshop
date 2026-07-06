@@ -1,5 +1,6 @@
 #include "material_copy.h"
 #include "kv_parser.h"
+#include "vpk_index.h"
 #include <algorithm>
 #include <cctype>
 #include <fstream>
@@ -83,6 +84,22 @@ static std::optional<fs::path> find_file(
     return std::nullopt;
 }
 
+// Report a file that was not found in the loose search paths. If it lives inside one of the
+// game's VPK archives it is not truly missing - the game provides it natively, so nothing
+// needs to travel with the model.
+static void report_missing(
+    VpkIndex&          vpks,
+    const char*        kind,      // "VMT" / "VTF" / "Patch base VMT"
+    const std::string& rel,       // game-relative path checked against the VPKs
+    const std::string& label) {   // how the file is named in the log line
+    if (vpks.contains(rel))
+        std::cout << "[ModelTool] " << kind << " provided by game VPK (no copy needed): "
+                  << label << "\n";
+    else
+        // "Warning" makes the app console classify (and color) the line as a warning.
+        std::cout << "[ModelTool] Warning: " << kind << " not found: " << label << "\n";
+}
+
 // Recursively collect texture parameter values from the KV tree.
 static void collect_tex_refs(const std::vector<KvNode>& nodes, std::vector<std::string>& out) {
     const auto& tp = tex_params();
@@ -90,6 +107,8 @@ static void collect_tex_refs(const std::vector<KvNode>& nodes, std::vector<std::
         if (!n.children.empty()) {
             collect_tex_refs(n.children, out);
         } else if (!n.value.empty() && tp.count(to_lower(n.key))) {
+            // "env_cubemap" is VMT syntax for the map's own cubemap, not a texture on disk.
+            if (to_lower(n.value) == "env_cubemap") continue;
             out.push_back(n.value);
         }
     }
@@ -162,13 +181,14 @@ static void copy_one_vtf(
     const std::vector<fs::path>& search_paths,
     const fs::path&              dest_dir,
     std::set<std::string>&       done_vtfs,
-    int&                         copied) {
+    int&                         copied,
+    VpkIndex&                    vpks) {
 
     if (done_vtfs.count(tex)) return;
     auto vtf_src = find_file(search_paths, "materials/" + tex + ".vtf");
     if (!vtf_src) vtf_src = find_file(search_paths, "materials/" + tex);
     if (!vtf_src) {
-        std::cout << "[ModelTool] VTF not found: " << tex << "\n";
+        report_missing(vpks, "VTF", "materials/" + tex + ".vtf", tex);
         return;
     }
     if (copy_file_safe(*vtf_src, dest_dir / "materials" / (dest_mp + ".vtf"))) {
@@ -196,7 +216,8 @@ static std::string bring_patch_base(
     const std::string&           mp_dir,     // patch VMT's dir relative to materials/
     std::set<std::string>&       done_vmts,
     std::set<std::string>&       done_vtfs,
-    int&                         copied) {
+    int&                         copied,
+    VpkIndex&                    vpks) {
 
     const KvNode* inc = kv_find(shader_node.children, "include");
     if (!inc || inc->value.empty()) return {};
@@ -206,7 +227,7 @@ static std::string bring_patch_base(
 
     auto base_src = find_file(search_paths, "materials/" + base_mp + ".vmt");
     if (!base_src) {
-        std::cout << "[ModelTool] Patch base VMT not found: " << base_mp << ".vmt\n";
+        report_missing(vpks, "Patch base VMT", "materials/" + base_mp + ".vmt", base_mp + ".vmt");
         return {};
     }
 
@@ -225,7 +246,7 @@ static std::string bring_patch_base(
             collect_tex_refs(base_kv.children[0].children, base_refs);
             for (const auto& tv : base_refs) {
                 const std::string tex = norm(tv);
-                copy_one_vtf(tex, tex, search_paths, dest_dir, done_vtfs, copied);
+                copy_one_vtf(tex, tex, search_paths, dest_dir, done_vtfs, copied, vpks);
             }
         }
         return {};
@@ -253,12 +274,12 @@ static std::string bring_patch_base(
         const std::string tex = norm(tv);
         auto vtf_src = find_file(search_paths, "materials/" + tex + ".vtf");
         if (!vtf_src) vtf_src = find_file(search_paths, "materials/" + tex);
-        if (!vtf_src) { std::cout << "[ModelTool] VTF not found: " << tex << "\n"; continue; }
+        if (!vtf_src) { report_missing(vpks, "VTF", "materials/" + tex + ".vtf", tex); continue; }
 
         const std::string stem    = vtf_src->stem().generic_string();
         const std::string new_tex = mp_dir.empty() ? stem : mp_dir + "/" + stem;
         if (new_tex != tex) remap[tv] = new_tex;
-        copy_one_vtf(tex, new_tex, search_paths, dest_dir, done_vtfs, copied);
+        copy_one_vtf(tex, new_tex, search_paths, dest_dir, done_vtfs, copied, vpks);
     }
     if (!remap.empty()) update_tex_values(base_children, remap);
 
@@ -284,7 +305,8 @@ int copy_materials(
     const std::vector<std::string>&           material_paths,
     const std::vector<fs::path>&              search_paths,
     const fs::path&                           dest_dir,
-    const MaterialCopyOptions&                opts) {
+    const MaterialCopyOptions&                opts,
+    VpkIndex&                                 vpks) {
 
     int copied = 0;
     std::set<std::string> done_vmts;
@@ -307,7 +329,7 @@ int copy_materials(
         // Locate the VMT
         auto vmt_src = find_file(search_paths, "materials/" + mp + ".vmt");
         if (!vmt_src) {
-            std::cout << "[ModelTool] VMT not found: " << mp << "\n";
+            report_missing(vpks, "VMT", "materials/" + mp + ".vmt", mp);
             continue;
         }
 
@@ -354,7 +376,13 @@ int copy_materials(
                         vmt_log = "[ModelTool] Flattened Patch VMT: " + mp + ".vmt";
                     }
                 } else {
-                    std::cout << "[ModelTool] Patch base VMT not found (" << inc_path << "), copying as-is.\n";
+                    // A base living inside a game VPK can't be read to flatten, but the game
+                    // resolves the include itself at runtime - copying the patch as-is is fine.
+                    if (vpks.contains(inc_path) || vpks.contains("materials/" + inc_path))
+                        std::cout << "[ModelTool] Patch base VMT is inside a game VPK ("
+                                  << inc_path << "), cannot flatten - copying as-is.\n";
+                    else
+                        std::cout << "[ModelTool] Patch base VMT not found (" << inc_path << "), copying as-is.\n";
                 }
             }
             if (!flattened)
@@ -398,7 +426,7 @@ int copy_materials(
         if (is_patch && !flattened) {
             std::string new_inc = bring_patch_base(
                 shader_node, search_paths, dest_dir, opts.localize, mp_dir,
-                done_vmts, done_vtfs, copied);
+                done_vmts, done_vtfs, copied, vpks);
             if (!new_inc.empty()) {
                 if (KvNode* inc_node = kv_find(active_children, "include")) {
                     inc_node->value = new_inc;
@@ -432,7 +460,7 @@ int copy_materials(
             auto vtf_src = find_file(search_paths, "materials/" + tex + ".vtf");
             if (!vtf_src) vtf_src = find_file(search_paths, "materials/" + tex);
             if (!vtf_src) {
-                std::cout << "[ModelTool] VTF not found: " << tex << "\n";
+                report_missing(vpks, "VTF", "materials/" + tex + ".vtf", tex);
                 continue;
             }
 

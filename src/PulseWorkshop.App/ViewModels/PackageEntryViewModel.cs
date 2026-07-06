@@ -17,6 +17,7 @@ public sealed class PackageEntryViewModel : ObservableObject
 {
     private readonly PackageAdvancedViewModel _parent;
     private bool _isPackaging;
+    private bool _isSelected;
     private bool _hasError;
     private string? _lastPackagePath;
 
@@ -29,10 +30,10 @@ public sealed class PackageEntryViewModel : ObservableObject
             Assets.Add(new PackageAssetViewModel(this, asset));
 
         BrowseFolderCommand = new RelayCommand(BrowseFolder);
-        PackageThisCommand = new AsyncRelayCommand(() => _parent.PackageEntryAsync(this), () => CanPackage);
         CloneCommand = new RelayCommand(() => _parent.CloneEntry(this));
         RemoveCommand = new RelayCommand(() => _parent.RemoveEntry(this));
         GoToPackageCommand = new RelayCommand(GoToPackage, () => !string.IsNullOrEmpty(LastPackagePath));
+        ViewPackageCommand = new RelayCommand(ViewPackage, () => !string.IsNullOrEmpty(LastPackagePath));
         AddAssetCommand = new RelayCommand(AddAsset);
     }
 
@@ -54,10 +55,12 @@ public sealed class PackageEntryViewModel : ObservableObject
     public ObservableCollection<PackageAssetViewModel> Assets { get; } = new();
 
     public RelayCommand BrowseFolderCommand { get; }
-    public AsyncRelayCommand PackageThisCommand { get; }
     public RelayCommand CloneCommand { get; }
     public RelayCommand RemoveCommand { get; }
     public RelayCommand GoToPackageCommand { get; }
+
+    /// <summary>Opens this entry's last-packaged file in the Unpack tab to browse its contents.</summary>
+    public RelayCommand ViewPackageCommand { get; }
     public RelayCommand AddAssetCommand { get; }
 
     /// <summary>Rebuilds the model's asset list (and each asset's regex list) from the UI collections.
@@ -76,6 +79,14 @@ public sealed class PackageEntryViewModel : ObservableObject
     {
         SyncAssets();
         _parent.Save();
+    }
+
+    /// <summary>Re-checks each asset's input file on disk (thumbnail + validation) - files can be
+    /// created or deleted outside the app while a path is already typed in.</summary>
+    public void RefreshFileState()
+    {
+        foreach (var asset in Assets)
+            asset.RefreshFileState();
     }
 
     public string Name
@@ -159,7 +170,15 @@ public sealed class PackageEntryViewModel : ObservableObject
     public bool IsPackaging
     {
         get => _isPackaging;
-        set { if (SetField(ref _isPackaging, value)) PackageThisCommand.RaiseCanExecuteChanged(); }
+        set => SetField(ref _isPackaging, value);
+    }
+
+    /// <summary>True when this row is highlighted in the entries list. Drives "Package selected";
+    /// bound two-way to the ListBoxItem so Ctrl/Shift multi-selection flows into the view model.</summary>
+    public bool IsSelected
+    {
+        get => _isSelected;
+        set { if (SetField(ref _isSelected, value)) _parent.OnEntrySelectionChanged(); }
     }
 
     /// <summary>True when this entry's last package failed (drives the red outline; not saved).</summary>
@@ -173,24 +192,18 @@ public sealed class PackageEntryViewModel : ObservableObject
     public string? LastPackagePath
     {
         get => _lastPackagePath;
-        set { if (SetField(ref _lastPackagePath, value)) GoToPackageCommand.RaiseCanExecuteChanged(); }
+        set
+        {
+            if (SetField(ref _lastPackagePath, value))
+            {
+                GoToPackageCommand.RaiseCanExecuteChanged();
+                ViewPackageCommand.RaiseCanExecuteChanged();
+            }
+        }
     }
 
     /// <summary>The folder resolved to an absolute path against the project folder.</summary>
     public string ResolvedFolderPath => _parent.ResolveAgainstProject(Model.FolderPath);
-
-    public bool CanPackage
-    {
-        get
-        {
-            if (IsPackaging || _parent.IsPackaging || !_parent.IsGameReady)
-                return false;
-            var folder = ResolvedFolderPath;
-            return !string.IsNullOrWhiteSpace(folder) && Directory.Exists(folder);
-        }
-    }
-
-    public void RaiseCanPackageChanged() => PackageThisCommand.RaiseCanExecuteChanged();
 
     private void GoToPackage()
     {
@@ -198,6 +211,12 @@ public sealed class PackageEntryViewModel : ObservableObject
             return;
         Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{LastPackagePath}\"")
             { UseShellExecute = true });
+    }
+
+    private void ViewPackage()
+    {
+        if (!string.IsNullOrEmpty(LastPackagePath))
+            _parent.ViewPackage(LastPackagePath);
     }
 
     private void BrowseFolder()

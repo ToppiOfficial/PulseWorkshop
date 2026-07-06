@@ -10,7 +10,9 @@ namespace PulseWorkshop.Core.Services;
 public sealed record PackageRequest(
     string PackerToolPath,
     string FolderPath,
-    string ExtraOptions);
+    string ExtraOptions,
+    bool MultiVpk = false,
+    bool IgnoreWhitelistWarnings = false);
 
 /// <summary>The outcome of a package run: process result plus the produced <c>.vpk</c>/<c>.gma</c>.</summary>
 public sealed record PackageResult(
@@ -43,8 +45,8 @@ public sealed class PackageService
 
         // gmad needs an explicit output; vpk writes "<folder>.vpk" beside the folder on its own.
         var outputPath = folder + (isGmad ? ".gma" : ".vpk");
-        var args = isGmad ? BuildGmadArgs(folder, outputPath, req.ExtraOptions)
-                          : BuildVpkArgs(folder, req.ExtraOptions);
+        var args = isGmad ? BuildGmadArgs(folder, outputPath, req.ExtraOptions, req.IgnoreWhitelistWarnings)
+                          : BuildVpkArgs(folder, req.ExtraOptions, req.MultiVpk);
 
         Output?.Invoke($"> \"{req.PackerToolPath}\" {args}");
 
@@ -98,22 +100,44 @@ public sealed class PackageService
         }
     }
 
+    /// <summary>Builds the exact packer command line (quoted exe + args) that <see cref="PackageAsync"/>
+    /// would run, for a read-only preview. Returns an empty string when the packer or folder is unset.</summary>
+    public static string BuildCommandPreview(string packerToolPath, string folderPath, string extraOptions,
+        bool multiVpk = false, bool ignoreWhitelistWarnings = false)
+    {
+        if (string.IsNullOrWhiteSpace(packerToolPath) || string.IsNullOrWhiteSpace(folderPath))
+            return string.Empty;
+
+        var folder = folderPath.TrimEnd('\\', '/');
+        var isGmad = Path.GetFileNameWithoutExtension(packerToolPath)
+            .Contains("gmad", StringComparison.OrdinalIgnoreCase);
+        var args = isGmad ? BuildGmadArgs(folder, folder + ".gma", extraOptions, ignoreWhitelistWarnings)
+                          : BuildVpkArgs(folder, extraOptions, multiVpk);
+        return $"\"{packerToolPath}\" {args}";
+    }
+
     // vpk.exe: options precede the single input folder; it writes "<folder>.vpk" beside it.
-    private static string BuildVpkArgs(string folder, string extra)
+    // -M packs into multiple chunk files instead of one.
+    private static string BuildVpkArgs(string folder, string extra, bool multiVpk)
     {
         var sb = new StringBuilder();
-        AppendExtra(sb, extra);
+        if (multiVpk)
+            sb.Append("-M");
+        AppendExtra(sb.Length > 0 ? sb.Append(' ') : sb, extra);
         if (sb.Length > 0)
             sb.Append(' ');
         sb.Append('"').Append(folder).Append('"');
         return sb.ToString();
     }
 
-    // gmad.exe create -folder <in> -out <out> [extra]
-    private static string BuildGmadArgs(string folder, string output, string extra)
+    // gmad.exe create -folder <in> -out <out> [-warninvalid] [extra]
+    // -warninvalid warns about non-whitelisted files and continues instead of failing.
+    private static string BuildGmadArgs(string folder, string output, string extra, bool warnInvalid)
     {
         var sb = new StringBuilder();
         sb.Append("create -folder \"").Append(folder).Append("\" -out \"").Append(output).Append('"');
+        if (warnInvalid)
+            sb.Append(" -warninvalid");
         AppendExtra(sb.Append(' '), extra);
         return sb.ToString().TrimEnd();
     }

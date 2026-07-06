@@ -16,8 +16,10 @@ public sealed class ModelEntryViewModel : ObservableObject
 {
     private readonly CompileAdvancedViewModel _parent;
     private bool _isCompiling;
+    private bool _isSelected;
     private bool _hasError;
     private string? _lastMdlPath;
+    private string? _mdlInfo;
 
     public ModelEntryViewModel(CompileAdvancedViewModel parent, ModelEntry model)
     {
@@ -27,10 +29,13 @@ public sealed class ModelEntryViewModel : ObservableObject
             ?? parent.OutputModes[0];
 
         BrowseQcCommand = new RelayCommand(BrowseQc);
-        CompileThisCommand = new AsyncRelayCommand(() => _parent.CompileEntryAsync(this), () => CanCompile);
         CloneCommand = new RelayCommand(() => _parent.CloneEntry(this));
         RemoveCommand = new RelayCommand(() => _parent.RemoveEntry(this));
         GoToMdlCommand = new RelayCommand(GoToMdl, () => !string.IsNullOrEmpty(LastMdlPath));
+        ViewModelCommand = new RelayCommand(
+            () => { if (!string.IsNullOrEmpty(LastMdlPath)) _parent.RequestViewModel(LastMdlPath); },
+            () => !string.IsNullOrEmpty(LastMdlPath));
+        OpenQcCommand = new RelayCommand(OpenQc, CanOpenQc);
     }
 
     public ModelEntry Model { get; }
@@ -39,10 +44,27 @@ public sealed class ModelEntryViewModel : ObservableObject
     public IReadOnlyList<OutputModeChoice> OutputModes => _parent.OutputModes;
 
     public RelayCommand BrowseQcCommand { get; }
-    public AsyncRelayCommand CompileThisCommand { get; }
     public RelayCommand CloneCommand { get; }
     public RelayCommand RemoveCommand { get; }
     public RelayCommand GoToMdlCommand { get; }
+
+    /// <summary>Sends this entry's last compiled .mdl to the Model View tab (without launching the viewer).</summary>
+    public RelayCommand ViewModelCommand { get; }
+
+    /// <summary>Opens this entry's .qc in the OS default editor (whatever is associated with .qc).</summary>
+    public RelayCommand OpenQcCommand { get; }
+
+    private bool CanOpenQc()
+    {
+        var qc = ResolvedQcPath;
+        return !string.IsNullOrWhiteSpace(qc) && File.Exists(qc);
+    }
+
+    private void OpenQc()
+    {
+        if (!CanOpenQc()) return;
+        Process.Start(new ProcessStartInfo(ResolvedQcPath) { UseShellExecute = true });
+    }
 
     /// <summary>The .mdl from this entry's last successful compile (drives its own "Go to file").</summary>
     public string? LastMdlPath
@@ -51,7 +73,10 @@ public sealed class ModelEntryViewModel : ObservableObject
         set
         {
             if (SetField(ref _lastMdlPath, value))
+            {
                 GoToMdlCommand.RaiseCanExecuteChanged();
+                ViewModelCommand.RaiseCanExecuteChanged();
+            }
         }
     }
 
@@ -61,6 +86,14 @@ public sealed class ModelEntryViewModel : ObservableObject
             return;
         Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{LastMdlPath}\"")
             { UseShellExecute = true });
+    }
+
+    /// <summary>The .mdl summary (bones, hitboxes, poly count, dependencies) from this entry's last
+    /// successful compile - read by ModelTool and shown read-only in the editor. Not persisted.</summary>
+    public string? MdlInfo
+    {
+        get => _mdlInfo;
+        set => SetField(ref _mdlInfo, value);
     }
 
     public string Name
@@ -87,6 +120,8 @@ public sealed class ModelEntryViewModel : ObservableObject
                 Model.QcPath = value ?? string.Empty;
                 OnPropertyChanged();
                 OnPropertyChanged(nameof(QcSummary));
+                OnPropertyChanged(nameof(CommandPreview));
+                OpenQcCommand.RaiseCanExecuteChanged();
                 _parent.Save();
                 _parent.RefreshCommands();
             }
@@ -121,10 +156,19 @@ public sealed class ModelEntryViewModel : ObservableObject
             {
                 Model.Command = value ?? string.Empty;
                 OnPropertyChanged();
+                OnPropertyChanged(nameof(CommandPreview));
                 _parent.Save();
             }
         }
     }
+
+    /// <summary>Read-only studiomdl command-line preview (the project's global command plus this
+    /// entry's command), mirroring the Simple tab. Built by the parent so it reflects the selected
+    /// game and gameinfo.txt; refreshed when this entry's QC/command or those project inputs change.</summary>
+    public string CommandPreview => _parent.BuildEntryCommandPreview(this);
+
+    /// <summary>Lets the parent re-raise this entry's preview when a project-level input changes.</summary>
+    public void RaiseCommandPreviewChanged() => OnPropertyChanged(nameof(CommandPreview));
 
     private OutputModeChoice _selectedOutputMode;
     public OutputModeChoice SelectedOutputMode
@@ -182,10 +226,18 @@ public sealed class ModelEntryViewModel : ObservableObject
     public bool IsCompiling
     {
         get => _isCompiling;
+        set => SetField(ref _isCompiling, value);
+    }
+
+    /// <summary>True when this row is highlighted in the entries list. Drives "Compile selected";
+    /// bound two-way to the ListBoxItem so Ctrl/Shift multi-selection flows into the view model.</summary>
+    public bool IsSelected
+    {
+        get => _isSelected;
         set
         {
-            if (SetField(ref _isCompiling, value))
-                CompileThisCommand.RaiseCanExecuteChanged();
+            if (SetField(ref _isSelected, value))
+                _parent.OnEntrySelectionChanged();
         }
     }
 
@@ -199,29 +251,6 @@ public sealed class ModelEntryViewModel : ObservableObject
 
     /// <summary>The .qc resolved to an absolute path against the project folder.</summary>
     public string ResolvedQcPath => _parent.ResolveAgainstProject(Model.QcPath);
-
-    /// <summary>True when this entry can be compiled right now (game ready, .qc exists, destination set).</summary>
-    public bool CanCompile
-    {
-        get
-        {
-            if (IsCompiling || _parent.IsCompiling || !_parent.IsGameReady)
-                return false;
-
-            var qc = ResolvedQcPath;
-            if (string.IsNullOrWhiteSpace(qc) || !File.Exists(qc))
-                return false;
-
-            return Model.OutputMode switch
-            {
-                CompileOutputMode.Subfolder => !string.IsNullOrWhiteSpace(Model.SubfolderName),
-                CompileOutputMode.WorkFolder => !string.IsNullOrWhiteSpace(Model.OutputDir),
-                _ => true,
-            };
-        }
-    }
-
-    public void RaiseCanCompileChanged() => CompileThisCommand.RaiseCanExecuteChanged();
 
     private void BrowseQc()
     {

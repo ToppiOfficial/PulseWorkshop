@@ -6,7 +6,8 @@
         Title="PulseWorkshop"
         Height="720" Width="1180" MinHeight="560" MinWidth="900"
         Background="{StaticResource BgBrush}"
-        WindowStartupLocation="CenterScreen">
+        WindowStartupLocation="CenterScreen"
+        AllowDrop="True" DragOver="Window_DragOver" Drop="Window_Drop">
 
     <Window.Resources>
         <local:NullToVisibilityConverter x:Key="NullToVis" />
@@ -21,7 +22,292 @@
              Game picker + Connect live inside the Workshop tab - they're Workshop-only; other
              tabs are for tools unrelated to the Steam Workshop connection. The live output console
              is a detached window (ConsoleWindow), toggled with the ~ key - not a drawer here. -->
-        <TabControl x:Name="MainTabs" Background="Transparent" BorderThickness="0" Padding="0">
+        <TabControl x:Name="MainTabs" Background="Transparent" BorderThickness="0" Padding="0"
+                    SelectionChanged="MainTabs_SelectionChanged">
+          <!-- Game Setup: standalone config of user-defined games (name, engine, exe/tool paths)
+               + shared Steam library folders. Master-detail: a games list on the left, a card-based
+               editor on the right. Does not affect the Workshop connection - it's persisted config
+               for future tooling. -->
+          <TabItem Header="Game Setup">
+            <Grid DataContext="{Binding GameSetup}" Margin="0,8,0,0">
+              <Grid.Resources>
+                <!-- A flat titled section (no own background): the right side is a single gradient
+                     panel like the Workshop editor, so sections sit directly on it and just use
+                     spacing + a heading to group fields. -->
+                <Style x:Key="Card" TargetType="Border">
+                    <Setter Property="Background" Value="Transparent" />
+                    <Setter Property="Padding" Value="0" />
+                    <Setter Property="Margin" Value="0,0,0,20" />
+                </Style>
+                <Style x:Key="CardTitle" TargetType="TextBlock">
+                    <Setter Property="FontSize" Value="14" />
+                    <Setter Property="FontWeight" Value="SemiBold" />
+                    <Setter Property="Margin" Value="0,0,0,12" />
+                </Style>
+
+                <!-- One reusable row for every tool-path field: label | base dropdown | path |
+                     Browse | "missing" warning. Bound to a PathFieldViewModel. -->
+                <DataTemplate x:Key="PathFieldRow">
+                    <Grid Margin="0,0,0,8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="100" />
+                            <ColumnDefinition Width="150" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Text="{Binding Label}" Style="{StaticResource MutedText}"
+                                   VerticalAlignment="Center" Margin="0,0,8,0" TextTrimming="CharacterEllipsis" />
+                        <ComboBox Grid.Column="1" ItemsSource="{Binding Choices}"
+                                  SelectedItem="{Binding SelectedChoice}"
+                                  Margin="0,0,6,0"
+                                  ToolTip="Pick a Steam library base, or '(Absolute path)' to type a full path." />
+                        <TextBox Grid.Column="2" Text="{Binding PathText, UpdateSourceTrigger=PropertyChanged}"
+                                 VerticalContentAlignment="Center" />
+                        <Button Grid.Column="3" Content="Browse..." Margin="6,0,0,0"
+                                Command="{Binding BrowseCommand}" />
+                        <TextBlock Grid.Column="4" Text="missing" Margin="8,0,0,0" VerticalAlignment="Center"
+                                   Foreground="{StaticResource LightDangerBrush}"
+                                   ToolTip="The resolved path doesn't exist on disk."
+                                   Visibility="{Binding PathMissing, Converter={StaticResource BoolToVis}}" />
+                    </Grid>
+                </DataTemplate>
+              </Grid.Resources>
+
+              <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="250" MinWidth="190" />
+                  <ColumnDefinition Width="8" />
+                  <ColumnDefinition Width="*" />
+              </Grid.ColumnDefinitions>
+
+              <!-- LEFT: games list with add on top, clone/delete at the bottom -->
+              <Border Grid.Column="0" Background="{StaticResource PanelGradientBrush}"
+                      BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
+                      CornerRadius="3" Padding="8">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+
+                    <Grid Grid.Row="0" Margin="2,2,2,8">
+                        <TextBlock Text="Games" FontWeight="SemiBold" VerticalAlignment="Center" />
+                        <Button Content="+" FontSize="18" FontWeight="Bold" Width="26" Height="26" Padding="0"
+                                HorizontalAlignment="Right" Command="{Binding AddGameCommand}"
+                                ToolTip="Add a new game" />
+                    </Grid>
+
+                    <ListBox Grid.Row="1" ItemsSource="{Binding Games}" SelectedItem="{Binding SelectedGame}"
+                             BorderThickness="0" Background="Transparent"
+                             ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <Grid Margin="2,5">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel VerticalAlignment="Center">
+                                        <TextBlock Text="{Binding DisplayName}" FontWeight="SemiBold"
+                                                   TextTrimming="CharacterEllipsis" />
+                                        <TextBlock Text="{Binding Engine}" Style="{StaticResource MutedText}" />
+                                    </StackPanel>
+                                    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                        <Button Style="{StaticResource CloneButton}" Click="GameClone_Click"
+                                                ToolTip="Clone this game (as 'Clone of ...')." />
+                                        <Button Style="{StaticResource TrashButton}" Click="GameDelete_Click"
+                                                ToolTip="Delete this game." />
+                                    </StackPanel>
+                                </Grid>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                </Grid>
+              </Border>
+
+              <GridSplitter Grid.Column="1" Width="8" HorizontalAlignment="Stretch" Background="Transparent" />
+
+              <!-- RIGHT: editor for the selected game - one gradient panel (matching the Workshop
+                   editor) with flat titled sections inside. -->
+              <Grid Grid.Column="2">
+                <TextBlock Text="Select a game on the left, or click + to add one."
+                           Style="{StaticResource MutedText}"
+                           HorizontalAlignment="Center" VerticalAlignment="Center"
+                           Visibility="{Binding SelectedGame, Converter={StaticResource NullToVis}, ConverterParameter=invert}" />
+
+                <Border Background="{StaticResource PanelGradientBrush}" BorderBrush="{StaticResource BorderBrush}"
+                        BorderThickness="1" CornerRadius="3"
+                        Visibility="{Binding SelectedGame, Converter={StaticResource NullToVis}}">
+                  <!-- Scrolls when the window is too short. On a taller window the inner grid's
+                       MinHeight tracks the scroll viewport, so the Steam library section still
+                       stretches to fill the remaining space (no dead gap at the bottom). -->
+                  <ScrollViewer x:Name="GameSetupDetailScroll" VerticalScrollBarVisibility="Auto"
+                                Padding="16,14,12,14">
+                    <Grid MinHeight="{Binding ViewportHeight, ElementName=GameSetupDetailScroll}">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+
+                    <!-- General -->
+                    <Border Grid.Row="0" Style="{StaticResource Card}">
+                      <StackPanel>
+                        <TextBlock Text="General" Style="{StaticResource CardTitle}" />
+                        <Grid Margin="0,0,0,8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="100" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="Name" Style="{StaticResource MutedText}"
+                                       VerticalAlignment="Center" Margin="0,0,8,0" />
+                            <TextBox Grid.Column="1" Text="{Binding SelectedGame.Name, UpdateSourceTrigger=PropertyChanged}"
+                                     VerticalContentAlignment="Center" />
+                        </Grid>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="100" />
+                                <ColumnDefinition Width="200" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="Engine" Style="{StaticResource MutedText}"
+                                       VerticalAlignment="Center" Margin="0,0,8,0" />
+                            <ComboBox Grid.Column="1" ItemsSource="{Binding EngineOptions}"
+                                      SelectedItem="{Binding SelectedGame.Engine}" />
+                        </Grid>
+                      </StackPanel>
+                    </Border>
+
+                    <!-- Tools -->
+                    <Border Grid.Row="1" Style="{StaticResource Card}">
+                      <StackPanel>
+                        <TextBlock Text="Tools" Style="{StaticResource CardTitle}" />
+
+                        <ContentControl Content="{Binding SelectedGame.GameInfo}"
+                                        ContentTemplate="{StaticResource PathFieldRow}" />
+                        <ContentControl Content="{Binding SelectedGame.ModelCompiler}"
+                                        ContentTemplate="{StaticResource PathFieldRow}" />
+
+                        <!-- Model compiler default options: studiomdl arguments applied to every
+                             compile for this game, combined with the per-compile / per-entry options.
+                             Columns mirror PathFieldRow so the box lines up under the path textboxes. -->
+                        <Grid Margin="0,0,0,8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="100" />
+                                <ColumnDefinition Width="150" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.ColumnSpan="2" Text="Compiler command" Style="{StaticResource MutedText}"
+                                       VerticalAlignment="Center" Margin="0,0,8,0" TextTrimming="CharacterEllipsis" />
+                            <TextBox Grid.Column="2"
+                                     Text="{Binding SelectedGame.ModelCompilerCommand, UpdateSourceTrigger=PropertyChanged}"
+                                     VerticalContentAlignment="Center"
+                                     Tag="Default studiomdl options applied to every compile for this game (e.g. -nox360). Empty by default." />
+                        </Grid>
+
+                        <ContentControl Content="{Binding SelectedGame.ModelViewer}"
+                                        ContentTemplate="{StaticResource PathFieldRow}" />
+                        <ContentControl Content="{Binding SelectedGame.PackerTool}"
+                                        ContentTemplate="{StaticResource PathFieldRow}" />
+                        <ContentControl Content="{Binding SelectedGame.VtfTool}"
+                                        ContentTemplate="{StaticResource PathFieldRow}" />
+
+                        <!-- VTF tool launch command: how the Package tool invokes the VTF tool for one
+                             image asset. Placeholders are substituted per asset. Columns mirror
+                             PathFieldRow so the box lines up under the path textboxes. -->
+                        <Grid Margin="0,0,0,8">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="100" />
+                                <ColumnDefinition Width="150" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.ColumnSpan="2" Text="VTF command" Style="{StaticResource MutedText}"
+                                       VerticalAlignment="Center" Margin="0,0,8,0" TextTrimming="CharacterEllipsis" />
+                            <TextBox Grid.Column="2"
+                                     Text="{Binding SelectedGame.VtfToolCommand, UpdateSourceTrigger=PropertyChanged}"
+                                     VerticalContentAlignment="Center"
+                                     Tag="VTF tool arguments. Placeholders: {input} {output} {outputdir} {outputname}" />
+                        </Grid>
+                      </StackPanel>
+                    </Border>
+
+                    <!-- Steam library folders (stretches to fill the remaining height; bottom margin
+                         zeroed so it lines up with the games panel on the left) -->
+                    <Border Grid.Row="2" Style="{StaticResource Card}" Margin="0,0,0,0">
+                      <Grid>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                        </Grid.RowDefinitions>
+
+                        <!-- Library folders sub-section: Add Library always on top -->
+                        <Grid Grid.Row="0" Margin="0,0,0,8">
+                            <TextBlock VerticalAlignment="Center" FontSize="14" FontWeight="SemiBold"
+                                       Text="Steam Library folders" />
+                            <Button HorizontalAlignment="Right" Content="Add Library" Padding="10,3"
+                                    Command="{Binding AddLibraryCommand}"
+                                    ToolTip="Add a Steam library folder (selectable as a base for any path above)." />
+                        </Grid>
+
+                        <!-- The table fills the rest of the card; rows scroll inside it. -->
+                        <Border Grid.Row="1" Background="{StaticResource BgBrush}" BorderBrush="{StaticResource BorderBrush}"
+                                BorderThickness="1" CornerRadius="3" Padding="8">
+                          <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="*" />
+                            </Grid.RowDefinitions>
+
+                            <Grid Grid.Row="0" Margin="0,0,0,6">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Text="Library path" Style="{StaticResource MutedText}"
+                                           FontWeight="SemiBold" />
+                                <TextBlock Grid.Column="1" Text="Browse" Style="{StaticResource MutedText}"
+                                           FontWeight="SemiBold" Margin="0,0,38,0" />
+                            </Grid>
+
+                            <TextBlock Grid.Row="1" Text="No libraries yet - click 'Add Library' above."
+                                       Style="{StaticResource MutedText}" Margin="0,2,0,2"
+                                       Visibility="{Binding HasLibraries, Converter={StaticResource BoolToVis}, ConverterParameter=invert}" />
+
+                            <ItemsControl Grid.Row="2" VerticalAlignment="Top" ItemsSource="{Binding Libraries}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Grid Margin="0,0,0,6">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <TextBox Text="{Binding PathText, UpdateSourceTrigger=PropertyChanged}"
+                                                     Tag="Steam library path (e.g. D:\SteamLibrary)"
+                                                     VerticalContentAlignment="Center" />
+                                            <Button Grid.Column="1" Content="Browse..." Margin="6,0,0,0"
+                                                    Command="{Binding BrowseCommand}" />
+                                            <Button Grid.Column="2" Style="{StaticResource TrashButton}"
+                                                    VerticalAlignment="Center" Margin="2,0,0,0"
+                                                    Command="{Binding RemoveCommand}"
+                                                    ToolTip="Remove this library." />
+                                        </Grid>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                          </Grid>
+                        </Border>
+                      </Grid>
+                    </Border>
+                    </Grid>
+                  </ScrollViewer>
+                </Border>
+              </Grid>
+            </Grid>
+          </TabItem>
+
           <TabItem Header="Workshop" x:Name="WorkshopTab">
             <DockPanel Margin="0,8,0,0">
             <!-- Connection bar: game picker + connect (Workshop-only). -->
@@ -43,13 +329,21 @@
                           SelectedItem="{Binding SelectedGame}" DisplayMemberPath="DisplayName"
                           VerticalAlignment="Center" />
 
-                <!-- Connect / Disconnect occupy the same slot; only one is visible at a time. -->
-                <Button Grid.Column="2" Content="Connect" Margin="12,0,0,0" MinWidth="110"
-                        Style="{StaticResource AccentButton}" Command="{Binding ConnectCommand}"
-                        Visibility="{Binding IsConnected, Converter={StaticResource BoolToVis}, ConverterParameter=invert}" />
-                <Button Grid.Column="2" Content="Disconnect" Margin="12,0,0,0" MinWidth="110"
-                        Style="{StaticResource DisconnectButton}" Command="{Binding DisconnectCommand}"
-                        Visibility="{Binding IsConnected, Converter={StaticResource BoolToVis}}" />
+                <!-- Connect (disconnected) or Disconnect + Launch game (connected) share this slot. -->
+                <StackPanel Grid.Column="2" Orientation="Horizontal" Margin="12,0,0,0">
+                    <Button Content="Connect" MinWidth="110"
+                            Style="{StaticResource AccentButton}" Command="{Binding ConnectCommand}"
+                            Visibility="{Binding IsConnected, Converter={StaticResource BoolToVis}, ConverterParameter=invert}" />
+                    <Button Content="Disconnect" MinWidth="110"
+                            Style="{StaticResource DisconnectButton}" Command="{Binding DisconnectCommand}"
+                            Visibility="{Binding IsConnected, Converter={StaticResource BoolToVis}}" />
+                    <!-- Launch game: briefly drops the Steam session so a normal launch isn't blocked,
+                         starts the game via Steam, then reconnects - keeping the loaded Workshop list. -->
+                    <Button Content="Launch game" MinWidth="110" Margin="8,0,0,0"
+                            Style="{StaticResource AccentButton}" Command="{Binding LaunchGameCommand}"
+                            ToolTip="Release the Steam session, start the game through Steam, then reconnect - your loaded Workshop list is kept."
+                            Visibility="{Binding IsConnected, Converter={StaticResource BoolToVis}}" />
+                </StackPanel>
 
                 <!-- Logged-in Steam user: avatar + persona name + SteamID64, far right. -->
                 <StackPanel Grid.Column="4" Orientation="Horizontal" VerticalAlignment="Center"
@@ -195,29 +489,42 @@
                             </Grid.RowDefinitions>
                             <Grid Margin="0,0,0,8">
                                 <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
                                     <ColumnDefinition Width="*" />
                                     <ColumnDefinition Width="Auto" />
                                     <ColumnDefinition Width="Auto" />
                                     <ColumnDefinition Width="Auto" />
                                 </Grid.ColumnDefinitions>
-                                <TextBox Grid.Column="0" x:Name="DraftsSearchBox"
+                                <!-- Clears the multi-selection (Ctrl+A selects all). Shown only while something is selected. -->
+                                <Button Grid.Column="0" Content="Clear" Padding="8,4" Margin="0,0,6,0"
+                                        Click="DraftClearSelection_Click"
+                                        Visibility="{Binding HasDraftSelection, Converter={StaticResource BoolToVis}}"
+                                        ToolTip="Clear the selected drafts." />
+                                <TextBox Grid.Column="1" x:Name="DraftsSearchBox"
                                          Text="{Binding DraftsSearch, UpdateSourceTrigger=PropertyChanged}"
                                          KeyDown="SearchBox_KeyDown"
                                          Tag="Search drafts..." />
-                                <ToggleButton Grid.Column="1" Content=".*" Margin="6,0,0,0" Padding="8,4"
+                                <ToggleButton Grid.Column="2" Content=".*" Margin="6,0,0,0" Padding="8,4"
                                               IsChecked="{Binding DraftsRegex}" ToolTip="Regex" />
-                                <ComboBox Grid.Column="2" Width="120" Margin="6,0,0,0"
+                                <ComboBox Grid.Column="3" Width="120" Margin="6,0,0,0"
                                           ItemsSource="{Binding DraftSortOptions}"
                                           SelectedItem="{Binding SelectedDraftSort}"
                                           ToolTip="Sort the drafts list." />
-                                <ToggleButton Grid.Column="3" Content="Reverse" Margin="6,0,0,0" Padding="8,4"
+                                <ToggleButton Grid.Column="4" Content="Reverse" Margin="6,0,0,0" Padding="8,4"
                                               IsChecked="{Binding DraftSortReversed}"
                                               ToolTip="Reverse the chosen sort order." />
                             </Grid>
                             <ListBox Grid.Row="1" ItemsSource="{Binding DraftsView}"
                                  BorderThickness="0" Background="Transparent"
                                  ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                 SelectionMode="Extended"
                                  SelectionChanged="DraftsList_SelectionChanged" x:Name="DraftsList">
+                            <!-- Highlighting a row (Ctrl/Shift for several) feeds the bulk publish / delete bar. -->
+                            <ListBox.ItemContainerStyle>
+                                <Style TargetType="ListBoxItem" BasedOn="{StaticResource {x:Type ListBoxItem}}">
+                                    <Setter Property="IsSelected" Value="{Binding IsSelected, Mode=TwoWay}" />
+                                </Style>
+                            </ListBox.ItemContainerStyle>
                             <ListBox.ItemTemplate>
                                 <DataTemplate>
                                     <Grid Margin="2,6">
@@ -237,6 +544,22 @@
                                                        TextTrimming="CharacterEllipsis" />
                                             <TextBlock Text="{Binding Modified, StringFormat='Modified {0:g}'}"
                                                        Style="{StaticResource MutedText}" />
+                                            <!-- Shown only when the draft edits an existing published item. -->
+                                            <TextBlock Text="{Binding WorkshopIdLabel}"
+                                                       Style="{StaticResource MutedText}"
+                                                       TextTrimming="CharacterEllipsis"
+                                                       Visibility="{Binding IsPublished, Converter={StaticResource BoolToVis}}" />
+                                            <!-- Content file path: the directory part trims with an ellipsis while
+                                                 the file name stays pinned right, so it reads e.g. c:\docs\...mod.vpk. -->
+                                            <DockPanel LastChildFill="True"
+                                                       Visibility="{Binding HasContentFile, Converter={StaticResource BoolToVis}}"
+                                                       ToolTip="{Binding ContentFilePath}">
+                                                <TextBlock DockPanel.Dock="Right" Text="{Binding ContentFileName}"
+                                                           Style="{StaticResource MutedText}" />
+                                                <TextBlock Text="{Binding ContentFileDirectory}"
+                                                           TextTrimming="CharacterEllipsis"
+                                                           Style="{StaticResource MutedText}" />
+                                            </DockPanel>
                                         </StackPanel>
                                         <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
                                             <Button Style="{StaticResource CloneButton}" Click="DraftClone_Click"
@@ -433,9 +756,26 @@
                                 <TextBlock Style="{StaticResource MutedText}" Margin="0,0,0,4">
                                     <Run Text="Content file (" /><Run Text="{Binding ContentFileExtension, Mode=OneWay}" /><Run Text=")" />
                                 </TextBlock>
-                                <!-- Manual path entry; two-way synced with the drop zone and browse dialog. -->
+                                <!-- Manual path entry; two-way synced with the drop zone and browse dialog.
+                                     File mode: a file path. Directory mode (editing a published item with a
+                                     known filename): a folder - the published file is auto-picked from it. -->
                                 <TextBox Text="{Binding ContentFile, UpdateSourceTrigger=PropertyChanged}"
-                                         Tag="Type or paste a file path" Margin="0,0,0,6" />
+                                         Tag="Type or paste a file path" Margin="0,0,0,6"
+                                         Visibility="{Binding UsesDirectoryContentInput, Converter={StaticResource BoolToVis}, ConverterParameter=invert}" />
+                                <TextBox Text="{Binding ContentDirectory, UpdateSourceTrigger=PropertyChanged}"
+                                         Tag="Paste a folder (auto-picks the file) or a full file path" Margin="0,0,0,6"
+                                         Visibility="{Binding UsesDirectoryContentInput, Converter={StaticResource BoolToVis}}">
+                                    <TextBox.Style>
+                                        <Style TargetType="TextBox" BasedOn="{StaticResource {x:Type TextBox}}">
+                                            <Style.Triggers>
+                                                <!-- Folder chosen but it lacks the published file: flag it red. -->
+                                                <DataTrigger Binding="{Binding ContentDirectoryInvalid}" Value="True">
+                                                    <Setter Property="BorderBrush" Value="{StaticResource DangerBrush}" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBox.Style>
+                                </TextBox>
                                 <Border x:Name="ContentDrop" Height="250" CornerRadius="3" AllowDrop="True"
                                         Background="{StaticResource BgBrush}" BorderBrush="{StaticResource BorderBrush}"
                                         BorderThickness="1" Cursor="Hand"
@@ -445,7 +785,7 @@
                                         <!-- Empty: no new file chosen and no published file to describe. -->
                                         <TextBlock Style="{StaticResource MutedText}" TextAlignment="Center"
                                                    VerticalAlignment="Center" TextWrapping="Wrap" Margin="10"
-                                                   Text="Drop or click to choose content file"
+                                                   Text="{Binding ContentPlaceholderText}"
                                                    Visibility="{Binding ShowContentPlaceholder, Converter={StaticResource BoolToVis}}" />
                                         <!-- Already-published file (info only; stays unless a new file is chosen). -->
                                         <StackPanel VerticalAlignment="Center" Margin="10"
@@ -453,7 +793,17 @@
                                             <TextBlock Text="{Binding PublishedContentInfo}"
                                                        ToolTip="{Binding PublishedContentInfo}"
                                                        TextAlignment="Center" TextTrimming="CharacterEllipsis" />
-                                            <TextBlock Text="Currently published - drop a file to replace"
+                                            <TextBlock Text="{Binding ContentReplaceHint}"
+                                                       Style="{StaticResource MutedText}"
+                                                       TextAlignment="Center" TextWrapping="Wrap" Margin="0,4,0,0" />
+                                        </StackPanel>
+                                        <!-- Directory mode: chosen folder lacks the published file. -->
+                                        <StackPanel VerticalAlignment="Center" Margin="10"
+                                                    Visibility="{Binding ShowContentDirectoryError, Converter={StaticResource BoolToVis}}">
+                                            <TextBlock Text="{Binding ContentDirectoryError}"
+                                                       Foreground="{StaticResource LightDangerBrush}"
+                                                       TextAlignment="Center" TextWrapping="Wrap" FontWeight="SemiBold" />
+                                            <TextBlock Text="Choose a folder that contains the published file."
                                                        Style="{StaticResource MutedText}"
                                                        TextAlignment="Center" TextWrapping="Wrap" Margin="0,4,0,0" />
                                         </StackPanel>
@@ -616,6 +966,17 @@
                     <TextBlock Text="{Binding PublishRequirementsHint}" Style="{StaticResource MutedText}"
                                VerticalAlignment="Center" Margin="0,0,12,0"
                                Visibility="{Binding PublishRequirementsHint, Converter={StaticResource StringToVis}}" />
+                    <!-- Bulk actions on the highlighted drafts; only surface when more than one is selected. -->
+                    <Button Content="Revert selected" Margin="0,0,8,0"
+                            Click="DeleteSelectedDrafts_Click"
+                            IsEnabled="{Binding CanRunDraftBulkAction}"
+                            Visibility="{Binding HasMultipleDraftsSelected, Converter={StaticResource BoolToVis}}"
+                            ToolTip="Discard the selected drafts (edits revert to the published item; the Workshop items are NOT deleted)." />
+                    <Button Content="{Binding PublishSelectedDraftsText}" Style="{StaticResource AccentButton}" Margin="0,0,8,0"
+                            Click="PublishSelectedDrafts_Click"
+                            IsEnabled="{Binding CanRunDraftBulkAction}"
+                            Visibility="{Binding HasMultipleDraftsSelected, Converter={StaticResource BoolToVis}}"
+                            ToolTip="Publish new items and save edits for all selected drafts." />
                     <Button Content="Save as template" Click="SaveAsTemplate_Click" Margin="0,0,8,0"
                             ToolTip="Save the current tags / description / visibility as a reusable template."
                             Visibility="{Binding CanSaveAsTemplate, Converter={StaticResource BoolToVis}}" />
@@ -631,266 +992,276 @@
             </DockPanel>
           </TabItem>
 
-          <!-- Game Setup: standalone config of user-defined games (name, engine, exe/tool paths)
-               + shared Steam library folders. Master-detail: a games list on the left, a card-based
-               editor on the right. Does not affect the Workshop connection - it's persisted config
-               for future tooling. -->
-          <TabItem Header="Game Setup">
-            <Grid DataContext="{Binding GameSetup}" Margin="0,8,0,0">
-              <Grid.Resources>
-                <!-- A flat titled section (no own background): the right side is a single gradient
-                     panel like the Workshop editor, so sections sit directly on it and just use
-                     spacing + a heading to group fields. -->
-                <Style x:Key="Card" TargetType="Border">
-                    <Setter Property="Background" Value="Transparent" />
-                    <Setter Property="Padding" Value="0" />
-                    <Setter Property="Margin" Value="0,0,0,20" />
-                </Style>
-                <Style x:Key="CardTitle" TargetType="TextBlock">
-                    <Setter Property="FontSize" Value="14" />
-                    <Setter Property="FontWeight" Value="SemiBold" />
-                    <Setter Property="Margin" Value="0,0,0,12" />
-                </Style>
+          <!-- Unpack: browse + export .vpk / .gma archives, or a whole game via gameinfo.txt. -->
+          <TabItem Header="Unpack" x:Name="UnpackTab" DataContext="{Binding Unpack}">
+            <Grid Margin="0,8,0,4">
 
-                <!-- One reusable row for every tool-path field: label | base dropdown | path |
-                     Browse | "missing" warning. Bound to a PathFieldViewModel. -->
-                <DataTemplate x:Key="PathFieldRow">
-                    <Grid Margin="0,0,0,8">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="100" />
-                            <ColumnDefinition Width="150" />
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-                        <TextBlock Text="{Binding Label}" Style="{StaticResource MutedText}"
-                                   VerticalAlignment="Center" Margin="0,0,8,0" TextTrimming="CharacterEllipsis" />
-                        <ComboBox Grid.Column="1" ItemsSource="{Binding Choices}"
-                                  SelectedItem="{Binding SelectedChoice}"
-                                  Margin="0,0,6,0"
-                                  ToolTip="Pick a Steam library base, or '(Absolute path)' to type a full path." />
-                        <TextBox Grid.Column="2" Text="{Binding PathText, UpdateSourceTrigger=PropertyChanged}"
-                                 VerticalContentAlignment="Center" />
-                        <Button Grid.Column="3" Content="Browse..." Margin="6,0,0,0"
-                                Command="{Binding BrowseCommand}" />
-                        <TextBlock Grid.Column="4" Text="missing" Margin="8,0,0,0" VerticalAlignment="Center"
-                                   Foreground="{StaticResource LightDangerBrush}"
-                                   ToolTip="The resolved path doesn't exist on disk."
-                                   Visibility="{Binding PathMissing, Converter={StaticResource BoolToVis}}" />
-                    </Grid>
-                </DataTemplate>
-              </Grid.Resources>
-
-              <Grid.ColumnDefinitions>
-                  <ColumnDefinition Width="250" MinWidth="190" />
-                  <ColumnDefinition Width="8" />
-                  <ColumnDefinition Width="*" />
-              </Grid.ColumnDefinitions>
-
-              <!-- LEFT: games list with add on top, clone/delete at the bottom -->
-              <Border Grid.Column="0" Background="{StaticResource PanelGradientBrush}"
-                      BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
-                      CornerRadius="3" Padding="8">
-                <Grid>
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto" />
-                        <RowDefinition Height="*" />
-                    </Grid.RowDefinitions>
-
-                    <Grid Grid.Row="0" Margin="2,2,2,8">
-                        <TextBlock Text="Games" FontWeight="SemiBold" VerticalAlignment="Center" />
-                        <Button Content="+" FontSize="18" FontWeight="Bold" Width="26" Height="26" Padding="0"
-                                HorizontalAlignment="Right" Command="{Binding AddGameCommand}"
-                                ToolTip="Add a new game" />
-                    </Grid>
-
-                    <ListBox Grid.Row="1" ItemsSource="{Binding Games}" SelectedItem="{Binding SelectedGame}"
-                             BorderThickness="0" Background="Transparent"
-                             ScrollViewer.HorizontalScrollBarVisibility="Disabled">
-                        <ListBox.ItemTemplate>
-                            <DataTemplate>
-                                <Grid Margin="2,5">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*" />
-                                        <ColumnDefinition Width="Auto" />
-                                    </Grid.ColumnDefinitions>
-                                    <StackPanel VerticalAlignment="Center">
-                                        <TextBlock Text="{Binding DisplayName}" FontWeight="SemiBold"
-                                                   TextTrimming="CharacterEllipsis" />
-                                        <TextBlock Text="{Binding Engine}" Style="{StaticResource MutedText}" />
-                                    </StackPanel>
-                                    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                                        <Button Style="{StaticResource CloneButton}" Click="GameClone_Click"
-                                                ToolTip="Clone this game (as 'Clone of ...')." />
-                                        <Button Style="{StaticResource TrashButton}" Click="GameDelete_Click"
-                                                ToolTip="Delete this game." />
-                                    </StackPanel>
-                                </Grid>
-                            </DataTemplate>
-                        </ListBox.ItemTemplate>
-                    </ListBox>
-                </Grid>
+              <!-- Nothing open: prompt to pick an archive (or a gameinfo.txt for a full-game mount). -->
+              <Border Background="{StaticResource PanelGradientBrush}" BorderBrush="{StaticResource BorderBrush}"
+                      BorderThickness="1" CornerRadius="3"
+                      Visibility="{Binding IsArchiveOpen, Converter={StaticResource BoolToVis}, ConverterParameter=invert}">
+                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                    <TextBlock Text="Unpack" FontSize="15" FontWeight="SemiBold" HorizontalAlignment="Center" />
+                    <TextBlock Style="{StaticResource MutedText}" HorizontalAlignment="Center"
+                               Margin="0,6,0,14" TextAlignment="Center" MaxWidth="480" TextWrapping="Wrap"
+                               Text="Open a .vpk package or a .gma addon to browse and export its contents - or open a game's gameinfo.txt to mount every VPK its SearchPaths reference, in engine priority order (for conflicting files the topmost search path wins, exactly as the engine loads them)." />
+                    <Button Content="Open package..." Style="{StaticResource AccentButton}"
+                            Padding="16,8" HorizontalAlignment="Center" Command="{Binding OpenCommand}" />
+                    <!-- Status stays visible after a failed open (the error would otherwise vanish
+                         with the loading indicator). -->
+                    <TextBlock Text="{Binding StatusMessage}" Style="{StaticResource MutedText}"
+                               HorizontalAlignment="Center" Margin="0,14,0,0" MaxWidth="480"
+                               TextWrapping="Wrap" TextAlignment="Center" />
+                    <ProgressBar Width="220" IsIndeterminate="True" Margin="0,8,0,0"
+                                 HorizontalAlignment="Center"
+                                 Visibility="{Binding IsLoading, Converter={StaticResource BoolToVis}}" />
+                </StackPanel>
               </Border>
 
-              <GridSplitter Grid.Column="1" Width="8" HorizontalAlignment="Stretch" Background="Transparent" />
+              <!-- Archive open: header bar + browser + export bar. -->
+              <Grid Visibility="{Binding IsArchiveOpen, Converter={StaticResource BoolToVis}}">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" MinHeight="160" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
 
-              <!-- RIGHT: editor for the selected game - one gradient panel (matching the Workshop
-                   editor) with flat titled sections inside. -->
-              <Grid Grid.Column="2">
-                <TextBlock Text="Select a game on the left, or click + to add one."
-                           Style="{StaticResource MutedText}"
-                           HorizontalAlignment="Center" VerticalAlignment="Center"
-                           Visibility="{Binding SelectedGame, Converter={StaticResource NullToVis}, ConverterParameter=invert}" />
-
-                <Border Background="{StaticResource PanelGradientBrush}" BorderBrush="{StaticResource BorderBrush}"
-                        BorderThickness="1" CornerRadius="3"
-                        Visibility="{Binding SelectedGame, Converter={StaticResource NullToVis}}">
-                  <!-- Scrolls when the window is too short. On a taller window the inner grid's
-                       MinHeight tracks the scroll viewport, so the Steam library section still
-                       stretches to fill the remaining space (no dead gap at the bottom). -->
-                  <ScrollViewer x:Name="GameSetupDetailScroll" VerticalScrollBarVisibility="Auto"
-                                Padding="16,14,12,14">
-                    <Grid MinHeight="{Binding ViewportHeight, ElementName=GameSetupDetailScroll}">
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto" />
-                        <RowDefinition Height="Auto" />
-                        <RowDefinition Height="*" />
-                    </Grid.RowDefinitions>
-
-                    <!-- General -->
-                    <Border Grid.Row="0" Style="{StaticResource Card}">
+                <!-- Header: what's open, with Open / Close. -->
+                <Border Grid.Row="0" Background="{StaticResource HeaderGradientBrush}"
+                        BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="3"
+                        Padding="12,8">
+                  <Grid>
+                      <Grid.ColumnDefinitions>
+                          <ColumnDefinition Width="*" />
+                          <ColumnDefinition Width="Auto" />
+                      </Grid.ColumnDefinitions>
                       <StackPanel>
-                        <TextBlock Text="General" Style="{StaticResource CardTitle}" />
-                        <Grid Margin="0,0,0,8">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="100" />
-                                <ColumnDefinition Width="*" />
-                            </Grid.ColumnDefinitions>
-                            <TextBlock Text="Name" Style="{StaticResource MutedText}"
-                                       VerticalAlignment="Center" Margin="0,0,8,0" />
-                            <TextBox Grid.Column="1" Text="{Binding SelectedGame.Name, UpdateSourceTrigger=PropertyChanged}"
-                                     VerticalContentAlignment="Center" />
-                        </Grid>
-                        <Grid>
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="100" />
-                                <ColumnDefinition Width="200" />
-                                <ColumnDefinition Width="*" />
-                            </Grid.ColumnDefinitions>
-                            <TextBlock Text="Engine" Style="{StaticResource MutedText}"
-                                       VerticalAlignment="Center" Margin="0,0,8,0" />
-                            <ComboBox Grid.Column="1" ItemsSource="{Binding EngineOptions}"
-                                      SelectedItem="{Binding SelectedGame.Engine}" />
-                        </Grid>
+                          <TextBlock Text="{Binding ArchiveName}" FontWeight="SemiBold" />
+                          <TextBlock Text="{Binding ArchivePath}" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"
+                                     Style="{StaticResource MutedText}" ToolTip="{Binding ArchivePath}" />
+                          <TextBlock Text="{Binding ArchiveSummary}" Style="{StaticResource MutedText}" />
                       </StackPanel>
+                      <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                          <Button Content="Open" Padding="10,4" Command="{Binding OpenCommand}" />
+                          <Button Content="Close" Margin="6,0,0,0" Padding="10,4" Command="{Binding CloseCommand}" />
+                      </StackPanel>
+                  </Grid>
+                </Border>
+
+                <!-- Browser: folder tree on the left, files of the selected folder on the right. -->
+                <Border Grid.Row="1" Margin="0,8,0,0" Background="{StaticResource PanelGradientBrush}"
+                        BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="3">
+                  <Grid Margin="14,10">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="320" MinWidth="200" />
+                        <ColumnDefinition Width="8" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+
+                    <!-- LEFT: folder tree. -->
+                    <Border Grid.Column="0" Background="{StaticResource PanelAltBrush}"
+                            BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
+                            CornerRadius="3" Padding="6">
+                      <TreeView x:Name="UnpackTree" ItemsSource="{Binding TreeRoots}"
+                                SelectedItemChanged="UnpackTree_SelectedItemChanged"
+                                ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                          <TreeView.ItemContainerStyle>
+                              <Style TargetType="TreeViewItem" BasedOn="{StaticResource {x:Type TreeViewItem}}">
+                                  <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}" />
+                                  <Setter Property="IsSelected" Value="{Binding IsSelected, Mode=TwoWay}" />
+                              </Style>
+                          </TreeView.ItemContainerStyle>
+                          <TreeView.ItemTemplate>
+                              <HierarchicalDataTemplate ItemsSource="{Binding Children}">
+                                  <StackPanel Orientation="Horizontal">
+                                      <!-- Per-folder context menu (in the template, not the
+                                           ItemContainerStyle: Click handlers in a Style setter break
+                                           WPF's connection-ID wiring). -->
+                                      <StackPanel.ContextMenu>
+                                          <ContextMenu Style="{StaticResource DarkContextMenu}">
+                                              <MenuItem Header="Export folder..." Style="{StaticResource DarkMenuItem}"
+                                                        Click="UnpackExportFolderMenu_Click"
+                                                        ToolTip="Export this folder and all its subfolders to disk, recreating the folder structure." />
+                                          </ContextMenu>
+                                      </StackPanel.ContextMenu>
+                                      <!-- Folder glyph -->
+                                      <Path Data="M10,4H4C2.89,4 2,4.89 2,6V18A2,2 0 0,0 4,20H20A2,2 0 0,0 22,18V8C22,6.89 21.1,6 20,6H12L10,4Z"
+                                            Fill="{StaticResource MutedTextBrush}" Stretch="Uniform"
+                                            Width="13" Height="13" Margin="0,0,6,0" VerticalAlignment="Center" />
+                                      <TextBlock Text="{Binding Name}" VerticalAlignment="Center"
+                                                 TextTrimming="CharacterEllipsis" />
+                                      <TextBlock Text="{Binding TotalFileCount, StringFormat=' ({0:N0})'}"
+                                                 Style="{StaticResource MutedText}" VerticalAlignment="Center" />
+                                  </StackPanel>
+                              </HierarchicalDataTemplate>
+                          </TreeView.ItemTemplate>
+                      </TreeView>
                     </Border>
 
-                    <!-- Tools -->
-                    <Border Grid.Row="1" Style="{StaticResource Card}">
-                      <StackPanel>
-                        <TextBlock Text="Tools" Style="{StaticResource CardTitle}" />
+                    <GridSplitter Grid.Column="1" Width="8" HorizontalAlignment="Stretch" Background="Transparent" />
 
-                        <ContentControl Content="{Binding SelectedGame.GameInfo}"
-                                        ContentTemplate="{StaticResource PathFieldRow}" />
-                        <ContentControl Content="{Binding SelectedGame.ModelCompiler}"
-                                        ContentTemplate="{StaticResource PathFieldRow}" />
-                        <ContentControl Content="{Binding SelectedGame.ModelViewer}"
-                                        ContentTemplate="{StaticResource PathFieldRow}" />
-                        <ContentControl Content="{Binding SelectedGame.PackerTool}"
-                                        ContentTemplate="{StaticResource PathFieldRow}" />
-                        <ContentControl Content="{Binding SelectedGame.VtfTool}"
-                                        ContentTemplate="{StaticResource PathFieldRow}" />
-
-                        <!-- VTF tool launch command: how the Package tool invokes the VTF tool for one
-                             image asset. Placeholders are substituted per asset. -->
-                        <Grid Margin="0,2,0,0">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="100" />
-                                <ColumnDefinition Width="*" />
-                            </Grid.ColumnDefinitions>
-                            <TextBlock Text="VTF command" Style="{StaticResource MutedText}"
-                                       VerticalAlignment="Center" Margin="0,0,8,0" />
-                            <TextBox Grid.Column="1"
-                                     Text="{Binding SelectedGame.VtfToolCommand, UpdateSourceTrigger=PropertyChanged}"
-                                     VerticalContentAlignment="Center"
-                                     Tag="VTF tool arguments. Placeholders: {input} {output} {outputdir} {outputname}" />
-                        </Grid>
-                      </StackPanel>
-                    </Border>
-
-                    <!-- Steam library folders (stretches to fill the remaining height; bottom margin
-                         zeroed so it lines up with the games panel on the left) -->
-                    <Border Grid.Row="2" Style="{StaticResource Card}" Margin="0,0,0,0">
-                      <Grid>
+                    <!-- RIGHT: filter + column header ribbon + file list. -->
+                    <Grid Grid.Column="2">
                         <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="*" />
                         </Grid.RowDefinitions>
 
-                        <!-- Library folders sub-section: Add Library always on top -->
-                        <Grid Grid.Row="0" Margin="0,0,0,8">
-                            <TextBlock VerticalAlignment="Center" FontSize="14" FontWeight="SemiBold"
-                                       Text="Steam Library folders" />
-                            <Button HorizontalAlignment="Right" Content="Add Library" Padding="10,3"
-                                    Command="{Binding AddLibraryCommand}"
-                                    ToolTip="Add a Steam library folder (selectable as a base for any path above)." />
+                        <Grid Grid.Row="0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBox Text="{Binding FilterText, UpdateSourceTrigger=PropertyChanged}"
+                                     Tag="Search (updates shortly after you stop typing; Enter searches now)"
+                                     KeyDown="UnpackFilter_KeyDown"
+                                     ToolTip="Search over the scope on the right - plain substring, or a regex when .* is on. Results refresh shortly after typing pauses - press Enter to search immediately. Clear to go back to folder browsing."
+                                     VerticalContentAlignment="Center" />
+                            <ToggleButton Grid.Column="1" Content=".*" Margin="6,0,0,0" Padding="8,4"
+                                          IsChecked="{Binding FilterRegex}"
+                                          ToolTip="Treat the search as a regex (case-insensitive). Off = plain substring match." />
+                            <ComboBox Grid.Column="2" Width="110" Margin="6,0,0,0"
+                                      ItemsSource="{Binding SearchScopes}"
+                                      SelectedItem="{Binding SelectedSearchScope}"
+                                      ToolTip="Search scope - Current: only the selected folder's own files. Recursive: the selected folder and all its subfolders. Global: every file in the package." />
                         </Grid>
 
-                        <!-- The table fills the rest of the card; rows scroll inside it. -->
-                        <Border Grid.Row="1" Background="{StaticResource BgBrush}" BorderBrush="{StaticResource BorderBrush}"
-                                BorderThickness="1" CornerRadius="3" Padding="8">
+                        <TextBlock Grid.Row="1" Text="{Binding FileListCaption}" Style="{StaticResource MutedText}"
+                                   Margin="2,6,2,4" TextTrimming="CharacterEllipsis" />
+
+                        <!-- Clickable column-header ribbon (Explorer-style): click to sort, click again
+                             to reverse. Column widths match the row template below. The right margin
+                             leaves room for the list's scrollbar so headers line up with the cells. -->
+                        <Border Grid.Row="2" Margin="2,0,13,2" BorderBrush="{StaticResource BorderBrush}"
+                                BorderThickness="0,0,0,1">
                           <Grid>
-                            <Grid.RowDefinitions>
-                                <RowDefinition Height="Auto" />
-                                <RowDefinition Height="Auto" />
-                                <RowDefinition Height="*" />
-                            </Grid.RowDefinitions>
-
-                            <Grid Grid.Row="0" Margin="0,0,0,6">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="*" />
-                                    <ColumnDefinition Width="Auto" />
-                                    <ColumnDefinition Width="Auto" />
-                                </Grid.ColumnDefinitions>
-                                <TextBlock Text="Library path" Style="{StaticResource MutedText}"
-                                           FontWeight="SemiBold" />
-                                <TextBlock Grid.Column="1" Text="Browse" Style="{StaticResource MutedText}"
-                                           FontWeight="SemiBold" Margin="0,0,38,0" />
-                            </Grid>
-
-                            <TextBlock Grid.Row="1" Text="No libraries yet - click 'Add Library' above."
-                                       Style="{StaticResource MutedText}" Margin="0,2,0,2"
-                                       Visibility="{Binding HasLibraries, Converter={StaticResource BoolToVis}, ConverterParameter=invert}" />
-
-                            <ItemsControl Grid.Row="2" VerticalAlignment="Top" ItemsSource="{Binding Libraries}">
-                                <ItemsControl.ItemTemplate>
-                                    <DataTemplate>
-                                        <Grid Margin="0,0,0,6">
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="*" />
-                                                <ColumnDefinition Width="Auto" />
-                                                <ColumnDefinition Width="Auto" />
-                                            </Grid.ColumnDefinitions>
-                                            <TextBox Text="{Binding PathText, UpdateSourceTrigger=PropertyChanged}"
-                                                     Tag="Steam library path (e.g. D:\SteamLibrary)"
-                                                     VerticalContentAlignment="Center" />
-                                            <Button Grid.Column="1" Content="Browse..." Margin="6,0,0,0"
-                                                    Command="{Binding BrowseCommand}" />
-                                            <Button Grid.Column="2" Style="{StaticResource TrashButton}"
-                                                    VerticalAlignment="Center" Margin="2,0,0,0"
-                                                    Command="{Binding RemoveCommand}"
-                                                    ToolTip="Remove this library." />
-                                        </Grid>
-                                    </DataTemplate>
-                                </ItemsControl.ItemTemplate>
-                            </ItemsControl>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="52" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="170" />
+                                <ColumnDefinition Width="80" />
+                            </Grid.ColumnDefinitions>
+                            <Button Grid.Column="0" Style="{StaticResource ColumnHeaderButton}"
+                                    Tag="Type" Click="UnpackSort_Click" ToolTip="Sort by file type">
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="Type" />
+                                    <TextBlock Text="{Binding SortGlyphType}" Margin="3,0,0,0" FontSize="9" />
+                                </StackPanel>
+                            </Button>
+                            <Button Grid.Column="1" Style="{StaticResource ColumnHeaderButton}"
+                                    Tag="Name" Click="UnpackSort_Click" ToolTip="Sort by name">
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="Name" />
+                                    <TextBlock Text="{Binding SortGlyphName}" Margin="3,0,0,0" FontSize="9" />
+                                </StackPanel>
+                            </Button>
+                            <Button Grid.Column="2" Style="{StaticResource ColumnHeaderButton}"
+                                    Tag="Source" Click="UnpackSort_Click" ToolTip="Sort by pack (the .vpk/.gma it belongs to)">
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="Pack" />
+                                    <TextBlock Text="{Binding SortGlyphSource}" Margin="3,0,0,0" FontSize="9" />
+                                </StackPanel>
+                            </Button>
+                            <Button Grid.Column="3" Style="{StaticResource ColumnHeaderButton}"
+                                    Tag="Size" Click="UnpackSort_Click" ToolTip="Sort by file size"
+                                    HorizontalContentAlignment="Right">
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="Size" />
+                                    <TextBlock Text="{Binding SortGlyphSize}" Margin="3,0,0,0" FontSize="9" />
+                                </StackPanel>
+                            </Button>
                           </Grid>
                         </Border>
-                      </Grid>
-                    </Border>
+
+                        <ListBox x:Name="UnpackFiles" Grid.Row="3" ItemsSource="{Binding Files}"
+                                 SelectionMode="Extended" Background="Transparent" BorderThickness="0"
+                                 HorizontalContentAlignment="Stretch"
+                                 MouseDoubleClick="UnpackFiles_MouseDoubleClick"
+                                 PreviewMouseRightButtonDown="UnpackFiles_PreviewMouseRightButtonDown"
+                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                 VirtualizingPanel.IsVirtualizing="True"
+                                 VirtualizingPanel.VirtualizationMode="Recycling">
+                            <ListBox.ItemContainerStyle>
+                                <Style TargetType="ListBoxItem" BasedOn="{StaticResource {x:Type ListBoxItem}}">
+                                    <Setter Property="IsSelected" Value="{Binding IsSelected, Mode=TwoWay}" />
+                                    <Setter Property="ToolTip" Value="{Binding ToolTipText}" />
+                                </Style>
+                            </ListBox.ItemContainerStyle>
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <Grid Margin="2,1">
+                                        <!-- Per-row context menu (defined in the template, not the
+                                             ItemContainerStyle: Click handlers inside a Style setter
+                                             break WPF's connection-ID wiring). ItemContainerStyle is
+                                             set explicitly because implicit styles don't reach a
+                                             ContextMenu nested in a DataTemplate at runtime - without
+                                             it the items fall back to the default light template. -->
+                                        <Grid.ContextMenu>
+                                            <ContextMenu Style="{StaticResource DarkContextMenu}">
+                                                <MenuItem Header="Export selected..." Style="{StaticResource DarkMenuItem}"
+                                                          Click="UnpackExportMenu_Click" />
+                                                <MenuItem Header="Go to file" Style="{StaticResource DarkMenuItem}"
+                                                          Click="UnpackGoToMenu_Click"
+                                                          ToolTip="Clear the search and open the folder that contains this file." />
+                                            </ContextMenu>
+                                        </Grid.ContextMenu>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="52" />
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="170" />
+                                            <ColumnDefinition Width="80" />
+                                        </Grid.ColumnDefinitions>
+                                        <!-- Extension chip (files) / folder glyph (subfolder rows) -->
+                                        <Border Grid.Column="0" Background="{StaticResource PanelAltBrush}"
+                                                CornerRadius="3" Padding="4,1" Margin="0,0,8,0"
+                                                HorizontalAlignment="Left" VerticalAlignment="Center"
+                                                Visibility="{Binding IsFolder, Converter={StaticResource BoolToVis}, ConverterParameter=invert}">
+                                            <TextBlock Text="{Binding TypeDisplay}" FontSize="10"
+                                                       Foreground="{StaticResource MutedTextBrush}" />
+                                        </Border>
+                                        <Path Grid.Column="0" Data="M10,4H4C2.89,4 2,4.89 2,6V18A2,2 0 0,0 4,20H20A2,2 0 0,0 22,18V8C22,6.89 21.1,6 20,6H12L10,4Z"
+                                              Fill="{StaticResource MutedTextBrush}" Stretch="Uniform"
+                                              Width="13" Height="13" Margin="2,0,0,0"
+                                              HorizontalAlignment="Left" VerticalAlignment="Center"
+                                              Visibility="{Binding IsFolder, Converter={StaticResource BoolToVis}}" />
+                                        <TextBlock Grid.Column="1" Text="{Binding DisplayName}"
+                                                   VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                                        <!-- Providing archive: which VPK won for a gameinfo mount. -->
+                                        <TextBlock Grid.Column="2" Text="{Binding Source}" Margin="8,0"
+                                                   Style="{StaticResource MutedText}" VerticalAlignment="Center"
+                                                   TextTrimming="CharacterEllipsis" />
+                                        <TextBlock Grid.Column="3" Text="{Binding SizeDisplay}" TextAlignment="Right"
+                                                   Style="{StaticResource MutedText}" VerticalAlignment="Center" />
+                                    </Grid>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
                     </Grid>
-                  </ScrollViewer>
+                  </Grid>
                 </Border>
+
+                <!-- Export action + status. A folder can also be exported from the tree's context menu;
+                     this button exports the highlighted file rows (or the selected folder if none). -->
+                <Grid Grid.Row="2" Margin="0,10,0,0">
+                    <StackPanel Orientation="Horizontal">
+                        <Button Content="{Binding ExportButtonLabel}" Style="{StaticResource AccentButton}" MinWidth="130"
+                                Padding="16,8" Command="{Binding ExportSelectedCommand}"
+                                ToolTip="Exports the active selection: highlighted file rows (Ctrl/Shift multi-select), or - with nothing highlighted - the folder selected in the tree, recursively." />
+                        <Button Content="Cancel" Style="{StaticResource DangerButton}" Margin="8,0,0,0"
+                                Padding="14,8" Command="{Binding CancelExportCommand}"
+                                Visibility="{Binding IsExporting, Converter={StaticResource BoolToVis}}" />
+                        <StackPanel VerticalAlignment="Center" Margin="14,0,0,0">
+                            <TextBlock Text="{Binding StatusMessage}" Style="{StaticResource MutedText}"
+                                       TextTrimming="CharacterEllipsis" Margin="0,0,0,4" MaxWidth="520" />
+                            <ProgressBar Width="220" Value="{Binding ExportProgress, Mode=OneWay}"
+                                         Maximum="100" HorizontalAlignment="Left"
+                                         Visibility="{Binding IsExporting, Converter={StaticResource BoolToVis}}" />
+                        </StackPanel>
+                    </StackPanel>
+                </Grid>
               </Grid>
             </Grid>
           </TabItem>
@@ -910,15 +1281,15 @@
                 </Style>
               </Grid.Resources>
 
-              <TabControl Background="Transparent" BorderThickness="0" Padding="0">
+              <TabControl x:Name="CompileTabs" Background="Transparent" BorderThickness="0" Padding="0">
 
                 <!-- SIMPLE: the working compile form. Live studiomdl output goes to the detached
                      console window (~), so there's no embedded terminal here anymore. -->
                 <TabItem Header="Simple" x:Name="CompileSimpleTab">
                   <Grid Margin="0,8,0,4">
                     <Grid.RowDefinitions>
-                        <RowDefinition Height="*" MinHeight="100" />
-                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" MinHeight="100" />
+                        <RowDefinition Height="*" MinHeight="120" />
                     </Grid.RowDefinitions>
 
                   <Border Grid.Row="0" Background="{StaticResource PanelGradientBrush}" BorderBrush="{StaticResource BorderBrush}"
@@ -982,10 +1353,14 @@
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*" />
                                 <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
                             </Grid.ColumnDefinitions>
                             <TextBox Text="{Binding QcPath, UpdateSourceTrigger=PropertyChanged}"
                                      Tag="Type or paste a .qc path" VerticalContentAlignment="Center" />
-                            <Button Grid.Column="1" Content="Browse..." Margin="6,0,0,0"
+                            <Button Grid.Column="1" Content="Open file" Margin="6,0,0,0"
+                                    Command="{Binding OpenQcCommand}"
+                                    ToolTip="Open the .qc in the OS default editor." />
+                            <Button Grid.Column="2" Content="Browse..." Margin="6,0,0,0"
                                     Command="{Binding BrowseQcCommand}" />
                         </Grid>
 
@@ -1041,6 +1416,14 @@
                             <StackPanel Orientation="Horizontal">
                                 <Button Content="Compile" Style="{StaticResource AccentButton}" MinWidth="120"
                                         Padding="16,8" Command="{Binding CompileCommand}" />
+                                <Button Content="Go to file" Command="{Binding GoToMdlCommand}"
+                                        Margin="8,0,0,0" Padding="12,8"
+                                        Visibility="{Binding LastMdlPath, Converter={StaticResource StringToVis}}"
+                                        ToolTip="{Binding LastMdlPath}" />
+                                <Button Content="View Model" Command="{Binding ViewModelCommand}"
+                                        Margin="8,0,0,0" Padding="12,8"
+                                        Visibility="{Binding LastMdlPath, Converter={StaticResource StringToVis}}"
+                                        ToolTip="Send the compiled model to the Model View tab (does not open the viewer)." />
                                 <StackPanel VerticalAlignment="Center" Margin="14,0,0,0">
                                     <TextBlock Text="{Binding StatusMessage}" Style="{StaticResource MutedText}"
                                                TextTrimming="CharacterEllipsis" Margin="0,0,0,4" />
@@ -1072,11 +1455,22 @@
                     </ScrollViewer>
                   </Border>
 
-                  <!-- "Go to file" button: appears after a successful compile; opens Explorer with the .mdl selected. -->
-                  <Button Grid.Row="1" Content="Go to file" Command="{Binding GoToMdlCommand}"
-                          HorizontalAlignment="Left" Margin="0,6,0,0" Padding="12,6"
-                          Visibility="{Binding LastMdlPath, Converter={StaticResource StringToVis}}"
-                          ToolTip="{Binding LastMdlPath}" />
+                  <!-- Post-compile: the info box shows the compiled model's stats ("Go to file",
+                       which opens Explorer with the .mdl selected, lives in the bottom action bar).
+                       Always shown (empty until compiled); the box fills the remaining space and
+                       scrolls when the text overflows. -->
+                  <Grid Grid.Row="1" Margin="0,10,0,0">
+                      <Grid.RowDefinitions>
+                          <RowDefinition Height="Auto" />
+                          <RowDefinition Height="*" />
+                      </Grid.RowDefinitions>
+                      <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                          <TextBlock Text="Model info" Style="{StaticResource MutedText}" VerticalAlignment="Center" />
+                      </StackPanel>
+                      <TextBox Grid.Row="1" Text="{Binding MdlInfo, Mode=OneWay}" IsReadOnly="True"
+                               TextWrapping="NoWrap" FontFamily="Consolas" FontSize="11"
+                               VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" />
+                  </Grid>
                   </Grid>
                 </TabItem>
 
@@ -1253,11 +1647,17 @@
                                     </Grid>
 
                                     <ListBox x:Name="AdvancedEntriesList" Grid.Row="1" ItemsSource="{Binding Entries}"
-                                             SelectedItem="{Binding SelectedEntry}"
+                                             SelectedItem="{Binding SelectedEntry}" SelectionMode="Extended"
                                              HorizontalContentAlignment="Stretch" Background="Transparent" BorderThickness="0"
                                              PreviewMouseLeftButtonDown="AdvancedEntries_PreviewMouseLeftButtonDown"
                                              DragOver="AdvancedEntries_DragOver" Drop="AdvancedEntries_Drop" AllowDrop="True"
                                              ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                                        <!-- Highlighting a row (Ctrl/Shift for several) feeds "Compile selected". -->
+                                        <ListBox.ItemContainerStyle>
+                                            <Style TargetType="ListBoxItem" BasedOn="{StaticResource {x:Type ListBoxItem}}">
+                                                <Setter Property="IsSelected" Value="{Binding IsSelected, Mode=TwoWay}" />
+                                            </Style>
+                                        </ListBox.ItemContainerStyle>
                                         <ListBox.ItemTemplate>
                                             <DataTemplate>
                                                 <Grid Margin="2,8">
@@ -1265,6 +1665,7 @@
                                                         <ColumnDefinition Width="Auto" />
                                                         <ColumnDefinition Width="Auto" />
                                                         <ColumnDefinition Width="*" />
+                                                        <ColumnDefinition Width="Auto" />
                                                         <ColumnDefinition Width="Auto" />
                                                         <ColumnDefinition Width="Auto" />
                                                     </Grid.ColumnDefinitions>
@@ -1280,39 +1681,37 @@
                                                     <StackPanel Grid.Column="2" VerticalAlignment="Center">
                                                         <TextBlock Text="{Binding Name}" FontWeight="SemiBold"
                                                                    TextTrimming="CharacterEllipsis" />
-                                                        <StackPanel Orientation="Horizontal">
-                                                            <TextBlock Text="{Binding QcSummary}" Style="{StaticResource MutedText}"
-                                                                       TextTrimming="CharacterEllipsis" ToolTip="{Binding ResolvedQcPath}" />
-                                                            <!-- Output-destination badge: Subfolder vs in-game (no move). -->
-                                                            <Border Margin="6,0,0,0" Padding="5,0" CornerRadius="8" BorderThickness="1"
-                                                                    VerticalAlignment="Center" ToolTip="{Binding OutputModeTooltip}">
-                                                                <Border.Style>
-                                                                    <Style TargetType="Border">
-                                                                        <Setter Property="BorderBrush" Value="{StaticResource MutedTextBrush}" />
-                                                                        <Style.Triggers>
-                                                                            <DataTrigger Binding="{Binding ShowSubfolder}" Value="True">
-                                                                                <Setter Property="BorderBrush" Value="{StaticResource AccentBrush}" />
-                                                                            </DataTrigger>
-                                                                        </Style.Triggers>
-                                                                    </Style>
-                                                                </Border.Style>
-                                                                <TextBlock Text="{Binding OutputModeLabel}" FontSize="9">
-                                                                    <TextBlock.Style>
-                                                                        <Style TargetType="TextBlock">
-                                                                            <Setter Property="Foreground" Value="{StaticResource MutedTextBrush}" />
-                                                                            <Style.Triggers>
-                                                                                <DataTrigger Binding="{Binding ShowSubfolder}" Value="True">
-                                                                                    <Setter Property="Foreground" Value="{StaticResource AccentBrush}" />
-                                                                                </DataTrigger>
-                                                                            </Style.Triggers>
-                                                                        </Style>
-                                                                    </TextBlock.Style>
-                                                                </TextBlock>
-                                                            </Border>
-                                                        </StackPanel>
+                                                        <TextBlock Text="{Binding QcSummary}" Style="{StaticResource MutedText}"
+                                                                   TextTrimming="CharacterEllipsis" ToolTip="{Binding ResolvedQcPath}" />
                                                     </StackPanel>
+                                                    <!-- Output-destination badge: Subfolder vs in-game (no move). -->
+                                                    <Border Grid.Column="3" Margin="6,0,0,0" Padding="5,0" CornerRadius="8" BorderThickness="1"
+                                                            VerticalAlignment="Center" ToolTip="{Binding OutputModeTooltip}">
+                                                        <Border.Style>
+                                                            <Style TargetType="Border">
+                                                                <Setter Property="BorderBrush" Value="{StaticResource MutedTextBrush}" />
+                                                                <Style.Triggers>
+                                                                    <DataTrigger Binding="{Binding ShowSubfolder}" Value="True">
+                                                                        <Setter Property="BorderBrush" Value="{StaticResource AccentBrush}" />
+                                                                    </DataTrigger>
+                                                                </Style.Triggers>
+                                                            </Style>
+                                                        </Border.Style>
+                                                        <TextBlock Text="{Binding OutputModeLabel}" FontSize="9">
+                                                            <TextBlock.Style>
+                                                                <Style TargetType="TextBlock">
+                                                                    <Setter Property="Foreground" Value="{StaticResource MutedTextBrush}" />
+                                                                    <Style.Triggers>
+                                                                        <DataTrigger Binding="{Binding ShowSubfolder}" Value="True">
+                                                                            <Setter Property="Foreground" Value="{StaticResource AccentBrush}" />
+                                                                        </DataTrigger>
+                                                                    </Style.Triggers>
+                                                                </Style>
+                                                            </TextBlock.Style>
+                                                        </TextBlock>
+                                                    </Border>
                                                     <!-- Status dot: blue while compiling, red after a failed compile. -->
-                                                    <Ellipse Grid.Column="3" Width="8" Height="8" Margin="4,0" VerticalAlignment="Center">
+                                                    <Ellipse Grid.Column="4" Width="8" Height="8" Margin="4,0" VerticalAlignment="Center">
                                                         <Ellipse.Style>
                                                             <Style TargetType="Ellipse">
                                                                 <Setter Property="Visibility" Value="Collapsed" />
@@ -1329,7 +1728,7 @@
                                                             </Style>
                                                         </Ellipse.Style>
                                                     </Ellipse>
-                                                    <StackPanel Grid.Column="4" Orientation="Horizontal" VerticalAlignment="Center">
+                                                    <StackPanel Grid.Column="5" Orientation="Horizontal" VerticalAlignment="Center">
                                                         <Button Style="{StaticResource CloneButton}" Command="{Binding CloneCommand}"
                                                                 ToolTip="Duplicate this entry." />
                                                         <Button Style="{StaticResource TrashButton}" Command="{Binding RemoveCommand}"
@@ -1389,31 +1788,25 @@
                                                     </Style.Triggers>
                                                 </Style>
                                             </Border.Style>
-                                            <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
-                                              <StackPanel>
+                                            <Grid>
+                                              <Grid.RowDefinitions>
+                                                  <RowDefinition Height="Auto" />
+                                                  <RowDefinition Height="*" />
+                                              </Grid.RowDefinitions>
+                                              <StackPanel Grid.Row="0">
                                                   <CheckBox Content="Include in &quot;Compile all&quot;" Margin="0,0,0,8"
                                                             IsChecked="{Binding CompileInAll}" Foreground="{StaticResource TextBrush}"
                                                             ToolTip="Include this entry when the bottom 'Compile all' button runs." />
 
-                                                  <!-- Name + per-entry actions -->
+                                                  <!-- Name ("Go to file" lives in the bottom action bar). -->
                                                   <Grid>
                                                       <Grid.ColumnDefinitions>
                                                           <ColumnDefinition Width="Auto" />
                                                           <ColumnDefinition Width="*" />
-                                                          <ColumnDefinition Width="Auto" />
                                                       </Grid.ColumnDefinitions>
                                                       <TextBlock Text="Name" Style="{StaticResource EntryLabel}" />
                                                       <TextBox Grid.Column="1" Text="{Binding Name, UpdateSourceTrigger=PropertyChanged}"
                                                                Tag="Entry name" VerticalContentAlignment="Center" />
-                                                      <StackPanel Grid.Column="2" Orientation="Horizontal" Margin="10,0,0,0">
-                                                          <Button Content="Compile" Style="{StaticResource AccentButton}"
-                                                                  MinWidth="84" Padding="10,5" Command="{Binding CompileThisCommand}"
-                                                                  ToolTip="Compile only this entry." />
-                                                          <Button Content="Go to file" Margin="6,0,0,0" Padding="10,5"
-                                                                  Command="{Binding GoToMdlCommand}"
-                                                                  Visibility="{Binding LastMdlPath, Converter={StaticResource StringToVis}}"
-                                                                  ToolTip="{Binding LastMdlPath}" />
-                                                      </StackPanel>
                                                   </Grid>
 
                                                   <!-- QC + Browse -->
@@ -1422,12 +1815,16 @@
                                                           <ColumnDefinition Width="Auto" />
                                                           <ColumnDefinition Width="*" />
                                                           <ColumnDefinition Width="Auto" />
+                                                          <ColumnDefinition Width="Auto" />
                                                       </Grid.ColumnDefinitions>
                                                       <TextBlock Grid.Column="0" Text="QC" Style="{StaticResource EntryLabel}" />
                                                       <TextBox Grid.Column="1" Text="{Binding QcPath, UpdateSourceTrigger=PropertyChanged}"
                                                                Tag="Path to .qc (relative to the project, or absolute)"
                                                                VerticalContentAlignment="Center" ToolTip="{Binding ResolvedQcPath}" />
-                                                      <Button Grid.Column="2" Content="Browse..." Margin="6,0,0,0"
+                                                      <Button Grid.Column="2" Content="Open file" Margin="6,0,0,0"
+                                                              Command="{Binding OpenQcCommand}"
+                                                              ToolTip="Open the .qc in the OS default editor." />
+                                                      <Button Grid.Column="3" Content="Browse..." Margin="6,0,0,0"
                                                               Command="{Binding BrowseQcCommand}" />
                                                   </Grid>
 
@@ -1459,8 +1856,35 @@
                                                                Tag="Extra studiomdl options for this entry (appended after the global command)"
                                                                VerticalContentAlignment="Center" />
                                                   </Grid>
+
+                                                  <!-- Command preview: the exact studiomdl line (global + entry command), read-only. -->
+                                                  <Grid Margin="0,8,0,0">
+                                                      <Grid.ColumnDefinitions>
+                                                          <ColumnDefinition Width="Auto" />
+                                                          <ColumnDefinition Width="*" />
+                                                      </Grid.ColumnDefinitions>
+                                                      <TextBlock Text="Preview" Style="{StaticResource EntryLabel}" />
+                                                      <TextBox Grid.Column="1" Text="{Binding CommandPreview, Mode=OneWay}" IsReadOnly="True"
+                                                               FontFamily="Consolas" FontSize="12" TextWrapping="Wrap"
+                                                               Background="{StaticResource BgBrush}"
+                                                               ToolTip="The exact studiomdl command line this entry will run (global command + entry command)." />
+                                                  </Grid>
+
                                               </StackPanel>
-                                            </ScrollViewer>
+
+                                              <!-- MDL info: populated after a successful compile (same trigger as "Go to file").
+                                                   Always shown (empty until compiled); fills the remaining space and scrolls when the text overflows. -->
+                                              <Grid Grid.Row="1" Margin="0,12,0,0">
+                                                  <Grid.RowDefinitions>
+                                                      <RowDefinition Height="Auto" />
+                                                      <RowDefinition Height="*" />
+                                                  </Grid.RowDefinitions>
+                                                  <TextBlock Text="Model info" Style="{StaticResource EntryLabel}" Margin="0,0,0,4" />
+                                                  <TextBox Grid.Row="1" Text="{Binding MdlInfo, Mode=OneWay}" IsReadOnly="True"
+                                                           TextWrapping="NoWrap" FontFamily="Consolas" FontSize="11"
+                                                           VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" />
+                                              </Grid>
+                                            </Grid>
                                         </Border>
                                       </DataTemplate>
                                     </ContentControl.ContentTemplate>
@@ -1472,7 +1896,19 @@
                           <Grid Grid.Row="1" Margin="0,10,0,0">
                               <StackPanel Orientation="Horizontal">
                                   <Button Content="Compile all" Style="{StaticResource AccentButton}" MinWidth="120"
-                                          Padding="16,8" Command="{Binding CompileAllCommand}" />
+                                          Padding="16,8" Command="{Binding CompileAllCommand}"
+                                          ToolTip="Compile every entry with its 'Compile all' box ticked." />
+                                  <Button Content="Compile selected" MinWidth="120" Margin="8,0,0,0"
+                                          Padding="16,8" Command="{Binding CompileSelectedCommand}"
+                                          ToolTip="Compile the highlighted entries (select several with Ctrl/Shift)." />
+                                  <Button Content="Go to file" Margin="8,0,0,0" Padding="12,8"
+                                          Command="{Binding SelectedEntry.GoToMdlCommand}"
+                                          Visibility="{Binding SelectedEntry.LastMdlPath, Converter={StaticResource StringToVis}}"
+                                          ToolTip="{Binding SelectedEntry.LastMdlPath}" />
+                                  <Button Content="View Model" Margin="8,0,0,0" Padding="12,8"
+                                          Command="{Binding SelectedEntry.ViewModelCommand}"
+                                          Visibility="{Binding SelectedEntry.LastMdlPath, Converter={StaticResource StringToVis}}"
+                                          ToolTip="Send the compiled model to the Model View tab (does not open the viewer)." />
                                   <Button Content="Cancel" Style="{StaticResource DangerButton}" Margin="8,0,0,0"
                                           Padding="14,8" Command="{Binding CancelCommand}"
                                           Visibility="{Binding IsCompiling, Converter={StaticResource BoolToVis}}" />
@@ -1500,18 +1936,189 @@
                folder, then runs the packer, streaming output into the bottom Terminal drawer. -->
           <TabItem Header="Package" x:Name="PackageTab">
             <Grid Margin="0,8,0,0">
-              <TabControl Background="Transparent" BorderThickness="0" Padding="0">
+              <Grid.Resources>
+                <!-- Same form-row label as the Compile tab (scoped per tab). -->
+                <Style x:Key="CompileFieldLabel" TargetType="TextBlock" BasedOn="{StaticResource MutedText}">
+                    <Setter Property="VerticalAlignment" Value="Top" />
+                    <Setter Property="MinWidth" Value="60" />
+                    <Setter Property="Margin" Value="0,6,12,0" />
+                </Style>
+              </Grid.Resources>
+              <TabControl x:Name="PackageTabs" Background="Transparent" BorderThickness="0" Padding="0">
 
-                <TabItem Header="Simple" x:Name="PackageSimpleTab">
+                <!-- SIMPLE: pack one folder into a single .vpk/.gma. Live packer output goes to the
+                     detached console window (~), mirroring Compile - Simple. DataContext is the
+                     Package (Simple) VM. -->
+                <TabItem Header="Simple" x:Name="PackageSimpleTab" DataContext="{Binding Package}">
                   <Border Background="{StaticResource PanelGradientBrush}" BorderBrush="{StaticResource BorderBrush}"
                           BorderThickness="1" CornerRadius="3" Margin="0,8,0,4">
-                    <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
-                        <TextBlock Text="Simple package" FontSize="15" FontWeight="SemiBold"
-                                   HorizontalAlignment="Center" />
-                        <TextBlock Style="{StaticResource MutedText}" HorizontalAlignment="Center"
-                                   Margin="0,6,0,0" TextAlignment="Center" MaxWidth="420" TextWrapping="Wrap"
-                                   Text="Coming soon. For now, use the Advanced tab to pack folders into .vpk/.gma." />
-                    </StackPanel>
+                    <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="14,12,14,12">
+                      <Grid VerticalAlignment="Top">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+
+                        <!-- Game: full-width dropdown (from the Game Setup roster). -->
+                        <TextBlock Grid.Row="0" Text="Game" Style="{StaticResource CompileFieldLabel}" />
+                        <ComboBox Grid.Row="0" Grid.Column="1" Margin="0,0,0,6"
+                                  ItemsSource="{Binding Games}" SelectedItem="{Binding SelectedGame}"
+                                  DisplayMemberPath="DisplayName" />
+
+                        <!-- Resolved packer path (with a "missing" warning). -->
+                        <Grid Grid.Row="1" Grid.Column="1" Margin="0,0,0,10"
+                              Visibility="{Binding SelectedGame, Converter={StaticResource NullToVis}}">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="Packer" Style="{StaticResource MutedText}" Margin="0,0,10,0" />
+                            <TextBlock Grid.Column="1" Text="{Binding SelectedGame.PackerTool.ResolvedPath}"
+                                       TextTrimming="CharacterEllipsis" Foreground="{StaticResource MutedTextBrush}"
+                                       ToolTip="{Binding SelectedGame.PackerTool.ResolvedPath}" />
+                            <TextBlock Grid.Column="2" Text="missing" Margin="8,0,0,0"
+                                       Foreground="{StaticResource LightDangerBrush}"
+                                       ToolTip="The packer tool path doesn't exist - set it in Game Setup."
+                                       Visibility="{Binding SelectedGame.PackerTool.PathMissing, Converter={StaticResource BoolToVis}}" />
+                        </Grid>
+
+                        <!-- Folder to package: full-width path + Open/Browse. -->
+                        <TextBlock Grid.Row="2" Text="Folder" Style="{StaticResource CompileFieldLabel}" />
+                        <Grid Grid.Row="2" Grid.Column="1" Margin="0,0,0,10">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBox Text="{Binding FolderPath, UpdateSourceTrigger=PropertyChanged}"
+                                     Tag="Type or paste the folder to pack" VerticalContentAlignment="Center" />
+                            <Button Grid.Column="1" Content="Open folder" Margin="6,0,0,0"
+                                    Command="{Binding OpenFolderCommand}"
+                                    ToolTip="Open the folder in Explorer." />
+                            <Button Grid.Column="2" Content="Browse..." Margin="6,0,0,0"
+                                    Command="{Binding BrowseFolderCommand}" />
+                        </Grid>
+
+                        <!-- Output name: optional override for the produced package's file name. -->
+                        <TextBlock Grid.Row="3" Text="Output name" Style="{StaticResource CompileFieldLabel}" />
+                        <TextBox Grid.Row="3" Grid.Column="1" Margin="0,0,0,10"
+                                 Text="{Binding OutputName, UpdateSourceTrigger=PropertyChanged}"
+                                 Tag="Optional - leave blank to keep the folder name" VerticalContentAlignment="Center"
+                                 ToolTip="Rename the produced .vpk/.gma to this. The packer's extension is kept when omitted; blank keeps the folder name." />
+
+                        <!-- Options: full-width. -->
+                        <TextBlock Grid.Row="4" Text="Options" Style="{StaticResource CompileFieldLabel}" />
+                        <TextBox Grid.Row="4" Grid.Column="1" Margin="0,0,0,10"
+                                 Text="{Binding ExtraOptions, UpdateSourceTrigger=PropertyChanged}"
+                                 Tag="Extra packer options" VerticalContentAlignment="Center"
+                                 ToolTip="Passed straight to the packer (vpk options precede the folder; gmad args follow create)." />
+
+                        <!-- Packer flags: shown per packer type (vpk vs gmad). "Write log" applies to both. -->
+                        <StackPanel Grid.Row="5" Grid.Column="1" Orientation="Horizontal" Margin="0,0,0,10">
+                            <CheckBox Content="Multi-VPK" IsChecked="{Binding MultiVpk}"
+                                      Foreground="{StaticResource TextBrush}"
+                                      Visibility="{Binding IsVpkPacker, Converter={StaticResource BoolToVis}}"
+                                      ToolTip="Pack into multiple chunk files (-M) instead of a single .vpk." />
+                            <CheckBox Content="Ignore whitelist warnings" IsChecked="{Binding IgnoreWhitelistWarnings}"
+                                      Foreground="{StaticResource TextBrush}"
+                                      Visibility="{Binding IsGmodPacker, Converter={StaticResource BoolToVis}}"
+                                      ToolTip="Warn about non-whitelisted files and continue instead of failing (-warninvalid)." />
+                            <CheckBox Content="Write log to a file" IsChecked="{Binding WriteLogToFile}"
+                                      Margin="14,0,0,0" Foreground="{StaticResource TextBrush}"
+                                      ToolTip="Also write the packer's console output to a .log file beside the folder." />
+                        </StackPanel>
+
+                        <!-- Garry's Mod addon.json (gmad only): title, type and up to two tags, written
+                             into the folder before packing so gmad has its metadata. -->
+                        <TextBlock Grid.Row="6" Text="Addon" Style="{StaticResource CompileFieldLabel}"
+                                   Visibility="{Binding IsGmodPacker, Converter={StaticResource BoolToVis}}" />
+                        <Border Grid.Row="6" Grid.Column="1" Margin="0,0,0,10" Padding="12,10" CornerRadius="3"
+                                Background="{StaticResource BgBrush}" BorderBrush="{StaticResource BorderBrush}"
+                                BorderThickness="1"
+                                Visibility="{Binding IsGmodPacker, Converter={StaticResource BoolToVis}}">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+
+                                <TextBlock Grid.Row="0" Text="Title" Style="{StaticResource CompileFieldLabel}" />
+                                <TextBox Grid.Row="0" Grid.Column="1" Margin="0,0,0,8"
+                                         Text="{Binding GModTitle, UpdateSourceTrigger=PropertyChanged}"
+                                         Tag="Addon title (blank uses the folder name)" VerticalContentAlignment="Center" />
+
+                                <TextBlock Grid.Row="1" Text="Type" Style="{StaticResource CompileFieldLabel}" />
+                                <ComboBox Grid.Row="1" Grid.Column="1" Width="180" HorizontalAlignment="Left" Margin="0,0,0,8"
+                                          ItemsSource="{Binding GModTypes}" SelectedItem="{Binding SelectedGModType}" />
+
+                                <TextBlock Grid.Row="2" Text="Tags" Style="{StaticResource CompileFieldLabel}"
+                                           ToolTip="Choose up to two." />
+                                <ItemsControl Grid.Row="2" Grid.Column="1" ItemsSource="{Binding GModTags}">
+                                    <ItemsControl.ItemsPanel>
+                                        <ItemsPanelTemplate>
+                                            <WrapPanel />
+                                        </ItemsPanelTemplate>
+                                    </ItemsControl.ItemsPanel>
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <CheckBox Content="{Binding Label}" IsChecked="{Binding IsSelected}"
+                                                      IsEnabled="{Binding IsEnabled}" Margin="0,0,16,4"
+                                                      Foreground="{StaticResource TextBrush}" />
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </Grid>
+                        </Border>
+
+                        <!-- Command preview: full-width, read-only. -->
+                        <TextBlock Grid.Row="7" Text="Command" Style="{StaticResource CompileFieldLabel}" />
+                        <TextBox Grid.Row="7" Grid.Column="1" Margin="0,0,0,12"
+                                 Text="{Binding CommandPreview, Mode=OneWay}" IsReadOnly="True"
+                                 FontFamily="Consolas" FontSize="12" TextWrapping="Wrap"
+                                 Background="{StaticResource BgBrush}" />
+
+                        <!-- Package action + status. -->
+                        <StackPanel Grid.Row="8" Grid.Column="1" Orientation="Horizontal">
+                            <Button Content="Package" Style="{StaticResource AccentButton}" MinWidth="120"
+                                    Padding="16,8" Command="{Binding PackageCommand}" />
+                            <Button Content="Cancel" Margin="8,0,0,0" Padding="12,8"
+                                    Command="{Binding CancelCommand}"
+                                    Visibility="{Binding IsPackaging, Converter={StaticResource BoolToVis}}" />
+                            <Button Content="Go to file" Command="{Binding GoToPackageCommand}"
+                                    Margin="8,0,0,0" Padding="12,8"
+                                    Visibility="{Binding LastPackagePath, Converter={StaticResource StringToVis}}"
+                                    ToolTip="{Binding LastPackagePath}" />
+                            <Button Content="View Package" Command="{Binding ViewPackageCommand}"
+                                    Margin="8,0,0,0" Padding="12,8"
+                                    Visibility="{Binding LastPackagePath, Converter={StaticResource StringToVis}}"
+                                    ToolTip="Open the packaged file in the Unpack tab to browse its contents." />
+                            <StackPanel VerticalAlignment="Center" Margin="14,0,0,0">
+                                <TextBlock Text="{Binding StatusMessage}" Style="{StaticResource MutedText}"
+                                           TextTrimming="CharacterEllipsis" Margin="0,0,0,4" />
+                                <ProgressBar Width="200" IsIndeterminate="True" HorizontalAlignment="Left"
+                                             Visibility="{Binding IsPackaging, Converter={StaticResource BoolToVis}}" />
+                            </StackPanel>
+                        </StackPanel>
+
+                      </Grid>
+                    </ScrollViewer>
                   </Border>
                 </TabItem>
 
@@ -1619,11 +2226,17 @@
                                     </Grid>
 
                                     <ListBox x:Name="PackageEntriesList" Grid.Row="1" ItemsSource="{Binding Entries}"
-                                             SelectedItem="{Binding SelectedEntry}"
+                                             SelectedItem="{Binding SelectedEntry}" SelectionMode="Extended"
                                              HorizontalContentAlignment="Stretch" Background="Transparent" BorderThickness="0"
                                              PreviewMouseLeftButtonDown="PackageEntries_PreviewMouseLeftButtonDown"
                                              DragOver="PackageEntries_DragOver" Drop="PackageEntries_Drop" AllowDrop="True"
                                              ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                                        <!-- Highlighting a row (Ctrl/Shift for several) feeds "Package selected". -->
+                                        <ListBox.ItemContainerStyle>
+                                            <Style TargetType="ListBoxItem" BasedOn="{StaticResource {x:Type ListBoxItem}}">
+                                                <Setter Property="IsSelected" Value="{Binding IsSelected, Mode=TwoWay}" />
+                                            </Style>
+                                        </ListBox.ItemContainerStyle>
                                         <ListBox.ItemTemplate>
                                             <DataTemplate>
                                                 <Grid Margin="2,8">
@@ -1644,7 +2257,17 @@
                                                               Margin="0,0,8,0" Foreground="{StaticResource TextBrush}"
                                                               ToolTip="Include this entry when 'Package all' runs." />
                                                     <StackPanel Grid.Column="2" VerticalAlignment="Center">
-                                                        <TextBlock Text="{Binding Name}" FontWeight="SemiBold"
+                                                        <StackPanel Orientation="Horizontal">
+                                                            <TextBlock Text="{Binding Name}" FontWeight="SemiBold"
+                                                                       TextTrimming="CharacterEllipsis" />
+                                                            <!-- Output name, dimmed and smaller in parentheses, only when set. -->
+                                                            <TextBlock Text="{Binding OutputName, StringFormat=({0})}" FontSize="11"
+                                                                       Margin="6,0,0,0" VerticalAlignment="Center"
+                                                                       Foreground="{StaticResource MutedTextBrush}"
+                                                                       TextTrimming="CharacterEllipsis"
+                                                                       Visibility="{Binding OutputName, Converter={StaticResource StringToVis}}" />
+                                                        </StackPanel>
+                                                        <TextBlock Text="{Binding FolderPath}" Style="{StaticResource MutedText}"
                                                                    TextTrimming="CharacterEllipsis" />
                                                         <TextBlock Text="{Binding AssetSummary}" Style="{StaticResource MutedText}" />
                                                     </StackPanel>
@@ -1731,25 +2354,15 @@
                                                             IsChecked="{Binding IncludeInAll}" Foreground="{StaticResource TextBrush}"
                                                             ToolTip="Include this entry when the bottom 'Package all' button runs." />
 
-                                                  <!-- Name + per-entry actions -->
+                                                  <!-- Name ("Go to file" lives in the bottom action bar). -->
                                                   <Grid>
                                                       <Grid.ColumnDefinitions>
                                                           <ColumnDefinition Width="Auto" />
                                                           <ColumnDefinition Width="*" />
-                                                          <ColumnDefinition Width="Auto" />
                                                       </Grid.ColumnDefinitions>
                                                       <TextBlock Text="Name" Style="{StaticResource PkgEntryLabel}" />
                                                       <TextBox Grid.Column="1" Text="{Binding Name, UpdateSourceTrigger=PropertyChanged}"
                                                                Tag="Entry name" VerticalContentAlignment="Center" />
-                                                      <StackPanel Grid.Column="2" Orientation="Horizontal" Margin="10,0,0,0">
-                                                          <Button Content="Package" Style="{StaticResource AccentButton}"
-                                                                  MinWidth="84" Padding="10,5" Command="{Binding PackageThisCommand}"
-                                                                  ToolTip="Package only this entry." />
-                                                          <Button Content="Go to file" Margin="6,0,0,0" Padding="10,5"
-                                                                  Command="{Binding GoToPackageCommand}"
-                                                                  Visibility="{Binding LastPackagePath, Converter={StaticResource StringToVis}}"
-                                                                  ToolTip="{Binding LastPackagePath}" />
-                                                      </StackPanel>
                                                   </Grid>
 
                                                   <!-- Folder + Browse -->
@@ -1831,10 +2444,41 @@
                                                                   <ColumnDefinition Width="Auto" />
                                                                   <ColumnDefinition Width="*" />
                                                                 </Grid.ColumnDefinitions>
-                                                                <!-- Thumbnail: image when Kind=Image and path loads, blank BgBrush otherwise -->
+                                                                <!-- Thumbnail: the image itself when Kind=Image and the file decodes; otherwise the
+                                                                     file's shell icon, small and centered (text assets, undecodable image formats);
+                                                                     blank BgBrush when the file is missing. Clicking an image opens it full-size in an
+                                                                     ImagePreviewWindow; clicking a text asset opens its raw text in a TextPreviewWindow. -->
                                                                 <Border Width="96" Height="96" CornerRadius="2" Margin="0,0,8,0"
-                                                                        Background="{StaticResource BgBrush}" VerticalAlignment="Top">
-                                                                  <Image Source="{Binding ThumbnailSource}" Stretch="UniformToFill" />
+                                                                        Background="{StaticResource BgBrush}" VerticalAlignment="Top"
+                                                                        MouseLeftButtonUp="AssetThumbnail_Click">
+                                                                  <Border.Style>
+                                                                    <Style TargetType="Border">
+                                                                      <Style.Triggers>
+                                                                        <DataTrigger Binding="{Binding HasImagePreview}" Value="True">
+                                                                          <Setter Property="Cursor" Value="Hand" />
+                                                                          <Setter Property="ToolTip" Value="Open full-size preview." />
+                                                                        </DataTrigger>
+                                                                        <DataTrigger Binding="{Binding HasTextPreview}" Value="True">
+                                                                          <Setter Property="Cursor" Value="Hand" />
+                                                                          <Setter Property="ToolTip" Value="Open text preview." />
+                                                                        </DataTrigger>
+                                                                      </Style.Triggers>
+                                                                    </Style>
+                                                                  </Border.Style>
+                                                                  <Image Source="{Binding ThumbnailSource}">
+                                                                    <Image.Style>
+                                                                      <Style TargetType="Image">
+                                                                        <Setter Property="Stretch" Value="UniformToFill" />
+                                                                        <Style.Triggers>
+                                                                          <DataTrigger Binding="{Binding ThumbnailIsFileIcon}" Value="True">
+                                                                            <Setter Property="Stretch" Value="Uniform" />
+                                                                            <Setter Property="Width" Value="32" />
+                                                                            <Setter Property="Height" Value="32" />
+                                                                          </DataTrigger>
+                                                                        </Style.Triggers>
+                                                                      </Style>
+                                                                    </Image.Style>
+                                                                  </Image>
                                                                 </Border>
                                                                 <StackPanel Grid.Column="1">
                                                                 <!-- Kind + Input + Browse + clone/remove -->
@@ -1995,7 +2639,19 @@
                           <Grid Grid.Row="1" Margin="0,10,0,0">
                               <StackPanel Orientation="Horizontal">
                                   <Button Content="Package all" Style="{StaticResource AccentButton}" MinWidth="120"
-                                          Padding="16,8" Command="{Binding PackageAllCommand}" />
+                                          Padding="16,8" Command="{Binding PackageAllCommand}"
+                                          ToolTip="Package every entry with its 'Package all' box ticked." />
+                                  <Button Content="Package selected" MinWidth="120" Margin="8,0,0,0"
+                                          Padding="16,8" Command="{Binding PackageSelectedCommand}"
+                                          ToolTip="Package the highlighted entries (select several with Ctrl/Shift)." />
+                                  <Button Content="Go to file" Margin="8,0,0,0" Padding="12,8"
+                                          Command="{Binding SelectedEntry.GoToPackageCommand}"
+                                          Visibility="{Binding SelectedEntry.LastPackagePath, Converter={StaticResource StringToVis}}"
+                                          ToolTip="{Binding SelectedEntry.LastPackagePath}" />
+                                  <Button Content="View Package" Margin="8,0,0,0" Padding="12,8"
+                                          Command="{Binding SelectedEntry.ViewPackageCommand}"
+                                          Visibility="{Binding SelectedEntry.LastPackagePath, Converter={StaticResource StringToVis}}"
+                                          ToolTip="Open the packaged file in the Unpack tab to browse its contents." />
                                   <Button Content="Cancel" Style="{StaticResource DangerButton}" Margin="8,0,0,0"
                                           Padding="14,8" Command="{Binding CancelCommand}"
                                           Visibility="{Binding IsPackaging, Converter={StaticResource BoolToVis}}" />
@@ -2014,6 +2670,486 @@
                 </TabItem>
 
               </TabControl>
+            </Grid>
+          </TabItem>
+
+          <!-- Textures: a standalone project (.pw_textureproject) that bulk-converts loose images into
+               Source .vtf textures, driven by regex/literal patterns matched against a source folder
+               (the successor to KitsuneResource's texture pipeline). Reuses Game Setup's VTF tool +
+               command. Live output goes to the detached console (~). -->
+          <TabItem Header="Textures" x:Name="TexturesTab" DataContext="{Binding Textures}">
+            <Grid Margin="0,8,0,4">
+
+              <!-- No project open: prompt to create or open one. -->
+              <Border Background="{StaticResource PanelGradientBrush}" BorderBrush="{StaticResource BorderBrush}"
+                      BorderThickness="1" CornerRadius="3"
+                      Visibility="{Binding IsProjectOpen, Converter={StaticResource BoolToVis}, ConverterParameter=invert}">
+                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                    <TextBlock Text="Textures" FontSize="15" FontWeight="SemiBold" HorizontalAlignment="Center" />
+                    <TextBlock Style="{StaticResource MutedText}" HorizontalAlignment="Center"
+                               Margin="0,6,0,14" TextAlignment="Center" MaxWidth="460" TextWrapping="Wrap"
+                               Text="Create or open a project (.pw_textureproject). It bulk-converts loose images (PNG/TGA/...) into Source .vtf textures using regex patterns matched against a source folder - like KitsuneResource, driven by your game's VTF tool." />
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Center">
+                        <Button Content="New project..." Style="{StaticResource AccentButton}"
+                                Padding="16,8" Command="{Binding NewProjectCommand}" />
+                        <Button Content="Open project..." Margin="8,0,0,0" Padding="16,8"
+                                Command="{Binding OpenProjectCommand}" />
+                    </StackPanel>
+                </StackPanel>
+              </Border>
+
+              <!-- Project open: bar + settings (top), the groups list fills the rest. -->
+              <Grid Visibility="{Binding IsProjectOpen, Converter={StaticResource BoolToVis}}">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" MinHeight="160" />
+                </Grid.RowDefinitions>
+
+                <!-- Project bar: name + path, with New / Open / Close. -->
+                <Border Grid.Row="0" Background="{StaticResource HeaderGradientBrush}"
+                        BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="3"
+                        Padding="12,8">
+                  <Grid>
+                      <Grid.ColumnDefinitions>
+                          <ColumnDefinition Width="*" />
+                          <ColumnDefinition Width="Auto" />
+                      </Grid.ColumnDefinitions>
+                      <StackPanel>
+                          <TextBlock Text="{Binding ProjectName}" FontWeight="SemiBold" />
+                          <TextBlock Text="{Binding ProjectPath}" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"
+                                     Style="{StaticResource MutedText}" ToolTip="{Binding ProjectPath}" />
+                      </StackPanel>
+                      <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                          <Button Content="New" Padding="10,4" Command="{Binding NewProjectCommand}" />
+                          <Button Content="Open" Margin="6,0,0,0" Padding="10,4" Command="{Binding OpenProjectCommand}" />
+                          <Button Content="Close" Margin="6,0,0,0" Padding="10,4" Command="{Binding CloseProjectCommand}" />
+                      </StackPanel>
+                  </Grid>
+                </Border>
+
+                <!-- Project settings: game (VTF tool + command), source folder, options, global command. -->
+                <Border Grid.Row="1" Margin="0,8,0,0" Background="{StaticResource PanelGradientBrush}"
+                        BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="3">
+                  <StackPanel Margin="14,12">
+                      <Grid>
+                          <Grid.ColumnDefinitions>
+                              <ColumnDefinition Width="Auto" />
+                              <ColumnDefinition Width="*" />
+                          </Grid.ColumnDefinitions>
+                          <TextBlock Text="Game" Style="{StaticResource MutedText}" VerticalAlignment="Center"
+                                     MinWidth="70" Margin="0,0,12,0" />
+                          <ComboBox Grid.Column="1" ItemsSource="{Binding Games}" SelectedItem="{Binding SelectedGame}"
+                                    DisplayMemberPath="DisplayName" />
+                      </Grid>
+
+                      <!-- Source folder + Browse -->
+                      <Grid Margin="0,8,0,0">
+                          <Grid.ColumnDefinitions>
+                              <ColumnDefinition Width="Auto" />
+                              <ColumnDefinition Width="*" />
+                              <ColumnDefinition Width="Auto" />
+                              <ColumnDefinition Width="Auto" />
+                          </Grid.ColumnDefinitions>
+                          <TextBlock Text="Source" Style="{StaticResource MutedText}" VerticalAlignment="Center"
+                                     MinWidth="70" Margin="0,0,12,0" />
+                          <TextBox Grid.Column="1" Text="{Binding SourceFolder, UpdateSourceTrigger=PropertyChanged}"
+                                   Tag="Folder scanned for input images (relative to the project, or absolute; blank = the project folder)"
+                                   VerticalContentAlignment="Center" ToolTip="{Binding ResolvedSourceFolder}" />
+                          <TextBlock Grid.Column="2" Text="missing" Margin="8,0,0,0" VerticalAlignment="Center"
+                                     Foreground="{StaticResource LightDangerBrush}"
+                                     ToolTip="The resolved source folder doesn't exist on disk."
+                                     Visibility="{Binding SourceFolderMissing, Converter={StaticResource BoolToVis}}" />
+                          <Button Grid.Column="3" Content="Browse..." Margin="6,0,0,0"
+                                  Command="{Binding BrowseSourceCommand}" />
+                      </Grid>
+
+                      <!-- Global VTF command -->
+                      <Grid Margin="0,8,0,0">
+                          <Grid.ColumnDefinitions>
+                              <ColumnDefinition Width="Auto" />
+                              <ColumnDefinition Width="*" />
+                          </Grid.ColumnDefinitions>
+                          <TextBlock Text="VTF cmd" Style="{StaticResource MutedText}" VerticalAlignment="Center"
+                                     MinWidth="70" Margin="0,0,12,0" />
+                          <TextBox Grid.Column="1" Text="{Binding GlobalVtfCommand, UpdateSourceTrigger=PropertyChanged}"
+                                   Tag="Extra VTF arguments applied to every group (after the Game Setup VTF command). Placeholders: {input} {output} {outputdir} {outputname}"
+                                   VerticalContentAlignment="Center" />
+                      </Grid>
+
+                      <CheckBox Content="Skip files already up-to-date (output newer than source)" Margin="0,10,0,0"
+                                IsChecked="{Binding SkipUpToDate}" Foreground="{StaticResource TextBrush}"
+                                ToolTip="Incremental runs: skip a file whose .vtf already exists and is newer than its source. 'Force' below overrides this per run." />
+                  </StackPanel>
+                </Border>
+
+                <!-- Groups: master-detail (list + selected-group editor) and the convert action bar. -->
+                <Border Grid.Row="2" Margin="0,8,0,0" Background="{StaticResource PanelGradientBrush}"
+                        BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="3">
+                  <Grid Margin="14,10">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+
+                    <Grid Grid.Row="0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="340" MinWidth="230" />
+                            <ColumnDefinition Width="8" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+
+                        <!-- LEFT: groups list. Add on top; drag the handle to reorder. -->
+                        <Border Grid.Column="0" Background="{StaticResource PanelAltBrush}"
+                                BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
+                                CornerRadius="3" Padding="8">
+                          <Grid>
+                              <Grid.RowDefinitions>
+                                  <RowDefinition Height="Auto" />
+                                  <RowDefinition Height="*" />
+                              </Grid.RowDefinitions>
+                              <Grid Grid.Row="0" Margin="2,2,2,8">
+                                  <TextBlock Text="Groups" FontWeight="SemiBold" VerticalAlignment="Center" />
+                                  <Button Content="+" FontSize="18" FontWeight="Bold" Width="26" Height="26" Padding="0"
+                                          HorizontalAlignment="Right" Command="{Binding AddGroupCommand}"
+                                          ToolTip="Add a texture group" />
+                              </Grid>
+
+                              <ListBox x:Name="TextureGroupsList" Grid.Row="1" ItemsSource="{Binding Groups}"
+                                       SelectedItem="{Binding SelectedGroup}" SelectionMode="Extended"
+                                       HorizontalContentAlignment="Stretch" Background="Transparent" BorderThickness="0"
+                                       PreviewMouseLeftButtonDown="TextureGroups_PreviewMouseLeftButtonDown"
+                                       DragOver="TextureGroups_DragOver" Drop="TextureGroups_Drop" AllowDrop="True"
+                                       ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                                  <ListBox.ItemContainerStyle>
+                                      <Style TargetType="ListBoxItem" BasedOn="{StaticResource {x:Type ListBoxItem}}">
+                                          <Setter Property="IsSelected" Value="{Binding IsSelected, Mode=TwoWay}" />
+                                      </Style>
+                                  </ListBox.ItemContainerStyle>
+                                  <ListBox.ItemTemplate>
+                                      <DataTemplate>
+                                          <Grid Margin="2,8">
+                                              <Grid.ColumnDefinitions>
+                                                  <ColumnDefinition Width="Auto" />
+                                                  <ColumnDefinition Width="Auto" />
+                                                  <ColumnDefinition Width="*" />
+                                                  <ColumnDefinition Width="Auto" />
+                                                  <ColumnDefinition Width="Auto" />
+                                              </Grid.ColumnDefinitions>
+                                              <!-- Drag handle (only this initiates a reorder drag) -->
+                                              <TextBlock Grid.Column="0" Tag="DragHandle" Text="&#x2630;" FontSize="14"
+                                                         Margin="0,0,8,0" VerticalAlignment="Center"
+                                                         Foreground="{StaticResource MutedTextBrush}" Cursor="SizeNS"
+                                                         ToolTip="Drag to reorder" />
+                                              <!-- Quick 'Convert all' toggle, editable straight from the list. -->
+                                              <CheckBox Grid.Column="1" IsChecked="{Binding IncludeInAll}" VerticalAlignment="Center"
+                                                        Margin="0,0,8,0" Foreground="{StaticResource TextBrush}"
+                                                        ToolTip="Include this group when 'Convert all' runs." />
+                                              <StackPanel Grid.Column="2" VerticalAlignment="Center">
+                                                  <TextBlock Text="{Binding Name}" FontWeight="SemiBold"
+                                                             TextTrimming="CharacterEllipsis" />
+                                                  <TextBlock Text="{Binding PatternSummary}" Style="{StaticResource MutedText}"
+                                                             TextTrimming="CharacterEllipsis" />
+                                              </StackPanel>
+                                              <!-- Status dot: blue while converting, red after a failure / invalid regex. -->
+                                              <Ellipse Grid.Column="3" Width="8" Height="8" Margin="4,0" VerticalAlignment="Center">
+                                                  <Ellipse.Style>
+                                                      <Style TargetType="Ellipse">
+                                                          <Setter Property="Visibility" Value="Collapsed" />
+                                                          <Style.Triggers>
+                                                              <DataTrigger Binding="{Binding HasError}" Value="True">
+                                                                  <Setter Property="Visibility" Value="Visible" />
+                                                                  <Setter Property="Fill" Value="{StaticResource DangerBrush}" />
+                                                              </DataTrigger>
+                                                              <DataTrigger Binding="{Binding IsConverting}" Value="True">
+                                                                  <Setter Property="Visibility" Value="Visible" />
+                                                                  <Setter Property="Fill" Value="{StaticResource AccentBrush}" />
+                                                              </DataTrigger>
+                                                          </Style.Triggers>
+                                                      </Style>
+                                                  </Ellipse.Style>
+                                              </Ellipse>
+                                              <StackPanel Grid.Column="4" Orientation="Horizontal" VerticalAlignment="Center">
+                                                  <Button Style="{StaticResource CloneButton}" Command="{Binding CloneCommand}"
+                                                          ToolTip="Duplicate this group." />
+                                                  <Button Style="{StaticResource TrashButton}" Command="{Binding RemoveCommand}"
+                                                          ToolTip="Remove this group." />
+                                              </StackPanel>
+                                          </Grid>
+                                      </DataTemplate>
+                                  </ListBox.ItemTemplate>
+                              </ListBox>
+                          </Grid>
+                        </Border>
+
+                        <GridSplitter Grid.Column="1" Width="8" HorizontalAlignment="Stretch" Background="Transparent" />
+
+                        <!-- RIGHT: editor for the selected group. -->
+                        <Grid Grid.Column="2">
+                            <TextBlock Text="Select a group on the left, or click + to add one."
+                                       Style="{StaticResource MutedText}" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                       Visibility="{Binding HasSelectedGroup, Converter={StaticResource BoolToVis}, ConverterParameter=invert}" />
+
+                            <ContentControl Content="{Binding SelectedGroup}">
+                              <ContentControl.ContentTemplate>
+                                <DataTemplate>
+                                  <DataTemplate.Resources>
+                                      <Style x:Key="TexLabel" TargetType="TextBlock" BasedOn="{StaticResource MutedText}">
+                                          <Setter Property="VerticalAlignment" Value="Center" />
+                                          <Setter Property="MinWidth" Value="64" />
+                                          <Setter Property="Margin" Value="0,0,8,0" />
+                                      </Style>
+                                  </DataTemplate.Resources>
+                                  <!-- Outline: blue while converting, red if the last run failed or the regex is invalid. -->
+                                  <Border CornerRadius="3" Padding="12" BorderThickness="2" ToolTip="{Binding ValidationError}">
+                                      <Border.Style>
+                                          <Style TargetType="Border">
+                                              <Setter Property="Background" Value="{StaticResource PanelAltBrush}" />
+                                              <Setter Property="BorderBrush" Value="Transparent" />
+                                              <Style.Triggers>
+                                                  <DataTrigger Binding="{Binding HasError}" Value="True">
+                                                      <Setter Property="BorderBrush" Value="{StaticResource DangerBrush}" />
+                                                      <Setter Property="Effect">
+                                                          <Setter.Value>
+                                                              <DropShadowEffect Color="{StaticResource DangerColor}"
+                                                                                BlurRadius="9" ShadowDepth="0" Opacity="0.7" />
+                                                          </Setter.Value>
+                                                      </Setter>
+                                                  </DataTrigger>
+                                                  <DataTrigger Binding="{Binding IsConverting}" Value="True">
+                                                      <Setter Property="BorderBrush" Value="{StaticResource AccentBrush}" />
+                                                      <Setter Property="Effect">
+                                                          <Setter.Value>
+                                                              <DropShadowEffect Color="{StaticResource AccentColor}"
+                                                                                BlurRadius="9" ShadowDepth="0" Opacity="0.85" />
+                                                          </Setter.Value>
+                                                      </Setter>
+                                                  </DataTrigger>
+                                              </Style.Triggers>
+                                          </Style>
+                                      </Border.Style>
+                                      <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                                        <StackPanel>
+                                            <CheckBox Content="Include in &quot;Convert all&quot;" Margin="0,0,0,8"
+                                                      IsChecked="{Binding IncludeInAll}" Foreground="{StaticResource TextBrush}"
+                                                      ToolTip="Include this group when the bottom 'Convert all' button runs." />
+
+                                            <!-- Name -->
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="Auto" />
+                                                    <ColumnDefinition Width="*" />
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Text="Name" Style="{StaticResource TexLabel}" />
+                                                <TextBox Grid.Column="1" Text="{Binding Name, UpdateSourceTrigger=PropertyChanged}"
+                                                         Tag="Group name" VerticalContentAlignment="Center" />
+                                            </Grid>
+
+                                            <!-- Pattern + regex/recursive toggles -->
+                                            <Grid Margin="0,8,0,0">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="Auto" />
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Text="Pattern" Style="{StaticResource TexLabel}" />
+                                                <TextBox Grid.Column="1" Text="{Binding InputPattern, UpdateSourceTrigger=PropertyChanged}"
+                                                         Tag="Matched against each file's name. Regex (e.g. \.(png|tga)$) or plain text."
+                                                         VerticalContentAlignment="Center" FontFamily="Consolas"
+                                                         ToolTip="{Binding ValidationError}" />
+                                                <ToggleButton Grid.Column="2" Content=".*" Margin="6,0,0,0" Padding="8,4"
+                                                              IsChecked="{Binding IsRegex}" ToolTip="Treat the pattern as a regex (off = plain case-insensitive substring)." />
+                                                <ToggleButton Grid.Column="3" Content="Sub" Margin="6,0,0,0" Padding="8,4"
+                                                              IsChecked="{Binding Recursive}" ToolTip="Search sub-folders recursively." />
+                                            </Grid>
+
+                                            <!-- Output dir + Browse -->
+                                            <Grid Margin="0,8,0,0">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="Auto" />
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Text="Output" Style="{StaticResource TexLabel}" />
+                                                <TextBox Grid.Column="1" Text="{Binding OutputDir, UpdateSourceTrigger=PropertyChanged}"
+                                                         Tag="Where .vtf files go, relative to the source folder (blank = beside each source; otherwise the tree is mirrored here). Can't escape the source folder."
+                                                         VerticalContentAlignment="Center" />
+                                                <Button Grid.Column="2" Content="Browse..." Margin="6,0,0,0"
+                                                        Command="{Binding BrowseOutputCommand}" />
+                                            </Grid>
+
+                                            <!-- Per-group VTF command -->
+                                            <Grid Margin="0,8,0,0">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="Auto" />
+                                                    <ColumnDefinition Width="*" />
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Text="VTF cmd" Style="{StaticResource TexLabel}" />
+                                                <TextBox Grid.Column="1" Text="{Binding VtfCommand, UpdateSourceTrigger=PropertyChanged}"
+                                                         Tag="Extra VTF arguments for this group (after the game + global command). Placeholders: {input} {output} {outputdir} {outputname}"
+                                                         VerticalContentAlignment="Center" FontFamily="Consolas" />
+                                            </Grid>
+                                        </StackPanel>
+                                      </ScrollViewer>
+                                  </Border>
+                                </DataTemplate>
+                              </ContentControl.ContentTemplate>
+                            </ContentControl>
+                        </Grid>
+                    </Grid>
+
+                    <!-- Convert all / selected + status, with a Force toggle. -->
+                    <Grid Grid.Row="1" Margin="0,10,0,0">
+                        <StackPanel Orientation="Horizontal">
+                            <Button Content="Convert all" Style="{StaticResource AccentButton}" MinWidth="120"
+                                    Padding="16,8" Command="{Binding ConvertAllCommand}"
+                                    ToolTip="Convert every group with its 'Convert all' box ticked." />
+                            <Button Content="Convert selected" MinWidth="120" Margin="8,0,0,0"
+                                    Padding="16,8" Command="{Binding ConvertSelectedCommand}"
+                                    ToolTip="Convert the highlighted groups (select several with Ctrl/Shift)." />
+                            <Button Content="Cancel" Style="{StaticResource DangerButton}" Margin="8,0,0,0"
+                                    Padding="14,8" Command="{Binding CancelCommand}"
+                                    Visibility="{Binding IsConverting, Converter={StaticResource BoolToVis}}" />
+                            <CheckBox Content="Force" IsChecked="{Binding Force}" VerticalAlignment="Center"
+                                      Margin="12,0,0,0" Foreground="{StaticResource TextBrush}"
+                                      ToolTip="Reconvert even files that are already up-to-date (this run only)." />
+                            <StackPanel VerticalAlignment="Center" Margin="14,0,0,0">
+                                <TextBlock Text="{Binding StatusMessage}" Style="{StaticResource MutedText}"
+                                           TextTrimming="CharacterEllipsis" Margin="0,0,0,4" MaxWidth="420" />
+                                <ProgressBar Width="200" IsIndeterminate="True" HorizontalAlignment="Left"
+                                             Visibility="{Binding IsConverting, Converter={StaticResource BoolToVis}}" />
+                            </StackPanel>
+                        </StackPanel>
+                    </Grid>
+                  </Grid>
+                </Border>
+              </Grid>
+            </Grid>
+          </TabItem>
+
+          <!-- Model View: a Crowbar-style "View in HLMV". Launches Game Setup's configured model
+               viewer on a chosen .mdl (passing -game gameinfoDir so materials resolve) and shows the
+               ModelTool info summary for it in a read-only box. No embedded viewer. -->
+          <TabItem Header="Model View" x:Name="ModelViewTab" DataContext="{Binding ModelView}">
+            <Grid Margin="0,8,0,4">
+              <Grid.RowDefinitions>
+                  <RowDefinition Height="Auto" />
+                  <RowDefinition Height="*" MinHeight="120" />
+              </Grid.RowDefinitions>
+              <Grid.Resources>
+                <Style x:Key="ModelViewFieldLabel" TargetType="TextBlock" BasedOn="{StaticResource MutedText}">
+                    <Setter Property="VerticalAlignment" Value="Center" />
+                    <Setter Property="MinWidth" Value="60" />
+                    <Setter Property="Margin" Value="0,0,12,0" />
+                </Style>
+              </Grid.Resources>
+
+              <!-- Settings: game (model viewer + gameinfo), the .mdl to view, and the action bar. -->
+              <Border Grid.Row="0" Background="{StaticResource PanelGradientBrush}" BorderBrush="{StaticResource BorderBrush}"
+                      BorderThickness="1" CornerRadius="3">
+                <StackPanel Margin="14,12">
+                    <!-- Game: full-width dropdown (from the Game Setup roster). -->
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Text="Game" Style="{StaticResource ModelViewFieldLabel}" />
+                        <ComboBox Grid.Column="1" ItemsSource="{Binding Games}" SelectedItem="{Binding SelectedGame}"
+                                  DisplayMemberPath="DisplayName" />
+                    </Grid>
+
+                    <!-- Resolved model viewer + gameinfo paths (with "missing" warnings). -->
+                    <Grid Margin="72,6,0,0"
+                          Visibility="{Binding SelectedGame, Converter={StaticResource NullToVis}}">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+                        <TextBlock Text="Viewer" Style="{StaticResource MutedText}" Margin="0,0,10,0" />
+                        <TextBlock Grid.Column="1" Text="{Binding SelectedGame.ModelViewer.ResolvedPath}"
+                                   TextTrimming="CharacterEllipsis" Foreground="{StaticResource MutedTextBrush}"
+                                   ToolTip="{Binding SelectedGame.ModelViewer.ResolvedPath}" />
+                        <TextBlock Grid.Column="2" Text="missing" Margin="8,0,0,0"
+                                   Foreground="{StaticResource LightDangerBrush}"
+                                   ToolTip="The model viewer path doesn't exist - set it in Game Setup."
+                                   Visibility="{Binding SelectedGame.ModelViewer.PathMissing, Converter={StaticResource BoolToVis}}" />
+                        <TextBlock Grid.Row="1" Text="GameInfo" Style="{StaticResource MutedText}" Margin="0,3,10,0" />
+                        <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding SelectedGame.GameInfo.ResolvedPath}"
+                                   TextTrimming="CharacterEllipsis" Margin="0,3,0,0" Foreground="{StaticResource MutedTextBrush}"
+                                   ToolTip="{Binding SelectedGame.GameInfo.ResolvedPath}" />
+                        <TextBlock Grid.Row="1" Grid.Column="2" Text="missing" Margin="8,3,0,0"
+                                   Foreground="{StaticResource LightDangerBrush}"
+                                   ToolTip="The gameinfo.txt path doesn't exist - set it in Game Setup. Without it the viewer may not find the model's materials."
+                                   Visibility="{Binding SelectedGame.GameInfo.PathMissing, Converter={StaticResource BoolToVis}}" />
+                    </Grid>
+
+                    <!-- Model (.mdl): full-width path + Browse. -->
+                    <Grid Margin="0,10,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Text="Model" Style="{StaticResource ModelViewFieldLabel}" />
+                        <TextBox Grid.Column="1" Text="{Binding MdlPath, UpdateSourceTrigger=PropertyChanged}"
+                                 Tag="Type or paste a compiled .mdl path" VerticalContentAlignment="Center" />
+                        <Button Grid.Column="2" Content="Browse..." Margin="6,0,0,0"
+                                Command="{Binding BrowseMdlCommand}" />
+                    </Grid>
+
+                    <!-- Action bar: open in viewer + status. -->
+                    <Grid Margin="72,12,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Orientation="Horizontal">
+                            <Button Content="Open in viewer" Style="{StaticResource AccentButton}" MinWidth="120"
+                                    Padding="16,8" Command="{Binding OpenInViewerCommand}"
+                                    ToolTip="Launch the game's configured model viewer (HLMV) on this .mdl." />
+                            <Button Content="Go to file" Command="{Binding GoToMdlCommand}"
+                                    Margin="8,0,0,0" Padding="12,8"
+                                    Visibility="{Binding MdlPath, Converter={StaticResource StringToVis}}"
+                                    ToolTip="{Binding MdlPath}" />
+                            <Button Content="Refresh info" Command="{Binding RefreshInfoCommand}"
+                                    Margin="8,0,0,0" Padding="12,8"
+                                    ToolTip="Re-read the model's stats with ModelTool." />
+                        </StackPanel>
+                        <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="14,0,0,0">
+                            <TextBlock Text="{Binding StatusMessage}" Style="{StaticResource MutedText}"
+                                       TextTrimming="CharacterEllipsis" Margin="0,0,0,4" />
+                            <ProgressBar Width="200" IsIndeterminate="True" HorizontalAlignment="Left"
+                                         Visibility="{Binding IsLoadingInfo, Converter={StaticResource BoolToVis}}" />
+                        </StackPanel>
+                    </Grid>
+
+                    <!-- Hint when no viewer is configured for the selected game. -->
+                    <TextBlock Margin="72,8,0,0" Style="{StaticResource MutedText}" TextWrapping="Wrap"
+                               Foreground="{StaticResource LightDangerBrush}"
+                               Text="No model viewer is set for this game. Configure one (e.g. hlmv.exe) in Game Setup to enable 'Open in viewer'."
+                               Visibility="{Binding HasModelViewer, Converter={StaticResource BoolToVis}, ConverterParameter=invert}" />
+                </StackPanel>
+              </Border>
+
+              <!-- Model info: the ModelTool summary for the current .mdl (empty until a model loads);
+                   the box fills the remaining space and scrolls when the text overflows. -->
+              <Grid Grid.Row="1" Margin="0,10,0,0">
+                  <Grid.RowDefinitions>
+                      <RowDefinition Height="Auto" />
+                      <RowDefinition Height="*" />
+                  </Grid.RowDefinitions>
+                  <TextBlock Text="Model info" Style="{StaticResource MutedText}" Margin="0,0,0,6" />
+                  <TextBox Grid.Row="1" Text="{Binding ModelInfo, Mode=OneWay}" IsReadOnly="True"
+                           TextWrapping="NoWrap" FontFamily="Consolas" FontSize="11"
+                           VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" />
+              </Grid>
             </Grid>
           </TabItem>
 

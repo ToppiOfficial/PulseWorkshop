@@ -189,6 +189,9 @@
         <Setter Property="Padding" Value="8,6" />
         <Setter Property="CaretBrush" Value="{StaticResource TextBrush}" />
         <Setter Property="SelectionBrush" Value="{StaticResource AccentBrush}" />
+        <!-- The built-in TextBox editing context menu ignores app-level implicit MenuItem/ContextMenu
+             styles and renders light; give text boxes our own themed Cut/Copy/Paste menu instead. -->
+        <Setter Property="ContextMenu" Value="{DynamicResource TextBoxContextMenu}" />
         <!-- Templated so focus/hover use a thin themed border (the default Windows template
              paints a thick blue focus border) and disabled greys instead of going light. -->
         <Setter Property="Template">
@@ -358,6 +361,120 @@
         </Setter>
     </Style>
 
+    <!-- Column header (Unpack file list ribbon): flat, muted, left-aligned, hover highlight. -->
+    <Style x:Key="ColumnHeaderButton" TargetType="Button">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="Foreground" Value="{StaticResource MutedTextBrush}" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="FontSize" Value="12" />
+        <Setter Property="Padding" Value="4,5" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="HorizontalContentAlignment" Value="Left" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border x:Name="Bd" Background="{TemplateBinding Background}"
+                            Padding="{TemplateBinding Padding}">
+                        <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                          VerticalAlignment="Center" />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Bd" Property="Background" Value="{StaticResource PanelAltBrush}" />
+                            <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- TreeView (Unpack tab's folder tree): dark, flat expander chevron, full-row selection. -->
+    <Style TargetType="TreeView">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
+        <Setter Property="VirtualizingPanel.IsVirtualizing" Value="True" />
+        <Setter Property="VirtualizingPanel.VirtualizationMode" Value="Recycling" />
+    </Style>
+
+    <!-- Expand/collapse toggle: a small rotating chevron instead of the classic +/- box. -->
+    <Style x:Key="TreeExpandToggle" TargetType="ToggleButton">
+        <Setter Property="Focusable" Value="False" />
+        <Setter Property="Width" Value="16" />
+        <Setter Property="Height" Value="16" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ToggleButton">
+                    <Border Background="Transparent">
+                        <Path x:Name="Chevron" HorizontalAlignment="Center" VerticalAlignment="Center"
+                              Data="M 0 0 L 4 4 L 0 8" Stroke="{StaticResource MutedTextBrush}"
+                              StrokeThickness="1.5" RenderTransformOrigin="0.5,0.5">
+                            <Path.RenderTransform>
+                                <RotateTransform Angle="0" />
+                            </Path.RenderTransform>
+                        </Path>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsChecked" Value="True">
+                            <Setter TargetName="Chevron" Property="RenderTransform">
+                                <Setter.Value>
+                                    <RotateTransform Angle="90" />
+                                </Setter.Value>
+                            </Setter>
+                        </Trigger>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Chevron" Property="Stroke" Value="{StaticResource TextBrush}" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <Style TargetType="TreeViewItem">
+        <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
+        <Setter Property="Padding" Value="4,3" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="TreeViewItem">
+                    <StackPanel>
+                        <Border x:Name="Bd" Background="Transparent" CornerRadius="3">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="16" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <ToggleButton x:Name="Expander" Style="{StaticResource TreeExpandToggle}"
+                                              IsChecked="{Binding IsExpanded, RelativeSource={RelativeSource TemplatedParent}}"
+                                              ClickMode="Press" />
+                                <ContentPresenter Grid.Column="1" ContentSource="Header"
+                                                  Margin="{TemplateBinding Padding}" VerticalAlignment="Center" />
+                            </Grid>
+                        </Border>
+                        <!-- Children indent under the header. -->
+                        <ItemsPresenter x:Name="ItemsHost" Margin="14,0,0,0" />
+                    </StackPanel>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsExpanded" Value="False">
+                            <Setter TargetName="ItemsHost" Property="Visibility" Value="Collapsed" />
+                        </Trigger>
+                        <Trigger Property="HasItems" Value="False">
+                            <Setter TargetName="Expander" Property="Visibility" Value="Hidden" />
+                        </Trigger>
+                        <Trigger SourceName="Bd" Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Bd" Property="Background" Value="{StaticResource PanelAltBrush}" />
+                        </Trigger>
+                        <Trigger Property="IsSelected" Value="True">
+                            <Setter TargetName="Bd" Property="Background" Value="{StaticResource BorderBrush}" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
     <!-- Dark tooltip (the default is an unstyled light box). -->
     <Style TargetType="ToolTip">
         <Setter Property="Background" Value="{StaticResource PanelAltBrush}" />
@@ -486,12 +603,30 @@
         </Setter>
     </Style>
 
-    <!-- Context menus -->
+    <!-- Context menus. Fully templated so no default chrome shows - the stock template paints a
+         light icon-column strip down the left behind the items, which is what leaked through the
+         transparent dark MenuItem template. -->
     <Style TargetType="ContextMenu">
         <Setter Property="Background" Value="{StaticResource PanelAltBrush}" />
         <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}" />
         <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ContextMenu">
+                    <Border Background="{TemplateBinding Background}"
+                            BorderBrush="{TemplateBinding BorderBrush}"
+                            BorderThickness="1" CornerRadius="3" Padding="2">
+                        <StackPanel IsItemsHost="True"
+                                    KeyboardNavigation.DirectionalNavigation="Cycle" />
+                    </Border>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
     </Style>
+
+    <!-- Keyed alias of the dark ContextMenu style, for a ContextMenu declared inside a DataTemplate
+         (implicit styles don't reach it there at runtime - see DarkMenuItem below). -->
+    <Style x:Key="DarkContextMenu" TargetType="ContextMenu" BasedOn="{StaticResource {x:Type ContextMenu}}" />
 
     <Style TargetType="MenuItem">
         <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
@@ -500,17 +635,46 @@
             <Setter.Value>
                 <ControlTemplate TargetType="MenuItem">
                     <Border x:Name="Bd" Background="Transparent" Padding="{TemplateBinding Padding}">
-                        <ContentPresenter ContentSource="Header" VerticalAlignment="Center" />
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <ContentPresenter ContentSource="Header" VerticalAlignment="Center" />
+                            <TextBlock x:Name="Gesture" Grid.Column="1" Margin="24,0,0,0"
+                                       VerticalAlignment="Center"
+                                       Text="{TemplateBinding InputGestureText}"
+                                       Foreground="{StaticResource MutedTextBrush}" />
+                        </Grid>
                     </Border>
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsHighlighted" Value="True">
                             <Setter TargetName="Bd" Property="Background" Value="{StaticResource AccentBrush}" />
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter Property="Foreground" Value="{StaticResource MutedTextBrush}" />
+                            <Setter TargetName="Bd" Property="Opacity" Value="0.5" />
                         </Trigger>
                     </ControlTemplate.Triggers>
                 </ControlTemplate>
             </Setter.Value>
         </Setter>
     </Style>
+
+    <!-- Keyed alias of the dark MenuItem style. Needed for context menus declared inside a
+         DataTemplate: implicit styles don't reach a ContextMenu's items at runtime there, so the
+         items must reference this explicitly (StaticResource resolves at load time and always wins),
+         otherwise they fall back to the default light template with an icon gutter. -->
+    <Style x:Key="DarkMenuItem" TargetType="MenuItem" BasedOn="{StaticResource {x:Type MenuItem}}" />
+
+    <!-- Themed replacement for the built-in TextBox editing context menu (which renders light).
+         Assigned to every TextBox via the default TextBox style. x:Shared="False" so each text box
+         gets its own instance rather than sharing one across the app. -->
+    <ContextMenu x:Key="TextBoxContextMenu" x:Shared="False" Style="{StaticResource DarkContextMenu}">
+        <MenuItem Header="Cut" Command="ApplicationCommands.Cut" InputGestureText="Ctrl+X" Style="{StaticResource DarkMenuItem}" />
+        <MenuItem Header="Copy" Command="ApplicationCommands.Copy" InputGestureText="Ctrl+C" Style="{StaticResource DarkMenuItem}" />
+        <MenuItem Header="Paste" Command="ApplicationCommands.Paste" InputGestureText="Ctrl+V" Style="{StaticResource DarkMenuItem}" />
+    </ContextMenu>
 
     <Style TargetType="Separator">
         <Setter Property="Background" Value="{StaticResource BorderBrush}" />

@@ -16,15 +16,15 @@ public partial class App : Application
 
     protected override void OnStartup(StartupEventArgs e)
     {
-        // A shell file-association launch passes the project path as an argument.
-        var projectPath = TryGetProjectPath(e.Args);
+        // A shell file-association / "Open with" launch passes the file path as an argument.
+        var openPath = TryGetOpenPath(e.Args);
 
         _instanceLock = SingleInstanceLock.TryAcquire();
         if (_instanceLock is null)
         {
             // Another instance owns the app. Hand it the file to open (or a bare activate), then exit
             // quietly. Only fall back to the old "already running" notice if we couldn't reach it.
-            if (!SingleInstanceSignal.TrySend(projectPath ?? SingleInstanceSignal.ActivateOnly))
+            if (!SingleInstanceSignal.TrySend(openPath ?? SingleInstanceSignal.ActivateOnly))
             {
                 MessageBox.Show(
                     "PulseWorkshop is already running.",
@@ -50,19 +50,25 @@ public partial class App : Application
 
         window.Show();
 
-        // If we were launched by opening a project file, jump straight to it.
-        if (projectPath is not null)
-            window.HandleShellOpen(projectPath);
+        // If we were launched by opening a file, jump straight to it.
+        if (openPath is not null)
+            window.HandleShellOpen(openPath);
     }
 
-    /// <summary>Returns the first argument that is an existing <c>.pw_mdlproject</c> file, or null.</summary>
-    private static string? TryGetProjectPath(string[] args)
+    /// <summary>Returns the first argument that is a file PulseWorkshop can open on launch, or null:
+    /// a project file (<c>.pw_mdlproject</c> / <c>.pw_textureproject</c>) or an Unpack-able archive
+    /// (<c>.vpk</c> / <c>.gma</c> / <c>gameinfo.txt</c>). The window routes it to the right tab.</summary>
+    private static string? TryGetOpenPath(string[] args)
     {
         foreach (var arg in args)
         {
-            if (!string.IsNullOrWhiteSpace(arg)
-                && arg.EndsWith(".pw_mdlproject", StringComparison.OrdinalIgnoreCase)
-                && File.Exists(arg))
+            if (string.IsNullOrWhiteSpace(arg) || !File.Exists(arg))
+                continue;
+            if (arg.EndsWith(".pw_mdlproject", StringComparison.OrdinalIgnoreCase)
+                || arg.EndsWith(".pw_textureproject", StringComparison.OrdinalIgnoreCase)
+                || arg.EndsWith(".vpk", StringComparison.OrdinalIgnoreCase)
+                || arg.EndsWith(".gma", StringComparison.OrdinalIgnoreCase)
+                || Path.GetFileName(arg).Equals("gameinfo.txt", StringComparison.OrdinalIgnoreCase))
                 return Path.GetFullPath(arg);
         }
         return null;

@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.Diagnostics;
 using System.IO;
 using System.Windows;
 using System.Windows.Data;
@@ -55,6 +56,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
 
         ConnectCommand = new AsyncRelayCommand(ConnectAsync, () => !IsBusy && !IsConnected);
         DisconnectCommand = new AsyncRelayCommand(DisconnectAsync, () => !IsBusy && IsConnected);
+        LaunchGameCommand = new AsyncRelayCommand(LaunchGameAsync, () => !IsBusy && IsConnected);
         RefreshPublishedCommand = new AsyncRelayCommand(LoadAllPublishedAsync, () => !IsBusy);
         NewItemCommand = new RelayCommand(NewItem, () => !IsBusy && IsConnected);
         RevertCommand = new RelayCommand(Revert, () => CanRevert);
@@ -66,12 +68,37 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         // The Compile / Package tabs reuse Game Setup's tool paths. Every tab writes to the one shared
         // console (rendered by the detached ConsoleWindow), so it's created first and handed to each.
         Compile = new CompileViewModel(GameSetup, Console);
+        Package = new PackageViewModel(GameSetup, Console);
 
         // Compile - Advanced and Package - Advanced share one open .pw_mdlproject via this session, so
         // both edit the same project (different lists) without clobbering each other.
         AdvancedProject = new AdvancedProjectSession(GameSetup);
         CompileAdvanced = new CompileAdvancedViewModel(AdvancedProject, Console);
         PackageAdvanced = new PackageAdvancedViewModel(AdvancedProject, Console);
+
+        // The Textures tab is a standalone project workflow (its own .pw_textureproject); it reuses
+        // Game Setup's VTF tool + command and writes to the same shared console.
+        Textures = new TexturesViewModel(GameSetup, Console);
+
+        // The Model View tab launches Game Setup's configured model viewer (HLMV) on a chosen .mdl
+        // and shows the ModelTool info summary for it. Reuses Game Setup's viewer + gameinfo paths.
+        ModelView = new ModelViewViewModel(GameSetup);
+
+        // "View Model" on either Compile tab hands its compiled .mdl to the Model View tab (without
+        // launching the viewer) and switches to it. Compile - Simple already shares Game Setup's active
+        // game, but Compile - Advanced has its own independent game selection, so it also carries that
+        // game over to the Model View tab (which drives the viewer's gameinfo + model viewer paths).
+        Compile.ViewModelRequested += OnViewModelRequested;
+        CompileAdvanced.ViewModelRequested += OnCompileAdvancedViewModelRequested;
+
+        // The Unpack tab browses/extracts .vpk and .gma archives (or a whole game via its
+        // gameinfo.txt); export runs log to the same shared console.
+        Unpack = new UnpackViewModel(Console);
+
+        // "View Package" on either Package tab opens the just-packed .vpk/.gma in the Unpack tab and
+        // switches to it.
+        Package.ViewPackageRequested += OnViewPackageRequested;
+        PackageAdvanced.ViewPackageRequested += OnViewPackageRequested;
 
         // Live-filtered views over each list.
         PublishedView = CollectionViewSource.GetDefaultView(PublishedItems);
@@ -107,6 +134,9 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     /// <summary>The Compile panel (runs studiomdl on a .qc; reuses Game Setup's tool paths).</summary>
     public CompileViewModel Compile { get; }
 
+    /// <summary>The Package - Simple panel (packs one folder into a .vpk/.gma; reuses Game Setup's packer).</summary>
+    public PackageViewModel Package { get; }
+
     /// <summary>The shared open project for both Advanced tabs (Compile and Package).</summary>
     public AdvancedProjectSession AdvancedProject { get; }
 
@@ -115,6 +145,15 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
 
     /// <summary>The Package - Advanced panel (project-based, multi-entry vpk/gma packaging).</summary>
     public PackageAdvancedViewModel PackageAdvanced { get; }
+
+    /// <summary>The Textures panel (project-based, bulk regex image -> VTF conversion).</summary>
+    public TexturesViewModel Textures { get; }
+
+    /// <summary>The Model View panel (launches the configured model viewer on a .mdl + shows its info).</summary>
+    public ModelViewViewModel ModelView { get; }
+
+    /// <summary>The Unpack panel (browse + export .vpk / .gma / gameinfo.txt mounts).</summary>
+    public UnpackViewModel Unpack { get; }
 
     public ObservableCollection<WorkshopItem> PublishedItems { get; } = new();
     public ObservableCollection<DraftListItemViewModel> Drafts { get; } = new();
@@ -232,6 +271,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
 
     public AsyncRelayCommand ConnectCommand { get; }
     public AsyncRelayCommand DisconnectCommand { get; }
+    public AsyncRelayCommand LaunchGameCommand { get; }
     public AsyncRelayCommand RefreshPublishedCommand { get; }
     public RelayCommand NewItemCommand { get; }
     public RelayCommand RevertCommand { get; }
@@ -401,12 +441,14 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
             {
                 ConnectCommand.RaiseCanExecuteChanged();
                 DisconnectCommand.RaiseCanExecuteChanged();
+                LaunchGameCommand.RaiseCanExecuteChanged();
                 RefreshPublishedCommand.RaiseCanExecuteChanged();
                 NewItemCommand.RaiseCanExecuteChanged();
                 RevertCommand.RaiseCanExecuteChanged();
                 PublishCommand.RaiseCanExecuteChanged();
                 OnPropertyChanged(nameof(CanRevert));
                 OnPropertyChanged(nameof(CanDeletePublished));
+                OnPropertyChanged(nameof(CanRunDraftBulkAction));
             }
         }
     }
@@ -688,6 +730,10 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
 
     private void LoadLocalLists()
     {
+        // Detach the old rows' selection listeners before the collection is rebuilt, then clear any
+        // stale bulk-selection state so the action bar collapses.
+        foreach (var row in Drafts)
+            row.PropertyChanged -= OnDraftRowPropertyChanged;
         Drafts.Clear();
         Templates.Clear();
 
@@ -707,8 +753,12 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
             string? fallback = d.Edit.PublishedFileId is { } id
                 ? PublishedItems.FirstOrDefault(i => i.PublishedFileId == id)?.PreviewUrl
                 : null;
-            Drafts.Add(new DraftListItemViewModel(d, fallback));
+            var row = new DraftListItemViewModel(d, fallback);
+            row.PropertyChanged += OnDraftRowPropertyChanged;
+            Drafts.Add(row);
         }
+
+        RaiseDraftSelectionChanged();
 
         foreach (var t in _templates.GetAll()
                      .Where(t => t.AppId == SelectedGame.AppId)
@@ -787,6 +837,106 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     }
 
     /// <summary>
+    /// Launches the selected game through Steam without tearing down the loaded Workshop session.
+    /// The Steam host marks us as "playing" this game, which blocks a normal launch, so we briefly
+    /// stop the host (releasing the "playing" state), start the game via <c>steam://rungameid</c>,
+    /// wait for it to actually run, then re-hook the host - Steam allows that once the real game owns
+    /// the session. The Published list, editor and profile are all kept intact throughout.
+    /// </summary>
+    private async Task LaunchGameAsync()
+    {
+        var game = SelectedGame;
+        IsBusy = true;
+        try
+        {
+            StatusMessage = $"Releasing the Steam session to launch {game.DisplayName}...";
+            await _service.DisconnectAsync();
+            NotifyConnectionChanged();
+
+            StatusMessage = $"Launching {game.DisplayName} through Steam...";
+            try
+            {
+                Process.Start(new ProcessStartInfo($"steam://rungameid/{game.AppId}") { UseShellExecute = true });
+            }
+            catch (Exception ex)
+            {
+                StatusMessage = $"Could not launch {game.DisplayName}: {ex.Message}";
+                await ReconnectSilentlyAsync(game); // don't leave the user disconnected
+                return;
+            }
+
+            // Re-hook only once the game is actually running, so Steam (not the host) owns the
+            // "playing" state; otherwise the host would just re-block the launch we asked for.
+            var started = game.ProcessNames.Count > 0 &&
+                await WaitForAnyProcessAsync(game.ProcessNames, TimeSpan.FromSeconds(60));
+
+            StatusMessage = started
+                ? $"{game.DisplayName} is running. Reconnecting the Workshop session..."
+                : "Reconnecting the Workshop session...";
+
+            await ReconnectSilentlyAsync(game);
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"Launch failed: {ex.Message}";
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
+
+    /// <summary>
+    /// Re-establishes the Steam host for <paramref name="game"/> after a "Launch game" round-trip,
+    /// deliberately leaving the already-loaded Published/Drafts/Templates lists untouched (only the
+    /// session is restored, not the data).
+    /// </summary>
+    private async Task ReconnectSilentlyAsync(GameConfig game)
+    {
+        try
+        {
+            await _service.SelectGameAsync(game.AppId);
+            var ping = await _service.PingAsync();
+            if (ping.SteamRunning)
+            {
+                if (!HasProfile)
+                    UpdateProfile(ping);
+                StatusMessage = $"Reconnected - {game.DisplayName}.";
+            }
+            else
+            {
+                StatusMessage = "Reconnect failed: Steam is not running. Click Connect to retry.";
+            }
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"Reconnect failed: {ex.Message}. Click Connect to retry.";
+        }
+
+        NotifyConnectionChanged();
+    }
+
+    /// <summary>
+    /// Polls until any of <paramref name="processNames"/> (without ".exe") is running, or the timeout
+    /// elapses. Returns true if one was seen. Runs off the UI thread's control flow via awaited delays,
+    /// so the window stays responsive while waiting.
+    /// </summary>
+    private static async Task<bool> WaitForAnyProcessAsync(IReadOnlyList<string> processNames, TimeSpan timeout)
+    {
+        var deadline = DateTime.UtcNow + timeout;
+        while (DateTime.UtcNow < deadline)
+        {
+            foreach (var name in processNames)
+            {
+                if (Process.GetProcessesByName(name).Length > 0)
+                    return true;
+            }
+            await Task.Delay(500);
+        }
+        return false;
+    }
+
+    /// <summary>
     /// Raises change notifications for everything that keys off <see cref="IsConnected"/>: the
     /// computed property itself plus the commands whose availability depends on it.
     /// </summary>
@@ -795,6 +945,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         OnPropertyChanged(nameof(IsConnected));
         ConnectCommand.RaiseCanExecuteChanged();
         DisconnectCommand.RaiseCanExecuteChanged();
+        LaunchGameCommand.RaiseCanExecuteChanged();
         NewItemCommand.RaiseCanExecuteChanged();
     }
 
@@ -970,7 +1121,8 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
 
         return new EditorViewModel(SelectedGame, source, baseline: published,
             fallbackPreviewUrl: item.PreviewUrl,
-            publishedContentInfo: DescribePublishedContent(item));
+            publishedContentInfo: DescribePublishedContent(item),
+            publishedContentFileName: item.ContentFileName);
     }
 
     /// <summary>Describes a published item's existing content file as "name - size" for the editor's
@@ -1062,6 +1214,38 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     /// <summary>Raised when the UI should switch to the Templates tab (e.g. after saving a template).</summary>
     public event Action? NavigateToTemplates;
 
+    /// <summary>Raised when the UI should switch to the Model View tab (e.g. after "View Model" on Compile).</summary>
+    public event Action? NavigateToModelView;
+
+    /// <summary>Raised when the UI should switch to the Unpack tab (e.g. after "View Package" on Package).</summary>
+    public event Action? NavigateToUnpack;
+
+    /// <summary>Assigns a Compile tab's compiled .mdl to the Model View tab and switches to it, without
+    /// launching the external viewer.</summary>
+    private void OnViewModelRequested(string mdlPath)
+    {
+        ModelView.LoadModel(mdlPath);
+        NavigateToModelView?.Invoke();
+    }
+
+    /// <summary>"View Model" from Compile - Advanced: sync the Model View tab's game to the Advanced
+    /// project's independent game selection (so the viewer resolves against the same gameinfo/model
+    /// viewer), then hand over the compiled .mdl. This also syncs the shared game with Compile - Simple
+    /// and Package - Simple, which is intended.</summary>
+    private void OnCompileAdvancedViewModelRequested(string mdlPath)
+    {
+        if (CompileAdvanced.SelectedGame is { } game)
+            ModelView.SelectedGame = game;
+        OnViewModelRequested(mdlPath);
+    }
+
+    /// <summary>Opens a just-packed .vpk/.gma in the Unpack tab and switches to it.</summary>
+    private void OnViewPackageRequested(string packagePath)
+    {
+        NavigateToUnpack?.Invoke();
+        _ = Unpack.OpenFromPathAsync(packagePath);
+    }
+
     /// <summary>Raised to select (and thereby open) a specific draft row by id, e.g. a just-made clone.</summary>
     public event Action<Guid>? SelectDraftRequested;
 
@@ -1133,6 +1317,211 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         StatusMessage = $"Cloned draft \"{draft.Name}\".";
         NavigateToDrafts?.Invoke();
         SelectDraftRequested?.Invoke(created.Id); // make the clone the active selection
+    }
+
+    // --- Drafts bulk actions (multi-select publish / save / delete) ------------------------
+
+    /// <summary>Fired when any draft row's <see cref="DraftListItemViewModel.IsSelected"/> flips, so
+    /// the counts and the bulk-action bar refresh.</summary>
+    private void OnDraftRowPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(DraftListItemViewModel.IsSelected))
+            RaiseDraftSelectionChanged();
+    }
+
+    private void RaiseDraftSelectionChanged()
+    {
+        OnPropertyChanged(nameof(SelectedDraftCount));
+        OnPropertyChanged(nameof(HasDraftSelection));
+        OnPropertyChanged(nameof(HasMultipleDraftsSelected));
+        OnPropertyChanged(nameof(CanRunDraftBulkAction));
+        OnPropertyChanged(nameof(PublishSelectedDraftsText));
+    }
+
+    /// <summary>Bulk draft actions are enabled only when something is selected and we're idle.</summary>
+    public bool CanRunDraftBulkAction => HasDraftSelection && !IsBusy;
+
+    /// <summary>The bulk publish / delete buttons only surface once more than one draft is highlighted
+    /// (a single selection is handled by the normal editor actions).</summary>
+    public bool HasMultipleDraftsSelected => SelectedDraftCount > 1;
+
+    /// <summary>The ticked draft rows, in the list's current visible top-to-bottom order (the active
+    /// filter and sort), so bulk publish/save/delete process them in the same order they're shown.</summary>
+    private IEnumerable<DraftListItemViewModel> SelectedDraftRows =>
+        DraftsView.Cast<DraftListItemViewModel>().Where(d => d.IsSelected);
+
+    public int SelectedDraftCount => SelectedDraftRows.Count();
+
+    public bool HasDraftSelection => SelectedDraftCount > 0;
+
+    /// <summary>Of the ticked drafts, how many are edits to an existing published item (vs new items).</summary>
+    private int SelectedDraftEditCount => SelectedDraftRows.Count(d => d.Draft.Edit.PublishedFileId is not null);
+
+    /// <summary>Label for the bulk publish/save button, e.g. "Publish / save 3 selected".</summary>
+    public string PublishSelectedDraftsText =>
+        SelectedDraftCount == 0 ? "Publish / save selected" : $"Publish / save {SelectedDraftCount} selected";
+
+    /// <summary>
+    /// Human-readable summary of what a bulk publish will do, for the confirmation prompt. Splits the
+    /// selection into edits-to-existing-items and brand-new publishes.
+    /// </summary>
+    public string DescribeSelectedDraftPublish()
+    {
+        var edits = SelectedDraftEditCount;
+        var news = SelectedDraftCount - edits;
+        var parts = new List<string>();
+        if (edits > 0) parts.Add($"save {edits} edit(s) to existing Workshop item(s)");
+        if (news > 0) parts.Add($"publish {news} new item(s)");
+        return parts.Count == 0 ? string.Empty : string.Join(" and ", parts);
+    }
+
+    /// <summary>Ticks or unticks every draft currently visible in the (filtered) list.</summary>
+    public void SetAllDraftsSelected(bool selected)
+    {
+        foreach (var row in DraftsView.Cast<DraftListItemViewModel>())
+            row.IsSelected = selected;
+    }
+
+    /// <summary>
+    /// Missing publish requirements for a draft's stored edit, mirroring the editor's new-item rules
+    /// (title / description / content file / preview image). An edit to an existing item has none.
+    /// </summary>
+    private static IReadOnlyList<string> MissingPublishRequirements(ItemEdit edit)
+    {
+        if (edit.PublishedFileId is not null)
+            return Array.Empty<string>();
+
+        var missing = new List<string>();
+        if (string.IsNullOrWhiteSpace(edit.Title)) missing.Add("title");
+        if (string.IsNullOrWhiteSpace(edit.Description)) missing.Add("description");
+        if (string.IsNullOrWhiteSpace(edit.ContentFile) || !File.Exists(edit.ContentFile)) missing.Add("content file");
+        if (string.IsNullOrWhiteSpace(edit.PreviewImagePath) || !File.Exists(edit.PreviewImagePath)) missing.Add("preview image");
+        return missing;
+    }
+
+    /// <summary>
+    /// Publishes (or saves the edits of) every ticked draft in one go. New-item drafts that are
+    /// missing requirements are skipped and reported. Each successful publish deletes its draft and
+    /// refreshes the Published list. The caller (code-behind) confirms with the user first.
+    /// </summary>
+    public async Task PublishSelectedDraftsAsync()
+    {
+        var targets = SelectedDraftRows.Select(r => r.Draft).ToList();
+        if (targets.Count == 0)
+            return;
+
+        // If the open editor is bound to one of the drafts we're about to publish/delete, close it so
+        // it can't keep auto-saving a draft that no longer exists.
+        var affectsOpenEditor = Editor is { IsTemplateMode: false } e &&
+            targets.Any(d => e.SourceDraftId == d.Id ||
+                             (d.Edit.PublishedFileId is { } pid && e.PublishedFileId == pid));
+
+        IsBusy = true;
+        ConsoleLog($"Bulk publish: {targets.Count} selected draft(s)...");
+        try
+        {
+            // Publishing needs a live Steam host for this game. Auto-connect if the user hasn't yet.
+            if (_service.ActiveAppId != SelectedGame.AppId)
+            {
+                StatusMessage = $"Connecting to Steam for {SelectedGame.DisplayName}...";
+                await _service.SelectGameAsync(SelectedGame.AppId);
+            }
+
+            var ping = await _service.PingAsync();
+            if (!ping.SteamRunning)
+            {
+                StatusMessage = "Steam is not running, or you do not own this game. Start Steam and click Connect.";
+                return;
+            }
+
+            if (!HasProfile)
+                UpdateProfile(ping);
+
+            int ok = 0, skipped = 0, failed = 0;
+            var needsLegal = false;
+
+            foreach (var draft in targets)
+            {
+                var edit = draft.Edit;
+
+                var missing = MissingPublishRequirements(edit);
+                if (missing.Count > 0)
+                {
+                    skipped++;
+                    ConsoleLog($"Skipped \"{draft.Name}\" - needs: {string.Join(", ", missing)}.");
+                    continue;
+                }
+
+                StatusMessage = $"Publishing \"{draft.Name}\" ({ok + skipped + failed + 1} of {targets.Count})...";
+                ConsoleLog($"Publishing \"{draft.Name}\"...");
+
+                try
+                {
+                    var result = await _service.PublishAsync(edit);
+                    if (!result.Success || result.PublishedFileId == 0)
+                    {
+                        failed++;
+                        ConsoleLog($"FAILED \"{draft.Name}\": {result.Error ?? "the content upload did not complete."}");
+                        continue;
+                    }
+
+                    needsLegal |= result.NeedsLegalAgreement;
+
+                    // Success: drop the draft that tracked this work and refresh the affected item.
+                    _drafts.Delete(draft.Id);
+                    await SyncPublishedItemAsync(result.PublishedFileId);
+                    ok++;
+                    ConsoleLog($"Done \"{draft.Name}\" - item {result.PublishedFileId}.");
+                }
+                catch (Exception ex)
+                {
+                    failed++;
+                    ConsoleLog($"ERROR \"{draft.Name}\": {ex.Message}");
+                }
+            }
+
+            if (affectsOpenEditor)
+                Editor = null;
+
+            LoadLocalLists();
+
+            var summary = $"Bulk publish complete: {ok} succeeded" +
+                (skipped > 0 ? $", {skipped} skipped (incomplete)" : string.Empty) +
+                (failed > 0 ? $", {failed} failed" : string.Empty) + ".";
+            StatusMessage = summary;
+            ConsoleLog(summary);
+
+            if (needsLegal)
+            {
+                MessageBox.Show(
+                    "One or more published items require you to accept the Steam Workshop legal agreement " +
+                    "before they are visible. Open them on Steam to accept.",
+                    "Workshop legal agreement", MessageBoxButton.OK, MessageBoxImage.Information);
+            }
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"Bulk publish failed: {ex.Message}";
+            ConsoleLog($"ERROR: {ex.Message}");
+        }
+        finally
+        {
+            IsBusy = false;
+        }
+    }
+
+    /// <summary>Deletes every ticked draft (same semantics as the per-row delete, applied in bulk).
+    /// The caller (code-behind) confirms with the user first.</summary>
+    public void DeleteSelectedDrafts()
+    {
+        var targets = SelectedDraftRows.Select(r => r.Draft).ToList();
+        if (targets.Count == 0)
+            return;
+
+        foreach (var draft in targets)
+            DeleteDraft(draft);
+
+        StatusMessage = $"Deleted {targets.Count} draft(s).";
     }
 
     public void DeleteTemplate(Template template)

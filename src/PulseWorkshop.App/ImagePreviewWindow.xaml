@@ -1,0 +1,23 @@
+<Window x:Class="PulseWorkshop.App.ImagePreviewWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Background="{StaticResource BgBrush}"
+        SizeToContent="WidthAndHeight"
+        MinWidth="200" MinHeight="120"
+        WindowStartupLocation="CenterOwner"
+        ShowInTaskbar="False">
+
+    <!-- Full-size image preview opened by clicking an asset thumbnail. The window sizes itself to
+         the image (shrinking it to fit the work area when it's larger); Esc closes. Title carries
+         the file name and pixel dimensions; the bottom caption shows resolution, format, and file
+         size (all set in code-behind). -->
+    <Grid Margin="8">
+        <Image x:Name="PreviewImage" Stretch="Uniform" StretchDirection="DownOnly" />
+
+        <!-- Info caption floated over the bottom of the image. -->
+        <Border VerticalAlignment="Bottom" HorizontalAlignment="Center" Margin="0,0,0,4"
+                Background="#B0000000" CornerRadius="3" Padding="8,3">
+            <TextBlock x:Name="InfoText" Foreground="#FFFFFF" FontSize="12" />
+        </Border>
+    </Grid>
+</Window>

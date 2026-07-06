@@ -1,0 +1,1033 @@
+using System.Collections.ObjectModel;
+using System.IO;
+using System.Windows;
+using System.Windows.Threading;
+using Microsoft.Win32;
+using PulseWorkshop.App.Mvvm;
+using PulseWorkshop.Core.Unpack;
+
+namespace PulseWorkshop.App.ViewModels;
+
+/// <summary>Which column the Unpack file list is sorted by (the clickable header ribbon).</summary>
+public enum UnpackSortColumn { Name, Type, Source, Size }
+
+/// <summary>
+/// The Unpack tab: opens a packed Source archive (.vpk or .gma) - or a whole game via its
+/// gameinfo.txt, which mounts every VPK the SearchPaths reference in engine priority order
+/// (topmost search path wins for conflicting files, like the engine's filesystem) - then lets
+/// the user browse a folder tree, preview files, and export any selection to disk. Crowbar's
+/// "Unpack" feature, PulseWorkshop-style. Export output streams into the shared console.
+/// </summary>
+public sealed class UnpackViewModel : ObservableObject
+{
+    /// <summary>Filter results are capped so typing one letter over a full-game mount stays snappy.</summary>
+    private const int MaxFilterResults = 5000;
+
+    private readonly ConsoleViewModel _console;
+
+    private IPackedArchive? _archive;
+    private UnpackFolderViewModel? _treeRoot;
+    private UnpackFolderViewModel? _selectedFolder;
+    private string _filterText = string.Empty;
+    // Matches the display name; plain case-insensitive substring by default, regex when FilterRegex is on.
+    private readonly ItemFilter _filter = new();
+    private string _selectedSearchScope = ScopeRecursive;
+    private bool _isLoading;
+    private bool _isExporting;
+    private double _exportProgress;
+    private string _statusMessage = "No package open.";
+    private string _fileListCaption = string.Empty;
+    private CancellationTokenSource? _exportCancel;
+    private UnpackSortColumn _sortColumn = UnpackSortColumn.Name;
+    private bool _sortAscending = true;
+    // Set while we programmatically clear one pane's selection to make the other the active one, so
+    // the cross-clearing does not bounce back and forth.
+    private bool _syncingSelection;
+
+    // Typing restarts this timer; the search itself runs when it fires (or on Enter). Matching a
+    // full-game mount is fast, but repopulating a 5000-row list on every keystroke is not.
+    private readonly DispatcherTimer _searchDebounce;
+
+    public UnpackViewModel(ConsoleViewModel console)
+    {
+        _console = console;
+
+        _searchDebounce = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(300) };
+        _searchDebounce.Tick += (_, _) => ApplyFilterNow();
+
+        OpenCommand = new AsyncRelayCommand(OpenAsync, () => !IsLoading && !IsExporting);
+        CloseCommand = new RelayCommand(Close, () => IsArchiveOpen && !IsLoading && !IsExporting);
+        ExportSelectedCommand = new AsyncRelayCommand(ExportSelectedAsync, () => CanExportSelected);
+        CancelExportCommand = new RelayCommand(CancelExport, () => IsExporting);
+    }
+
+    /// <summary>Raised (on the UI thread) when a row should be scrolled into view - after
+    /// "Go to file" navigates to the folder and selects the target file.</summary>
+    public event Action<UnpackFileViewModel>? ScrollFileIntoView;
+
+    // --- Commands -------------------------------------------------------------------------
+
+    public AsyncRelayCommand OpenCommand { get; }
+    public RelayCommand CloseCommand { get; }
+    public AsyncRelayCommand ExportSelectedCommand { get; }
+    public RelayCommand CancelExportCommand { get; }
+
+    // --- Bound state ------------------------------------------------------------------------
+
+    public bool IsArchiveOpen => _archive is not null;
+
+    public string ArchiveName => _archive?.DisplayName ?? string.Empty;
+    public string ArchivePath => _archive?.SourcePath ?? string.Empty;
+
+    /// <summary>Summary line under the archive name: entry count, total size, mount info.</summary>
+    public string ArchiveSummary
+    {
+        get
+        {
+            if (_archive is null)
+                return string.Empty;
+            long total = 0;
+            foreach (var e in _archive.Entries)
+                total += e.Size;
+            var summary = $"{_archive.Entries.Count:N0} files - {FormatSize(total)}";
+            if (_archive is GameInfoMount mount)
+                summary += $" - {mount.MountedVpks.Count} VPKs mounted"
+                    + (mount.ShadowedCount > 0 ? $" ({mount.ShadowedCount:N0} shadowed by priority)" : "");
+            else if (_archive is GmaArchive { AddonName.Length: > 0 } gma)
+                summary += $" - \"{gma.AddonName}\"";
+            return summary;
+        }
+    }
+
+    /// <summary>The folder tree (a single root node named after the archive).</summary>
+    public ObservableCollection<UnpackFolderViewModel> TreeRoots { get; } = new();
+
+    /// <summary>Files shown on the right: the selected folder's files, or flat filter matches.</summary>
+    public ObservableCollection<UnpackFileViewModel> Files { get; } = new();
+
+    /// <summary>Caption above the file list ("materials/models - 120 files" or match info).</summary>
+    public string FileListCaption
+    {
+        get => _fileListCaption;
+        private set => SetField(ref _fileListCaption, value);
+    }
+
+    public UnpackFolderViewModel? SelectedFolder
+    {
+        get => _selectedFolder;
+        set
+        {
+            if (!SetField(ref _selectedFolder, value))
+            {
+                // Re-clicking the current folder still makes the tree the active pane.
+                if (value is not null)
+                    ClearFileHighlights();
+                return;
+            }
+            // Picking a folder makes the tree the active selection: drop any file highlights. A
+            // folder-scoped search follows the selection; a Global one keeps its flat results, so
+            // clear the highlights there explicitly (the other branches rebuild the list anyway).
+            if (FilterText.Length == 0)
+                ShowFolderFiles();
+            else if (SelectedSearchScope != ScopeGlobal)
+                ShowFilterResults();
+            else if (value is not null)
+                ClearFileHighlights();
+        }
+    }
+
+    /// <summary>Substring search over the scope picked next to the box; non-empty switches the
+    /// list to flat results. Debounced - the list refreshes shortly after typing pauses, or
+    /// immediately on Enter (see <see cref="ApplyFilterNow"/>).</summary>
+    public string FilterText
+    {
+        get => _filterText;
+        set
+        {
+            if (!SetField(ref _filterText, value ?? string.Empty))
+                return;
+            _filter.Query = _filterText;
+            _searchDebounce.Stop();
+            if (_filterText.Length == 0)
+                ShowFolderFiles(); // clearing snaps back to browsing instantly
+            else
+                _searchDebounce.Start();
+        }
+    }
+
+    public bool IsFiltering => _filterText.Length > 0;
+
+    /// <summary>When on, the filter box is a regex (case-insensitive) instead of a plain substring.</summary>
+    public bool FilterRegex
+    {
+        get => _filter.UseRegex;
+        set
+        {
+            if (_filter.UseRegex == value)
+                return;
+            _filter.UseRegex = value;
+            OnPropertyChanged();
+            if (_filterText.Length > 0)
+                ApplyFilterNow();
+        }
+    }
+
+    // --- Search scope ---------------------------------------------------------------------------
+
+    public const string ScopeCurrent = "Current";
+    public const string ScopeRecursive = "Recursive";
+    public const string ScopeGlobal = "Global";
+
+    /// <summary>Where the search looks: the selected folder only, the selected folder and all its
+    /// subfolders, or the whole package.</summary>
+    public IReadOnlyList<string> SearchScopes { get; } = [ScopeCurrent, ScopeRecursive, ScopeGlobal];
+
+    public string SelectedSearchScope
+    {
+        get => _selectedSearchScope;
+        set
+        {
+            if (SetField(ref _selectedSearchScope, value) && FilterText.Length > 0)
+                ApplyFilterNow();
+        }
+    }
+
+    /// <summary>Runs the pending search immediately (Enter in the filter box, scope change).</summary>
+    public void ApplyFilterNow()
+    {
+        _searchDebounce.Stop();
+        if (_filterText.Length > 0)
+            ShowFilterResults();
+    }
+
+    public bool IsLoading
+    {
+        get => _isLoading;
+        private set { if (SetField(ref _isLoading, value)) RefreshCommands(); }
+    }
+
+    public bool IsExporting
+    {
+        get => _isExporting;
+        private set { if (SetField(ref _isExporting, value)) RefreshCommands(); }
+    }
+
+    /// <summary>0..100 for the determinate export progress bar.</summary>
+    public double ExportProgress
+    {
+        get => _exportProgress;
+        private set => SetField(ref _exportProgress, value);
+    }
+
+    public string StatusMessage
+    {
+        get => _statusMessage;
+        private set => SetField(ref _statusMessage, value);
+    }
+
+    private bool CanExportSelected =>
+        IsArchiveOpen && !IsExporting && !IsLoading
+        && (Files.Any(f => f.IsSelected) || SelectedFolder is not null);
+
+    /// <summary>Label for the Export button, tracking the active selection so the two panes read as
+    /// one: highlighted rows win (many -> "Export selected", one file -> "Export item", one folder ->
+    /// "Export folder"); with nothing highlighted it acts on the tree's selected folder.</summary>
+    public string ExportButtonLabel
+    {
+        get
+        {
+            int highlighted = 0;
+            UnpackFileViewModel? only = null;
+            foreach (var row in Files)
+            {
+                if (!row.IsSelected)
+                    continue;
+                if (++highlighted > 1)
+                    return "Export selected";
+                only = row;
+            }
+            if (highlighted == 1)
+                return only!.IsFolder ? "Export folder" : "Export item";
+            // Nothing highlighted: the button falls back to the selected tree folder.
+            return "Export folder";
+        }
+    }
+
+    /// <summary>Called by the view when the file-list selection toggles.</summary>
+    public void OnFileSelectionChanged()
+    {
+        if (_syncingSelection)
+            return;
+        SyncActivePaneToFileList();
+    }
+
+    /// <summary>Highlighting a file makes the list the active pane: drop the tree's visual selection
+    /// while keeping the folder as the navigation context (so the list stays populated), then refresh
+    /// the export command/label. Call once after a batch selection change.</summary>
+    private void SyncActivePaneToFileList()
+    {
+        if (_selectedFolder is { IsSelected: true } folder && Files.Any(f => f.IsSelected))
+            folder.IsSelected = false;
+        ExportSelectedCommand.RaiseCanExecuteChanged();
+        OnPropertyChanged(nameof(ExportButtonLabel));
+    }
+
+    /// <summary>Clears every file-row highlight without letting that bounce back and re-clear the
+    /// tree - used when the tree becomes the active pane.</summary>
+    private void ClearFileHighlights()
+    {
+        _syncingSelection = true;
+        foreach (var row in Files)
+            row.IsSelected = false;
+        _syncingSelection = false;
+        ExportSelectedCommand.RaiseCanExecuteChanged();
+        OnPropertyChanged(nameof(ExportButtonLabel));
+    }
+
+    private void RefreshCommands()
+    {
+        OpenCommand.RaiseCanExecuteChanged();
+        CloseCommand.RaiseCanExecuteChanged();
+        ExportSelectedCommand.RaiseCanExecuteChanged();
+        CancelExportCommand.RaiseCanExecuteChanged();
+    }
+
+    // --- Open / close ---------------------------------------------------------------------------
+
+    private async Task OpenAsync()
+    {
+        var dlg = new OpenFileDialog
+        {
+            Title = "Open a packed archive or a game's gameinfo.txt",
+            Filter = "Source packages (*.vpk;*.gma;gameinfo.txt)|*.vpk;*.gma;gameinfo.txt"
+                   + "|VPK packages (*.vpk)|*.vpk|GMod addons (*.gma)|*.gma"
+                   + "|Game info (gameinfo.txt)|gameinfo.txt|All files (*.*)|*.*",
+            CheckFileExists = true,
+        };
+        if (dlg.ShowDialog() != true)
+            return;
+
+        await OpenFromPathAsync(dlg.FileName);
+    }
+
+    /// <summary>Opens an archive directly from a path (dialog pick or a dropped file).</summary>
+    public async Task OpenFromPathAsync(string path)
+    {
+        if (!PackedArchiveLoader.CanOpen(path))
+        {
+            StatusMessage = $"Can't open {Path.GetFileName(path)} - pick a .vpk, .gma, or gameinfo.txt.";
+            return;
+        }
+
+        Close();
+        IsLoading = true;
+        StatusMessage = $"Opening {Path.GetFileName(path)}...";
+        try
+        {
+            // Opening a gameinfo mount reads many VPK directory trees; a workshop gma may need a
+            // full LZMA decompress first. All off the UI thread.
+            var (archive, root) = await Task.Run(() =>
+            {
+                var opened = PackedArchiveLoader.Open(path);
+                try
+                {
+                    return (opened, BuildTree(opened));
+                }
+                catch
+                {
+                    opened.Dispose();
+                    throw;
+                }
+            });
+
+            _archive = archive;
+            _treeRoot = root;
+            TreeRoots.Add(root);
+            root.IsExpanded = true;
+            root.IsSelected = true;
+            SelectedFolder = root;
+
+            StatusMessage = $"Opened {archive.DisplayName}.";
+            Log($"=== Unpack: opened {archive.SourcePath} ({archive.Entries.Count:N0} files) ===");
+            if (archive is GameInfoMount mount)
+            {
+                Log($"Mounted {mount.MountedVpks.Count} VPKs in search-path priority order:");
+                for (int i = 0; i < mount.MountedVpks.Count; i++)
+                    Log($"  {i + 1,3}. {mount.MountedVpks[i]}");
+                if (mount.ShadowedCount > 0)
+                    Log($"{mount.ShadowedCount:N0} conflicting entries resolved to the topmost search path.");
+            }
+            else if (archive is GmaArchive { WasCompressed: true })
+            {
+                Log("The .gma was LZMA-compressed (legacy workshop download) - decompressed for browsing.");
+            }
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"Failed to open: {ex.Message}";
+            Log($"Unpack: failed to open {path}: {ex.Message}");
+        }
+        finally
+        {
+            IsLoading = false;
+            OnPropertyChanged(nameof(IsArchiveOpen));
+            OnPropertyChanged(nameof(ArchiveName));
+            OnPropertyChanged(nameof(ArchivePath));
+            OnPropertyChanged(nameof(ArchiveSummary));
+        }
+    }
+
+    private void Close()
+    {
+        _exportCancel?.Cancel();
+        _searchDebounce.Stop();
+        _archive?.Dispose();
+        _archive = null;
+        _treeRoot = null;
+        _selectedFolder = null;
+        _filterText = string.Empty;
+        _filter.Query = string.Empty;
+        TreeRoots.Clear();
+        Files.Clear();
+        FileListCaption = string.Empty;
+        StatusMessage = "No package open.";
+        CleanPreviewDir();
+        OnPropertyChanged(string.Empty); // refresh every binding
+        RefreshCommands();
+    }
+
+    // --- Tree building ----------------------------------------------------------------------
+
+    private static UnpackFolderViewModel BuildTree(IPackedArchive archive)
+    {
+        var root = new UnpackFolderViewModel(Path.GetFileName(archive.SourcePath), string.Empty, parent: null);
+        var folders = new Dictionary<string, UnpackFolderViewModel>(StringComparer.OrdinalIgnoreCase)
+        {
+            [string.Empty] = root,
+        };
+
+        UnpackFolderViewModel GetFolder(string dir)
+        {
+            if (folders.TryGetValue(dir, out var existing))
+                return existing;
+            int slash = dir.LastIndexOf('/');
+            var parent = GetFolder(slash < 0 ? string.Empty : dir[..slash]);
+            var node = new UnpackFolderViewModel(slash < 0 ? dir : dir[(slash + 1)..], dir, parent);
+            folders[dir] = node;
+            parent.ChildList.Add(node);
+            return node;
+        }
+
+        foreach (var entry in archive.Entries)
+            GetFolder(entry.Directory).FileList.Add(entry);
+
+        root.SortAndCount();
+        return root;
+    }
+
+    // --- File list ------------------------------------------------------------------------------
+
+    private void ShowFolderFiles()
+    {
+        OnPropertyChanged(nameof(IsFiltering));
+        if (_selectedFolder is not { } folder)
+        {
+            Files.Clear();
+            FileListCaption = string.Empty;
+            return;
+        }
+
+        // Explorer-style: subfolders and this folder's files, sorted by the active column header.
+        var rows = new List<UnpackFileViewModel>(folder.Children.Count + folder.FileList.Count);
+        foreach (var child in folder.Children)
+            rows.Add(UnpackFileViewModel.ForFolder(this, child));
+        foreach (var entry in folder.FileList)
+            rows.Add(UnpackFileViewModel.ForEntry(this, entry, entry.FileName));
+        SetFiles(rows);
+
+        var where = folder.FullPath.Length == 0 ? "root" : folder.FullPath;
+        var parts = new List<string>();
+        if (folder.Children.Count > 0)
+            parts.Add($"{folder.Children.Count:N0} folder{(folder.Children.Count == 1 ? "" : "s")}");
+        parts.Add($"{folder.FileList.Count:N0} file{(folder.FileList.Count == 1 ? "" : "s")}");
+        FileListCaption = $"{where} - {string.Join(", ", parts)}"
+            + (folder.TotalFileCount != folder.FileList.Count
+                ? $" ({folder.TotalFileCount:N0} incl. subfolders)" : "");
+        ExportSelectedCommand.RaiseCanExecuteChanged();
+    }
+
+    /// <summary>Double-click on a folder row: select it in the tree (which repopulates the list).</summary>
+    public void NavigateToFolder(UnpackFolderViewModel folder)
+    {
+        for (var parent = folder.Parent; parent is not null; parent = parent.Parent)
+            parent.IsExpanded = true;
+        folder.IsSelected = true;
+        SelectedFolder = folder; // direct set too - the tree may not have realized the item yet
+    }
+
+    private void ShowFilterResults()
+    {
+        OnPropertyChanged(nameof(IsFiltering));
+        if (_archive is null)
+        {
+            Files.Clear();
+            return;
+        }
+
+        // The searched set and the displayed name depend on the scope: Current = this folder's
+        // files by name, Recursive = this folder's subtree by folder-relative path, Global = the
+        // whole package by full path. The match runs against the displayed name.
+        var folder = _selectedFolder ?? _treeRoot;
+        IEnumerable<(PackedEntry Entry, string Display)> candidates = SelectedSearchScope switch
+        {
+            ScopeCurrent when folder is not null =>
+                folder.FileList.Select(e => (e, e.FileName)),
+            ScopeRecursive when folder is not null =>
+                folder.CollectEntries().Select(e => (e, RelativeTo(e, folder))),
+            _ => _archive.Entries.Select(e => (e, e.Path)),
+        };
+
+        int matched = 0;
+        var rows = new List<UnpackFileViewModel>();
+        foreach (var (entry, display) in candidates)
+        {
+            if (!_filter.Matches(display))
+                continue;
+            matched++;
+            if (rows.Count < MaxFilterResults)
+                rows.Add(UnpackFileViewModel.ForEntry(this, entry, display));
+        }
+        SetFiles(rows);
+
+        var scopeLabel = SelectedSearchScope switch
+        {
+            ScopeCurrent => $"in {FolderLabel(folder)}",
+            ScopeRecursive => $"under {FolderLabel(folder)}",
+            _ => "in the whole package",
+        };
+        FileListCaption = !_filter.RegexValid
+            ? "Invalid regex pattern"
+            : matched > Files.Count
+                ? $"{matched:N0} matches {scopeLabel} - showing the first {Files.Count:N0}"
+                : $"{matched:N0} match{(matched == 1 ? "" : "es")} {scopeLabel}";
+        ExportSelectedCommand.RaiseCanExecuteChanged();
+
+        static string FolderLabel(UnpackFolderViewModel? f) =>
+            f is null || f.FullPath.Length == 0 ? "root" : f.FullPath;
+
+        static string RelativeTo(PackedEntry entry, UnpackFolderViewModel folder) =>
+            folder.FullPath.Length == 0 ? entry.Path : entry.Path[(folder.FullPath.Length + 1)..];
+    }
+
+    // --- Sorting (clickable column-header ribbon) -----------------------------------------------
+
+    public UnpackSortColumn SortColumn => _sortColumn;
+    public bool SortAscending => _sortAscending;
+
+    /// <summary>Sort glyph shown in each header - up/down on the active column, blank otherwise.</summary>
+    public string SortGlyphName => GlyphFor(UnpackSortColumn.Name);
+    public string SortGlyphType => GlyphFor(UnpackSortColumn.Type);
+    public string SortGlyphSource => GlyphFor(UnpackSortColumn.Source);
+    public string SortGlyphSize => GlyphFor(UnpackSortColumn.Size);
+
+    private string GlyphFor(UnpackSortColumn c) =>
+        _sortColumn != c ? string.Empty : _sortAscending ? "▲" : "▼";
+
+    /// <summary>Header click: sort by this column, toggling direction if it is already active.</summary>
+    public void SortBy(UnpackSortColumn column)
+    {
+        if (_sortColumn == column)
+        {
+            _sortAscending = !_sortAscending;
+        }
+        else
+        {
+            _sortColumn = column;
+            // Text columns feel natural ascending; size defaults to largest-first.
+            _sortAscending = column != UnpackSortColumn.Size;
+        }
+        OnPropertyChanged(nameof(SortGlyphName));
+        OnPropertyChanged(nameof(SortGlyphType));
+        OnPropertyChanged(nameof(SortGlyphSource));
+        OnPropertyChanged(nameof(SortGlyphSize));
+
+        // Re-sort the rows already on screen in place (no need to rescan the archive).
+        var rows = Files.ToList();
+        SetFiles(rows);
+    }
+
+    /// <summary>Sorts <paramref name="rows"/> by the active column (folders always first) and
+    /// replaces the visible list with them.</summary>
+    private void SetFiles(List<UnpackFileViewModel> rows)
+    {
+        rows.Sort(CompareRows);
+        Files.Clear();
+        foreach (var row in rows)
+            Files.Add(row);
+        // The rebuilt rows start unhighlighted, so the button snaps back to acting on the folder.
+        OnPropertyChanged(nameof(ExportButtonLabel));
+    }
+
+    private int CompareRows(UnpackFileViewModel a, UnpackFileViewModel b)
+    {
+        // Folders always group before files, regardless of column or direction.
+        if (a.IsFolder != b.IsFolder)
+            return a.IsFolder ? -1 : 1;
+
+        int cmp = _sortColumn switch
+        {
+            UnpackSortColumn.Type => string.Compare(a.TypeKey, b.TypeKey, StringComparison.OrdinalIgnoreCase),
+            UnpackSortColumn.Source => string.Compare(a.Source, b.Source, StringComparison.OrdinalIgnoreCase),
+            UnpackSortColumn.Size => a.SizeKey.CompareTo(b.SizeKey),
+            _ => 0,
+        };
+        // Name is the primary key for the Name column and the tie-break for every other column.
+        if (cmp == 0)
+            cmp = string.Compare(a.DisplayName, b.DisplayName, StringComparison.OrdinalIgnoreCase);
+        return _sortAscending ? cmp : -cmp;
+    }
+
+    // --- Go to file -----------------------------------------------------------------------------
+
+    /// <summary>Context-menu "Go to file": for a folder row, navigate into it; for a file row
+    /// (typically a search result), clear the search, open the folder that contains it, and select
+    /// and scroll to the file there.</summary>
+    public void GoToFile(UnpackFileViewModel row)
+    {
+        if (row.Folder is { } folder)
+        {
+            NavigateToFolder(folder);
+            return;
+        }
+        if (row.Entry is not { } entry)
+            return;
+
+        var dir = FindFolder(entry.Directory);
+        if (dir is null)
+            return;
+
+        FilterText = string.Empty; // back to folder browsing (stops any pending search)
+        NavigateToFolder(dir);     // selecting the folder repopulates the list
+
+        var target = Files.FirstOrDefault(f =>
+            f.Entry is { } e && string.Equals(e.Path, entry.Path, StringComparison.OrdinalIgnoreCase));
+        if (target is null)
+            return;
+        foreach (var f in Files)
+            f.IsSelected = false;
+        target.IsSelected = true;
+        ScrollFileIntoView?.Invoke(target);
+    }
+
+    /// <summary>Walks the tree to the folder with the given archive-relative path, or null.</summary>
+    private UnpackFolderViewModel? FindFolder(string dir)
+    {
+        var node = _treeRoot;
+        if (node is null || dir.Length == 0)
+            return node;
+        foreach (var segment in dir.Split('/'))
+        {
+            node = node.Children.FirstOrDefault(c =>
+                string.Equals(c.Name, segment, StringComparison.OrdinalIgnoreCase));
+            if (node is null)
+                return null;
+        }
+        return node;
+    }
+
+    // --- Export ---------------------------------------------------------------------------------
+
+    private async Task ExportSelectedAsync()
+    {
+        // Highlighted rows: files directly, folder rows recursively (dedup in case a highlighted
+        // folder also contains a highlighted file).
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var selected = new List<PackedEntry>();
+        int selectedRows = 0;
+        foreach (var row in Files.Where(f => f.IsSelected))
+        {
+            selectedRows++;
+            if (row.Folder is { } sub)
+            {
+                foreach (var entry in sub.CollectEntries())
+                    if (seen.Add(entry.Path))
+                        selected.Add(entry);
+            }
+            else if (row.Entry is { } entry && seen.Add(entry.Path))
+            {
+                selected.Add(entry);
+            }
+        }
+
+        string what;
+        if (selectedRows > 0)
+        {
+            what = $"{selected.Count:N0} file{(selected.Count == 1 ? "" : "s")} from {selectedRows:N0} selected row{(selectedRows == 1 ? "" : "s")}";
+        }
+        else if (SelectedFolder is { } folder)
+        {
+            // Nothing highlighted in the list: export the selected folder recursively.
+            selected = folder.CollectEntries();
+            what = folder.FullPath.Length == 0
+                ? "the whole package"
+                : $"folder \"{folder.FullPath}\" ({selected.Count:N0} files)";
+        }
+        else
+        {
+            return;
+        }
+
+        if (selected.Count == 0)
+        {
+            StatusMessage = "Nothing to export.";
+            return;
+        }
+        await ExportEntriesAsync(selected, what);
+    }
+
+    /// <summary>Exports one folder from the tree (recursively). Driven by the tree's context menu;
+    /// on the root node this exports the whole package.</summary>
+    public async Task ExportFolderAsync(UnpackFolderViewModel folder)
+    {
+        if (!IsArchiveOpen || IsExporting || IsLoading)
+            return;
+
+        var entries = folder.CollectEntries();
+        if (entries.Count == 0)
+        {
+            StatusMessage = "Nothing to export.";
+            return;
+        }
+
+        string what = folder.FullPath.Length == 0
+            ? "the whole package"
+            : $"folder \"{folder.FullPath}\" ({entries.Count:N0} files)";
+        await ExportEntriesAsync(entries, what);
+    }
+
+    private async Task ExportEntriesAsync(IReadOnlyList<PackedEntry> entries, string what)
+    {
+        if (_archive is null)
+            return;
+
+        var dlg = new OpenFolderDialog { Title = $"Export {what} to..." };
+        if (dlg.ShowDialog() != true)
+            return;
+        string destRoot = Path.GetFullPath(dlg.FolderName);
+
+        _exportCancel = new CancellationTokenSource();
+        var ct = _exportCancel.Token;
+        IsExporting = true;
+        ExportProgress = 0;
+        Log($"=== Unpack: exporting {what} from {_archive.DisplayName} to {destRoot} ===");
+
+        int done = 0, failed = 0, skipped = 0;
+        try
+        {
+            var archive = _archive;
+            var progress = new Progress<int>(count =>
+            {
+                ExportProgress = 100.0 * count / entries.Count;
+                StatusMessage = $"Exporting... {count:N0} / {entries.Count:N0}";
+            });
+
+            await Task.Run(() =>
+            {
+                IProgress<int> report = progress;
+                foreach (var entry in entries)
+                {
+                    ct.ThrowIfCancellationRequested();
+
+                    // Zip-slip guard: the entry path must land inside the chosen folder.
+                    string target;
+                    try
+                    {
+                        target = Path.GetFullPath(Path.Combine(destRoot, entry.Path.Replace('/', Path.DirectorySeparatorChar)));
+                    }
+                    catch (Exception)
+                    {
+                        Log($"  SKIPPED (bad path): {entry.Path}");
+                        skipped++;
+                        continue;
+                    }
+                    if (!target.StartsWith(destRoot + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+                    {
+                        Log($"  SKIPPED (escapes destination): {entry.Path}");
+                        skipped++;
+                        continue;
+                    }
+
+                    try
+                    {
+                        Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+                        using var output = new FileStream(target, FileMode.Create, FileAccess.Write,
+                                                          FileShare.None, 1 << 16);
+                        archive.Extract(entry, output, ct);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        throw;
+                    }
+                    catch (Exception ex)
+                    {
+                        Log($"  FAILED: {entry.Path} - {ex.Message}");
+                        failed++;
+                        continue;
+                    }
+
+                    done++;
+                    if ((done & 31) == 0 || done == entries.Count)
+                        report.Report(done);
+                }
+            }, ct);
+
+            StatusMessage = $"Exported {done:N0} file{(done == 1 ? "" : "s")}"
+                + (failed > 0 ? $", {failed} failed" : "")
+                + (skipped > 0 ? $", {skipped} skipped" : "")
+                + $" to {destRoot}.";
+        }
+        catch (OperationCanceledException)
+        {
+            StatusMessage = $"Export cancelled after {done:N0} file{(done == 1 ? "" : "s")}.";
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"Export failed: {ex.Message}";
+            Log($"Unpack: export failed: {ex.Message}");
+        }
+        finally
+        {
+            Log($"=== {StatusMessage} ===");
+            IsExporting = false;
+            ExportProgress = 0;
+            _exportCancel.Dispose();
+            _exportCancel = null;
+        }
+    }
+
+    private void CancelExport()
+    {
+        _exportCancel?.Cancel();
+        StatusMessage = "Cancelling export...";
+    }
+
+    // --- Preview --------------------------------------------------------------------------------
+
+    private static readonly string PreviewDir = Path.Combine(Path.GetTempPath(), "PulseWorkshop", "unpack-preview");
+
+    /// <summary>Extracts the entry to the preview temp folder and returns the on-disk path
+    /// (double-click hands this to the shell so the user's default app opens it), or null on
+    /// failure.</summary>
+    public async Task<string?> ExtractForPreviewAsync(PackedEntry entry)
+    {
+        if (_archive is null)
+            return null;
+
+        try
+        {
+            var archive = _archive;
+            return await Task.Run(() =>
+            {
+                Directory.CreateDirectory(PreviewDir);
+                // Keep the real file name (the preview windows show it as the title) in a
+                // per-extract folder so same-named files from different paths don't collide.
+                var dir = Path.Combine(PreviewDir, Guid.NewGuid().ToString("N")[..8]);
+                Directory.CreateDirectory(dir);
+                var target = Path.Combine(dir, SanitizeFileName(entry.FileName));
+                using (var output = new FileStream(target, FileMode.Create, FileAccess.Write))
+                    archive.Extract(entry, output);
+                return target;
+            });
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"Preview failed: {ex.Message}";
+            return null;
+        }
+    }
+
+    /// <summary>Reports that the shell could not open a previewed file (no handler, launch error).</summary>
+    public void ReportPreviewOpenFailed(PackedEntry entry, Exception ex)
+    {
+        StatusMessage = $"Couldn't open {entry.FileName}: {ex.Message}";
+        Log($"Unpack: failed to open {entry.Path} with the default app: {ex.Message}");
+    }
+
+    private static string SanitizeFileName(string name)
+    {
+        foreach (char c in Path.GetInvalidFileNameChars())
+            name = name.Replace(c, '_');
+        return name.Length == 0 ? "file" : name;
+    }
+
+    private static void CleanPreviewDir()
+    {
+        try
+        {
+            if (Directory.Exists(PreviewDir))
+                Directory.Delete(PreviewDir, recursive: true);
+        }
+        catch
+        {
+            // A preview window may still hold a file open; %TEMP% cleanup gets the rest.
+        }
+    }
+
+    // --- Helpers --------------------------------------------------------------------------------
+
+    internal static string FormatSize(long bytes)
+    {
+        string[] units = ["B", "KB", "MB", "GB", "TB"];
+        double size = bytes;
+        int unit = 0;
+        while (size >= 1024 && unit < units.Length - 1)
+        {
+            size /= 1024;
+            unit++;
+        }
+        return unit == 0 ? $"{bytes} {units[unit]}" : $"{size:0.#} {units[unit]}";
+    }
+
+    private void Log(string line) => _console.Append(line);
+}
+
+/// <summary>A folder node in the Unpack tree. Immutable after the initial build+sort.</summary>
+public sealed class UnpackFolderViewModel : ObservableObject
+{
+    private bool _isExpanded;
+    private bool _isSelected;
+
+    public UnpackFolderViewModel(string name, string fullPath, UnpackFolderViewModel? parent)
+    {
+        Name = name;
+        FullPath = fullPath;
+        Parent = parent;
+    }
+
+    public string Name { get; }
+
+    /// <summary>Archive-relative path with forward slashes; "" for the root node.</summary>
+    public string FullPath { get; }
+
+    /// <summary>The containing folder; null on the root node. Used to expand the tree down to a
+    /// folder when a folder row is double-clicked.</summary>
+    public UnpackFolderViewModel? Parent { get; }
+
+    internal List<UnpackFolderViewModel> ChildList { get; } = new();
+    internal List<Core.Unpack.PackedEntry> FileList { get; } = new();
+
+    public IReadOnlyList<UnpackFolderViewModel> Children => ChildList;
+
+    /// <summary>Files across this folder and all subfolders (shown next to the name).</summary>
+    public int TotalFileCount { get; private set; }
+
+    public bool IsExpanded
+    {
+        get => _isExpanded;
+        set => SetField(ref _isExpanded, value);
+    }
+
+    public bool IsSelected
+    {
+        get => _isSelected;
+        set => SetField(ref _isSelected, value);
+    }
+
+    /// <summary>Recursively sorts children/files by name and computes the rolled-up file counts.</summary>
+    internal void SortAndCount()
+    {
+        ChildList.Sort((a, b) => string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase));
+        FileList.Sort((a, b) => string.Compare(a.FileName, b.FileName, StringComparison.OrdinalIgnoreCase));
+        int total = FileList.Count;
+        foreach (var child in ChildList)
+        {
+            child.SortAndCount();
+            total += child.TotalFileCount;
+        }
+        TotalFileCount = total;
+    }
+
+    /// <summary>All entries under this folder, recursively (for a folder export).</summary>
+    internal List<Core.Unpack.PackedEntry> CollectEntries()
+    {
+        var result = new List<Core.Unpack.PackedEntry>();
+        Collect(this, result);
+        return result;
+
+        static void Collect(UnpackFolderViewModel node, List<Core.Unpack.PackedEntry> into)
+        {
+            into.AddRange(node.FileList);
+            foreach (var child in node.ChildList)
+                Collect(child, into);
+        }
+    }
+}
+
+/// <summary>One row in the Unpack file list: a packed file, or (in folder view, Explorer-style)
+/// one of the selected folder's subfolders.</summary>
+public sealed class UnpackFileViewModel : ObservableObject
+{
+    private readonly UnpackViewModel _owner;
+    private bool _isSelected;
+
+    private UnpackFileViewModel(UnpackViewModel owner, Core.Unpack.PackedEntry? entry,
+                                UnpackFolderViewModel? folder, string displayName)
+    {
+        _owner = owner;
+        Entry = entry;
+        Folder = folder;
+        DisplayName = displayName;
+    }
+
+    public static UnpackFileViewModel ForEntry(UnpackViewModel owner, Core.Unpack.PackedEntry entry,
+                                               string displayName) =>
+        new(owner, entry, null, displayName);
+
+    public static UnpackFileViewModel ForFolder(UnpackViewModel owner, UnpackFolderViewModel folder) =>
+        new(owner, null, folder, folder.Name);
+
+    /// <summary>The packed file; null for a folder row.</summary>
+    public Core.Unpack.PackedEntry? Entry { get; }
+
+    /// <summary>The subfolder; null for a file row.</summary>
+    public UnpackFolderViewModel? Folder { get; }
+
+    public bool IsFolder => Folder is not null;
+
+    /// <summary>File name in folder view; the scope-relative path in search results.</summary>
+    public string DisplayName { get; }
+
+    /// <summary>Extension chip ("VMT", "MDL", ...; "-" when there is none). Unused on folder rows
+    /// (the template shows a folder glyph instead).</summary>
+    public string TypeDisplay =>
+        Entry?.Extension is { Length: > 0 } ext ? ext.ToUpperInvariant() : "-";
+
+    /// <summary>Sort key for the Type column (folders collapse to "" and tie-break by name).</summary>
+    public string TypeKey => Folder is not null ? string.Empty : Entry!.Extension;
+
+    /// <summary>Sort key for the Size column: byte size for files, rolled-up count for folders
+    /// (folders and files never compare - folders always sort first).</summary>
+    public long SizeKey => Folder is { } f ? f.TotalFileCount : Entry!.Size;
+
+    /// <summary>File size, or the folder's rolled-up file count.</summary>
+    public string SizeDisplay => Folder is { } f
+        ? $"{f.TotalFileCount:N0} file{(f.TotalFileCount == 1 ? "" : "s")}"
+        : UnpackViewModel.FormatSize(Entry!.Size);
+
+    /// <summary>The providing archive - meaningful for gameinfo mounts. Blank on folder rows.</summary>
+    public string Source => Entry?.Source ?? string.Empty;
+
+    public string ToolTipText => Folder is { } f
+        ? $"{(f.FullPath.Length == 0 ? f.Name : f.FullPath)}\n{SizeDisplay} - double-click to open"
+        : $"{Entry!.Path}\n{SizeDisplay} - from {Entry.Source}";
+
+    public bool IsSelected
+    {
+        get => _isSelected;
+        set
+        {
+            if (SetField(ref _isSelected, value))
+                _owner.OnFileSelectionChanged();
+        }
+    }
+}

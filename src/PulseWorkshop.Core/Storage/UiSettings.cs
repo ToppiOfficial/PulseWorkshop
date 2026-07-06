@@ -20,6 +20,21 @@ public sealed class UiSettings
     public double? ConsoleWindowLeft { get; set; }
     public double? ConsoleWindowTop { get; set; }
 
+    /// <summary>The index of the main window's top-level tab that was active when the app last closed.
+    /// Defaults to the Workshop tab (index 1; Game Setup sits at index 0) so a fresh launch opens on Workshop.</summary>
+    public int MainTabIndex { get; set; } = 1;
+
+    /// <summary>The index of the Compile tab's Simple/Advanced sub-tab active when the app last closed.</summary>
+    public int CompileSubTabIndex { get; set; }
+
+    /// <summary>The index of the Package tab's Simple/Advanced sub-tab active when the app last closed.</summary>
+    public int PackageSubTabIndex { get; set; }
+
+    /// <summary>The archive (.vpk / .gma / gameinfo.txt) that was open in the Unpack tab when the app
+    /// last closed; null if none. Reopened lazily the first time the user enters the Unpack tab (not
+    /// at startup) so restoring a heavy gameinfo mount doesn't slow the launch.</summary>
+    public string? UnpackLastArchive { get; set; }
+
     private static readonly JsonSerializerOptions Options = new() { WriteIndented = true };
 
     public static UiSettings Load()

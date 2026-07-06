@@ -37,6 +37,7 @@ public sealed class CompileAdvancedViewModel : ObservableObject
 
         AddEntryCommand = new RelayCommand(AddEntry, () => IsProjectOpen);
         CompileAllCommand = new AsyncRelayCommand(CompileAllAsync, () => CanCompileAll);
+        CompileSelectedCommand = new AsyncRelayCommand(CompileSelectedAsync, () => CanCompileSelected);
         CancelCommand = new RelayCommand(Cancel, () => IsCompiling);
 
         // This tab persists the compile entry list into the shared project on every save.
@@ -55,6 +56,10 @@ public sealed class CompileAdvancedViewModel : ObservableObject
     public RelayCommand CloseProjectCommand => _session.CloseProjectCommand;
     public RelayCommand AddEntryCommand { get; }
     public AsyncRelayCommand CompileAllCommand { get; }
+
+    /// <summary>Compiles the entries highlighted in the list (multi-select with Ctrl/Shift). Replaces
+    /// the old per-entry "Compile" button: a single-row selection behaves exactly like compiling one.</summary>
+    public AsyncRelayCommand CompileSelectedCommand { get; }
     public RelayCommand CancelCommand { get; }
 
     /// <summary>The shared Game Setup roster (game name + resolved tool paths) used for the dropdown.</summary>
@@ -108,6 +113,7 @@ public sealed class CompileAdvancedViewModel : ObservableObject
     {
         OnPropertyChanged(nameof(SelectedGame));
         OnPropertyChanged(nameof(IsGameReady));
+        RefreshEntryCommandPreviews();
         RefreshCommands();
     }
 
@@ -118,10 +124,23 @@ public sealed class CompileAdvancedViewModel : ObservableObject
     public void RefreshCommands()
     {
         CompileAllCommand.RaiseCanExecuteChanged();
+        CompileSelectedCommand.RaiseCanExecuteChanged();
         CancelCommand.RaiseCanExecuteChanged();
         AddEntryCommand.RaiseCanExecuteChanged();
-        foreach (var entry in Entries)
-            entry.RaiseCanCompileChanged();
+    }
+
+    /// <summary>Called by an entry when its list selection toggles, so "Compile selected" re-evaluates.</summary>
+    public void OnEntrySelectionChanged() => CompileSelectedCommand.RaiseCanExecuteChanged();
+
+    /// <summary>Raised when an entry's "View Model" is clicked: the compiled .mdl path to hand to the
+    /// Model View tab. Wired by <c>MainViewModel</c> to assign the path and switch tabs.</summary>
+    public event Action<string>? ViewModelRequested;
+
+    /// <summary>Sends an entry's last compiled .mdl to the Model View tab (without launching the viewer).</summary>
+    public void RequestViewModel(string mdlPath)
+    {
+        if (!string.IsNullOrEmpty(mdlPath))
+            ViewModelRequested?.Invoke(mdlPath);
     }
 
     // --- Project-level bound state -------------------------------------------------------------
@@ -141,9 +160,32 @@ public sealed class CompileAdvancedViewModel : ObservableObject
             {
                 _session.Project.GlobalCommand = value ?? string.Empty;
                 OnPropertyChanged();
+                RefreshEntryCommandPreviews();
                 Save();
             }
         }
+    }
+
+    /// <summary>Builds the read-only studiomdl command-line preview for one entry (the global command
+    /// plus that entry's command), mirroring the Simple tab. Shown above the entry's model info.</summary>
+    public string BuildEntryCommandPreview(ModelEntryViewModel entry)
+    {
+        var studio = SelectedGame?.ModelCompiler.ResolvedPath;
+        var gameInfoDir = GameInfoDir;
+        if (string.IsNullOrWhiteSpace(studio) || string.IsNullOrWhiteSpace(gameInfoDir)
+            || string.IsNullOrWhiteSpace(entry.QcPath))
+            return "Select a game, gameinfo.txt, and a .qc to preview the command.";
+
+        var extra = ModelCompileService.CombineOptions(SelectedGame?.ModelCompilerCommand, GlobalCommand, entry.Command);
+        return $"\"{studio}\" {ModelCompileService.BuildArguments(gameInfoDir, entry.ResolvedQcPath, extra)}";
+    }
+
+    /// <summary>Re-raises every entry's command preview - used when a project-level input the preview
+    /// depends on (global command, selected game) changes.</summary>
+    private void RefreshEntryCommandPreviews()
+    {
+        foreach (var entry in Entries)
+            entry.RaiseCommandPreviewChanged();
     }
 
     public bool GetMaterialOnCompile
@@ -257,6 +299,9 @@ public sealed class CompileAdvancedViewModel : ObservableObject
     public bool CanCompileAll =>
         IsProjectOpen && !IsCompiling && IsGameReady && Entries.Any(e => e.CompileInAll);
 
+    public bool CanCompileSelected =>
+        IsProjectOpen && !IsCompiling && IsGameReady && Entries.Any(e => e.IsSelected);
+
     public string StatusMessage
     {
         get => _statusMessage;
@@ -348,28 +393,6 @@ public sealed class CompileAdvancedViewModel : ObservableObject
         StatusMessage = "Cancelling...";
     }
 
-    public async Task CompileEntryAsync(ModelEntryViewModel entry)
-    {
-        if (!IsGameReady)
-            return;
-
-        _cancelSource = new CancellationTokenSource();
-        var ct = _cancelSource.Token;
-        IsCompiling = true;
-        entry.IsCompiling = true;
-        try
-        {
-            await CompileOneAsync(entry, ct);
-        }
-        finally
-        {
-            entry.IsCompiling = false;
-            IsCompiling = false;
-            _cancelSource.Dispose();
-            _cancelSource = null;
-        }
-    }
-
     private async Task CompileAllAsync()
     {
         if (!IsGameReady)
@@ -382,13 +405,40 @@ public sealed class CompileAdvancedViewModel : ObservableObject
             return;
         }
 
-        if (!ConfirmCompileAll(targets.Count))
+        if (!ConfirmBatch("Compile all", targets.Count))
             return;
 
+        await CompileBatchAsync(targets, "Compile all");
+    }
+
+    private async Task CompileSelectedAsync()
+    {
+        if (!IsGameReady)
+            return;
+
+        var targets = Entries.Where(e => e.IsSelected).ToList();
+        if (targets.Count == 0)
+        {
+            StatusMessage = "No entries selected.";
+            return;
+        }
+
+        // A single-row selection compiles straight away (like the old per-entry button); only a
+        // multi-entry batch asks first.
+        if (targets.Count > 1 && !ConfirmBatch("Compile selected", targets.Count))
+            return;
+
+        await CompileBatchAsync(targets, "Compile selected");
+    }
+
+    /// <summary>Compiles a set of entries in order, streaming progress and a final tally to the console.
+    /// Used by both "Compile all" and "Compile selected".</summary>
+    private async Task CompileBatchAsync(IReadOnlyList<ModelEntryViewModel> targets, string label)
+    {
         _cancelSource = new CancellationTokenSource();
         var ct = _cancelSource.Token;
         IsCompiling = true;
-        Log($"=== Compile all ({targets.Count} entr{(targets.Count == 1 ? "y" : "ies")}) ===");
+        Log($"=== {label} ({targets.Count} entr{(targets.Count == 1 ? "y" : "ies")}) ===");
         try
         {
             var ok = 0;
@@ -417,8 +467,8 @@ public sealed class CompileAdvancedViewModel : ObservableObject
                     break;
             }
             StatusMessage = cancelled
-                ? $"Compile all cancelled: {ok}/{targets.Count} done."
-                : $"Compile all done: {ok}/{targets.Count} succeeded.";
+                ? $"{label} cancelled: {ok}/{targets.Count} done."
+                : $"{label} done: {ok}/{targets.Count} succeeded.";
             Log($"=== {StatusMessage} ===");
         }
         finally
@@ -429,14 +479,14 @@ public sealed class CompileAdvancedViewModel : ObservableObject
         }
     }
 
-    private bool ConfirmCompileAll(int count)
+    private bool ConfirmBatch(string title, int count)
     {
-        var message = $"Compile all {count} flagged entr{(count == 1 ? "y" : "ies")} in order?";
+        var message = $"{title}: run {count} entr{(count == 1 ? "y" : "ies")} in order?";
         var owner = Application.Current?.MainWindow;
         var result = owner is not null
-            ? MessageBox.Show(owner, message, "Compile all",
+            ? MessageBox.Show(owner, message, title,
                 MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.Yes)
-            : MessageBox.Show(message, "Compile all",
+            : MessageBox.Show(message, title,
                 MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.Yes);
         return result == MessageBoxResult.Yes;
     }
@@ -453,7 +503,7 @@ public sealed class CompileAdvancedViewModel : ObservableObject
             StudioMdlPath: SelectedGame!.ModelCompiler.ResolvedPath ?? string.Empty,
             GameInfoDir: gameInfoDir,
             QcPath: qc,
-            ExtraOptions: CombineCommands(GlobalCommand, entry.Command),
+            ExtraOptions: ModelCompileService.CombineOptions(SelectedGame?.ModelCompilerCommand, GlobalCommand, entry.Command),
             DestinationBase: destination,
             CleanBeforeTransfer: CleanBeforeTransfer);
 
@@ -475,6 +525,7 @@ public sealed class CompileAdvancedViewModel : ObservableObject
                     return false;
                 }
                 entry.HasError = true;
+                entry.MdlInfo = null;
                 StatusMessage = $"{entry.Name}: {result.Error}";
                 Log($"FAILED: {result.Error}");
                 return false;
@@ -490,6 +541,9 @@ public sealed class CompileAdvancedViewModel : ObservableObject
             entry.LastMdlPath = result.CopiedFiles.FirstOrDefault(f =>
                                     f.EndsWith(".mdl", StringComparison.OrdinalIgnoreCase))
                                 ?? result.CompiledMdls.FirstOrDefault();
+
+            // Same trigger as the entry's "Go to file": read the compiled .mdl's stats for the panel.
+            await ScanMdlInfoAsync(entry, ct);
 
             if (GetMaterialOnCompile && result.CompiledMdls.Count > 0)
             {
@@ -583,16 +637,6 @@ public sealed class CompileAdvancedViewModel : ObservableObject
         return compileDest;
     }
 
-    /// <summary>The project's global command with one entry's command appended after it. The global
-    /// command may be typed across multiple lines for readability; newlines are flattened to spaces
-    /// here so studiomdl receives a single argument string.</summary>
-    private static string CombineCommands(string global, string entry)
-    {
-        static string Flatten(string? s) =>
-            string.Join(' ', (s ?? string.Empty).Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
-        return string.Join(" ", new[] { Flatten(global), Flatten(entry) }.Where(s => s.Length > 0)).Trim();
-    }
-
     private async Task RunMaterialCopyAsync(IReadOnlyList<string> mdlPaths, string? materialsDest, CancellationToken ct)
     {
         var gameInfoPath = SelectedGame?.GameInfo.ResolvedPath;
@@ -608,6 +652,12 @@ public sealed class CompileAdvancedViewModel : ObservableObject
         }
 
         Log("--- Material copy ---");
+
+        // The game's vpk.exe lets ModelTool tell "missing" apart from "shipped in a game VPK".
+        var vpkExe = VpkLocator.FindVpkExe(SelectedGame?.PackerTool.ResolvedPath, gameInfoPath);
+        if (vpkExe is null)
+            Log("[Materials] No vpk.exe found for this game - files inside game VPKs will be reported as missing.");
+
         var svc = new MaterialCopyService();
         svc.Output += Log;
         try
@@ -623,7 +673,8 @@ public sealed class CompileAdvancedViewModel : ObservableObject
                     GameInfoPath: gameInfoPath,
                     DestDir:      materialsDest,
                     Localize:     LocalizeMaterials,
-                    FlatPatch:    FlatPatchShader);
+                    FlatPatch:    FlatPatchShader,
+                    VpkExePath:   vpkExe);
 
                 var r = await svc.CopyAsync(req, ct);
                 await FlushLogAsync();
@@ -636,6 +687,21 @@ public sealed class CompileAdvancedViewModel : ObservableObject
             svc.Output -= Log;
         }
         Log("--- Material copy done ---");
+    }
+
+    /// <summary>Reads the just-compiled .mdl's stats (bones, hitboxes, poly count, dependencies) into
+    /// the entry's info panel. Best-effort: a read failure leaves a short note rather than erroring the
+    /// compile.</summary>
+    private async Task ScanMdlInfoAsync(ModelEntryViewModel entry, CancellationToken ct)
+    {
+        if (string.IsNullOrEmpty(entry.LastMdlPath))
+        {
+            entry.MdlInfo = null;
+            return;
+        }
+        var svc = new ModelInfoService();
+        var result = await svc.GetInfoAsync(new ModelInfoRequest(_modelToolPath, entry.LastMdlPath), ct);
+        entry.MdlInfo = result.Success ? result.Text : $"Model info unavailable: {result.Error}";
     }
 
     /// <summary>Default subfolder name from the app version, e.g. 0.2.5 -> "compiled025".</summary>

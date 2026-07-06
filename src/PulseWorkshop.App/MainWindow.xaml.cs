@@ -153,12 +153,16 @@ public partial class MainWindow : Window
 
     /// <summary>The first dropped file the window can route to a tab (a <c>.pw_mdlproject</c> /
     /// <c>.pw_textureproject</c> project, or a <c>.vpk</c>/<c>.gma</c>/<c>gameinfo.txt</c> archive),
-    /// or null if the drop carries no such file.</summary>
-    private static string? GetRoutableDroppedFile(DragEventArgs e)
+    /// or null if the drop carries no such file. While the Workshop tab is active, archives are not
+    /// routed to Unpack - a dropped .vpk/.gma there is content for the editor's own drop zones, not
+    /// something to auto-unpack.</summary>
+    private string? GetRoutableDroppedFile(DragEventArgs e)
     {
         if (!e.Data.GetDataPresent(DataFormats.FileDrop)
             || e.Data.GetData(DataFormats.FileDrop) is not string[] files)
             return null;
+
+        bool onWorkshopTab = WorkshopTab.IsSelected;
 
         foreach (var file in files)
         {
@@ -166,7 +170,7 @@ public partial class MainWindow : Window
                 continue;
             if (file.EndsWith(".pw_mdlproject", StringComparison.OrdinalIgnoreCase)
                 || file.EndsWith(".pw_textureproject", StringComparison.OrdinalIgnoreCase)
-                || PulseWorkshop.Core.Unpack.PackedArchiveLoader.CanOpen(file))
+                || (!onWorkshopTab && PulseWorkshop.Core.Unpack.PackedArchiveLoader.CanOpen(file)))
                 return file;
         }
         return null;
@@ -1096,6 +1100,10 @@ public partial class MainWindow : Window
 
     private void ContentDrop_Drop(object sender, DragEventArgs e)
     {
+        // The drop belongs to the content zone - mark it handled so it doesn't bubble up to
+        // Window_Drop, which would route the same .vpk/.gma to the Unpack tab ("auto-unpack").
+        e.Handled = true;
+
         if (Editor is null)
             return;
 
@@ -1141,6 +1149,7 @@ public partial class MainWindow : Window
 
     private void PreviewDrop_Drop(object sender, DragEventArgs e)
     {
+        e.Handled = true;
         if (Editor is null)
             return;
         var path = GetDroppedFile(e, ImageExts);

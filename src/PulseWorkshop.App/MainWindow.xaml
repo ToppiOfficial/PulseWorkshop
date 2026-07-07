@@ -1574,38 +1574,89 @@
                                 </StackPanel>
                             </Grid>
 
-                            <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
-                                <CheckBox Content="Get materials on compile" IsChecked="{Binding GetMaterialOnCompile}"
-                                          Foreground="{StaticResource TextBrush}"
-                                          ToolTip="After each successful compile (that moves output out of game), copy VMT and VTF files to the output folder." />
-                                <CheckBox Content="Localize" IsChecked="{Binding LocalizeMaterials}"
-                                          IsEnabled="{Binding CanConfigureMaterials}" Margin="14,0,0,0"
-                                          Foreground="{StaticResource TextBrush}"
-                                          ToolTip="Place VTF files beside their VMT instead of preserving the game's materials hierarchy." />
-                                <CheckBox Content="Flat patch" IsChecked="{Binding FlatPatchShader}"
-                                          IsEnabled="{Binding CanConfigureMaterials}" Margin="14,0,0,0"
-                                          Foreground="{StaticResource TextBrush}"
-                                          ToolTip="Flatten Patch VMTs into their base shader." />
-                                <CheckBox Content="Clean before transfer" IsChecked="{Binding CleanBeforeTransfer}"
-                                          Margin="14,0,0,0" Foreground="{StaticResource TextBrush}"
-                                          ToolTip="Before a non-in-game compile, delete the previous in-game build so stale files can't leak into the moved output." />
-                            </StackPanel>
+                            <!-- Two side-by-side option groups (they share the wide row instead of
+                                 stacking, to save vertical space): material copy on the left, the
+                                 independent build-transfer toggles on the right. -->
+                            <Grid Margin="0,12,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="12" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
 
-                            <!-- Optional dedicated materials folder: when checked, the materials/ tree is
-                                 written here (always relative to the project root) instead of beside the
-                                 compiled models. Absolute or outside-project paths are rejected at copy time. -->
-                            <StackPanel Orientation="Horizontal" Margin="0,8,0,0" VerticalAlignment="Center">
-                                <CheckBox Content="Custom materials folder" IsChecked="{Binding UseCustomMaterialsDir}"
-                                          IsEnabled="{Binding CanConfigureMaterials}" VerticalAlignment="Center"
-                                          Foreground="{StaticResource TextBrush}"
-                                          ToolTip="Put the materials/ folder in a dedicated folder under the project root instead of beside the compiled models." />
-                                <TextBox Width="280" Margin="14,0,0,0" VerticalAlignment="Center"
-                                         Text="{Binding MaterialsOutputDir, UpdateSourceTrigger=PropertyChanged}"
-                                         IsEnabled="{Binding CanEditMaterialsDir}"
-                                         ToolTip="Folder relative to the project root (e.g. shared/materials_src). Absolute or outside-project paths are not allowed; empty means the project root." />
-                                <TextBlock Text="(relative to project root)" Style="{StaticResource MutedText}"
-                                           VerticalAlignment="Center" Margin="8,0,0,0" />
-                            </StackPanel>
+                                <!-- LEFT: materials group. The master toggle owns the copy sub-options
+                                     nested beneath it (indented + greyed until it's on). -->
+                                <Border Grid.Column="0" Background="{StaticResource PanelAltBrush}"
+                                        BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="3"
+                                        Padding="12,10">
+                                    <StackPanel>
+                                        <CheckBox Content="Get materials on compile" IsChecked="{Binding GetMaterialOnCompile}"
+                                                  FontWeight="SemiBold" Foreground="{StaticResource TextBrush}"
+                                                  ToolTip="After each successful compile (that moves output out of game), copy VMT and VTF files to the output folder." />
+
+                                        <!-- Copy sub-options: whole block greys out until the master is on. -->
+                                        <StackPanel Margin="24,8,0,0" IsEnabled="{Binding CanConfigureMaterials}">
+                                            <StackPanel Orientation="Horizontal">
+                                                <CheckBox Content="Localize" IsChecked="{Binding LocalizeMaterials}"
+                                                          Foreground="{StaticResource TextBrush}"
+                                                          ToolTip="Place VTF files beside their VMT instead of preserving the game's materials hierarchy." />
+                                                <CheckBox Content="Flat patch" IsChecked="{Binding FlatPatchShader}"
+                                                          Margin="18,0,0,0" Foreground="{StaticResource TextBrush}"
+                                                          ToolTip="Flatten Patch VMTs into their base shader." />
+                                            </StackPanel>
+
+                                            <!-- Optional dedicated materials folder: when checked, the materials/
+                                                 tree is written here (always relative to the project root) instead
+                                                 of beside the compiled models. Outside-project paths are rejected. -->
+                                            <Grid Margin="0,10,0,0">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="Auto" />
+                                                    <ColumnDefinition Width="*" />
+                                                </Grid.ColumnDefinitions>
+                                                <CheckBox Grid.Column="0" Content="Custom materials folder"
+                                                          IsChecked="{Binding UseCustomMaterialsDir}"
+                                                          VerticalAlignment="Center" Foreground="{StaticResource TextBrush}"
+                                                          ToolTip="Put the materials/ folder in a dedicated folder under the project root instead of beside the compiled models." />
+                                                <TextBox Grid.Column="1" Margin="14,0,0,0" VerticalAlignment="Center"
+                                                         Text="{Binding MaterialsOutputDir, UpdateSourceTrigger=PropertyChanged}"
+                                                         IsEnabled="{Binding CanEditMaterialsDir}"
+                                                         ToolTip="Folder relative to the project root (e.g. shared/materials_src). Absolute or outside-project paths are not allowed; empty means the project root." />
+                                            </Grid>
+                                        </StackPanel>
+                                    </StackPanel>
+                                </Border>
+
+                                <!-- RIGHT: build-transfer group, independent of the material copy. -->
+                                <Border Grid.Column="2" Background="{StaticResource PanelAltBrush}"
+                                        BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="3"
+                                        Padding="12,10">
+                                    <StackPanel>
+                                        <CheckBox Content="Clean before transfer" IsChecked="{Binding CleanBeforeTransfer}"
+                                                  Foreground="{StaticResource TextBrush}"
+                                                  ToolTip="Before a non-in-game compile, delete the previous in-game build so stale files can't leak into the moved output." />
+
+                                        <CheckBox Content="Make material's directory" IsChecked="{Binding MakeMaterialDir}"
+                                                  Margin="0,8,0,0" Foreground="{StaticResource TextBrush}"
+                                                  ToolTip="After an in-game compile, create the model's material folders (from its $cdmaterials paths) under the game's materials/ folder - handy for a fresh, untextured model. Non-in-game compiles do nothing." />
+
+                                        <!-- Which game root the empty material folders are created under: gameinfo.txt
+                                             can mount several content roots. Shown only while the toggle above is on. -->
+                                        <Grid Margin="24,8,0,0"
+                                              Visibility="{Binding MakeMaterialDir, Converter={StaticResource BoolToVis}}">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="*" />
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Grid.Column="0" Text="Material root:" Foreground="{StaticResource TextBrush}"
+                                                       VerticalAlignment="Center" />
+                                            <ComboBox Grid.Column="1" Margin="10,0,0,0" VerticalAlignment="Center"
+                                                      ItemsSource="{Binding MaterialGameRoots}"
+                                                      SelectedItem="{Binding SelectedMaterialGameRoot}"
+                                                      ToolTip="{Binding SelectedMaterialGameRoot}" />
+                                        </Grid>
+                                    </StackPanel>
+                                </Border>
+                            </Grid>
                         </StackPanel>
                       </Border>
 
@@ -1788,7 +1839,12 @@
                                                     </Style.Triggers>
                                                 </Style>
                                             </Border.Style>
-                                            <Grid>
+                                            <!-- Scrolls when the pane is too short to show the whole form; the grid's
+                                                 MinHeight tracks the viewport so the Model info '*' row still fills the
+                                                 space when there's room. -->
+                                            <ScrollViewer x:Name="CompileEntryScroll" VerticalScrollBarVisibility="Auto"
+                                                          HorizontalScrollBarVisibility="Disabled">
+                                            <Grid MinHeight="{Binding ViewportHeight, ElementName=CompileEntryScroll}">
                                               <Grid.RowDefinitions>
                                                   <RowDefinition Height="Auto" />
                                                   <RowDefinition Height="*" />
@@ -1880,11 +1936,12 @@
                                                       <RowDefinition Height="*" />
                                                   </Grid.RowDefinitions>
                                                   <TextBlock Text="Model info" Style="{StaticResource EntryLabel}" Margin="0,0,0,4" />
-                                                  <TextBox Grid.Row="1" Text="{Binding MdlInfo, Mode=OneWay}" IsReadOnly="True"
+                                                  <TextBox Grid.Row="1" MinHeight="140" Text="{Binding MdlInfo, Mode=OneWay}" IsReadOnly="True"
                                                            TextWrapping="NoWrap" FontFamily="Consolas" FontSize="11"
                                                            VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto" />
                                               </Grid>
                                             </Grid>
+                                            </ScrollViewer>
                                         </Border>
                                       </DataTemplate>
                                     </ContentControl.ContentTemplate>
@@ -1909,6 +1966,16 @@
                                           Command="{Binding SelectedEntry.ViewModelCommand}"
                                           Visibility="{Binding SelectedEntry.LastMdlPath, Converter={StaticResource StringToVis}}"
                                           ToolTip="Send the compiled model to the Model View tab (does not open the viewer)." />
+                                  <Button Content="Go to Materials" Margin="8,0,0,0" Padding="12,8"
+                                          Command="{Binding SelectedEntry.GoToMaterialsCommand}"
+                                          Visibility="{Binding SelectedEntry.HasMaterialDirs, Converter={StaticResource BoolToVis}}"
+                                          ToolTip="Open the model's material folder created under the game's materials/ directory." />
+                                  <!-- Picker: only shown when the model has more than one material folder. -->
+                                  <ComboBox Margin="6,0,0,0" MinWidth="170" VerticalAlignment="Center"
+                                            ItemsSource="{Binding SelectedEntry.MaterialDirs}"
+                                            SelectedItem="{Binding SelectedEntry.SelectedMaterialDir}"
+                                            Visibility="{Binding SelectedEntry.HasMultipleMaterialDirs, Converter={StaticResource BoolToVis}}"
+                                            ToolTip="Choose which material folder 'Go to Materials' opens." />
                                   <Button Content="Cancel" Style="{StaticResource DangerButton}" Margin="8,0,0,0"
                                           Padding="14,8" Command="{Binding CancelCommand}"
                                           Visibility="{Binding IsCompiling, Converter={StaticResource BoolToVis}}" />
@@ -3113,7 +3180,7 @@
                         <StackPanel Orientation="Horizontal">
                             <Button Content="Open in viewer" Style="{StaticResource AccentButton}" MinWidth="120"
                                     Padding="16,8" Command="{Binding OpenInViewerCommand}"
-                                    ToolTip="Launch the game's configured model viewer (HLMV) on this .mdl." />
+                                    ToolTip="Load the .mdl in the viewer. A model inside the game folder is first copied (with its .vvd/.vtx/.phy siblings, not materials) to a temp folder so it opens via HLMV's crash-free direct load; textures come from the viewer's own game mount." />
                             <Button Content="Go to file" Command="{Binding GoToMdlCommand}"
                                     Margin="8,0,0,0" Padding="12,8"
                                     Visibility="{Binding MdlPath, Converter={StaticResource StringToVis}}"

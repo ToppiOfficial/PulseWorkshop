@@ -18,7 +18,7 @@ namespace PulseWorkshop.App.ViewModels;
 public sealed class PackageAssetViewModel : ObservableObject
 {
     private static readonly HashSet<string> ImageExtensions = new(StringComparer.OrdinalIgnoreCase)
-        { ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tif", ".tiff", ".tga", ".dds", ".vtf" };
+        { ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tif", ".tiff", ".tga", ".dds", ".vtf", ".psd" };
 
     private readonly PackageEntryViewModel _entry;
     private AssetKindChoice _selectedKind;
@@ -303,6 +303,11 @@ public sealed class PackageAssetViewModel : ObservableObject
             if (string.IsNullOrEmpty(resolvedInput) || !File.Exists(resolvedInput))
                 return "Input file not found.";
 
+            // PSD is only handled by the VTF tool (vtfcmd reads .psd); WPF can't decode it for a raster
+            // re-encode, and copying a .psd into a package is useless to the engine.
+            if (IsImage && IsPsd(resolvedInput) && Model.ImageFormat != ImageTargetFormat.Vtf)
+                return "PSD input is only supported for VTF conversion.";
+
             var root = _entry.ResolvedFolderPath;
             if (string.IsNullOrWhiteSpace(root))
                 return null; // The entry's own folder is invalid; its outline already flags that.
@@ -323,6 +328,10 @@ public sealed class PackageAssetViewModel : ObservableObject
         }
     }
 
+    /// <summary>True when the given path is a Photoshop document (only convertible via the VTF tool).</summary>
+    private static bool IsPsd(string path) =>
+        string.Equals(Path.GetExtension(path), ".psd", StringComparison.OrdinalIgnoreCase);
+
     /// <summary>True when this asset has a live validation error - drives the red outline.</summary>
     public bool IsInvalid => ValidationError is not null;
 
@@ -340,8 +349,8 @@ public sealed class PackageAssetViewModel : ObservableObject
         var dlg = new OpenFileDialog
         {
             Title = "Choose asset file",
-            Filter = "Image (*.png;*.jpg;*.jpeg;*.gif;*.bmp;*.tif;*.tiff;*.tga;*.dds;*.vtf)"
-                   + "|*.png;*.jpg;*.jpeg;*.gif;*.bmp;*.tif;*.tiff;*.tga;*.dds;*.vtf"
+            Filter = "Image (*.png;*.jpg;*.jpeg;*.gif;*.bmp;*.tif;*.tiff;*.tga;*.dds;*.vtf;*.psd)"
+                   + "|*.png;*.jpg;*.jpeg;*.gif;*.bmp;*.tif;*.tiff;*.tga;*.dds;*.vtf;*.psd"
                    + "|Text (*.txt;*.vmt;*.vdf;*.qc;*.smd;*.cfg;*.lua)|*.txt;*.vmt;*.vdf;*.qc;*.smd;*.cfg;*.lua"
                    + "|All files (*.*)|*.*",
             CheckFileExists = true,

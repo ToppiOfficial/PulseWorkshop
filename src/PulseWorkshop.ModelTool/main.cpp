@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <cctype>
 #include <cstring>
 #include <filesystem>
 #include <iostream>
@@ -15,6 +16,7 @@ static void print_usage() {
         "Usage:\n"
         "  materials <mdl_path> <gameinfo_txt> <dest_dir> [--localize] [--flat-patch] [--vpk-exe <path>]\n"
         "  info <mdl_path>\n"
+        "  matdirs <mdl_path>\n"
         "\n"
         "Options:\n"
         "  --localize        Place VTFs beside their VMT instead of preserving the game hierarchy.\n"
@@ -213,6 +215,47 @@ static int cmd_materials(int argc, char* argv[]) {
     }
 }
 
+// Prints the distinct material directories a model's textures live in - one per line, relative to
+// the game's materials/ folder, forward slashes. Derived from the model's cdmaterials + texture
+// names (the same lookup paths the 'materials' command copies from), taking each path's parent
+// folder. Used by the app to create the folders under materials/ for a fresh, untextured model.
+static int cmd_matdirs(int argc, char* argv[]) {
+    if (argc < 1) {
+        std::cerr << "[ModelTool] Error: 'matdirs' requires <mdl_path>\n";
+        print_usage();
+        return 1;
+    }
+
+    std::filesystem::path mdl_path = argv[0];
+    try {
+        auto mats      = read_mdl_materials(mdl_path);
+        auto mat_paths = build_material_paths(mats);
+
+        std::vector<std::string> dirs;
+        for (const auto& mp : mat_paths) {
+            std::string dir = std::filesystem::path(mp).parent_path().generic_string();
+            // A cdmaterials entry may itself begin with "materials/"; strip it so the printed
+            // path is relative to the game's materials/ folder (the app prepends it back).
+            if (dir.size() >= 10) {
+                std::string head = dir.substr(0, 10);
+                std::transform(head.begin(), head.end(), head.begin(),
+                               [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+                if (head == "materials/") dir = dir.substr(10);
+            }
+            if (dir.empty()) continue; // texture sits directly under materials/ - nothing to create
+            if (std::find(dirs.begin(), dirs.end(), dir) == dirs.end())
+                dirs.push_back(dir);
+        }
+
+        for (const auto& d : dirs)
+            std::cout << d << "\n";
+        return 0;
+    } catch (const std::exception& e) {
+        std::cerr << "[ModelTool] Error: " << e.what() << "\n";
+        return 1;
+    }
+}
+
 int main(int argc, char* argv[]) {
     if (argc < 2) { print_usage(); return 1; }
 
@@ -221,6 +264,9 @@ int main(int argc, char* argv[]) {
 
     if (std::strcmp(argv[1], "info") == 0)
         return cmd_info(argc - 2, argv + 2);
+
+    if (std::strcmp(argv[1], "matdirs") == 0)
+        return cmd_matdirs(argc - 2, argv + 2);
 
     std::cerr << "[ModelTool] Unknown subcommand: " << argv[1] << "\n";
     print_usage();

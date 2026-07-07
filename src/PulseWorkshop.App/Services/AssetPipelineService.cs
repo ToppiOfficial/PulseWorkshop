@@ -180,6 +180,14 @@ public sealed class AssetPipelineService
             return true;
         }
 
+        // PSD is only handled by the VTF tool (vtfcmd reads .psd); WPF can't decode it for a raster
+        // re-encode, so reject it here with a clear message rather than throwing on BitmapDecoder.
+        if (string.Equals(Path.GetExtension(input), ".psd", StringComparison.OrdinalIgnoreCase))
+        {
+            Output?.Invoke($"[asset] Skipped: PSD input is only supported for VTF conversion ({Path.GetFileName(input)}).");
+            return false;
+        }
+
         // Decode with OnLoad so the source handle is released immediately (the source is never locked
         // or mutated), then re-encode to the chosen format.
         BitmapFrame frame;

@@ -192,6 +192,31 @@ public sealed class TexturesViewModel : ObservableObject
         _project.Save(_projectPath);
     }
 
+    /// <summary>
+    /// "Save As" (Ctrl+Shift+S while on the Textures tab): picks a new <c>.pw_textureproject</c> path,
+    /// writes the current in-memory project there, and makes that the open project. When nothing is
+    /// open yet it behaves like New-from-current-state. Best-effort: a cancelled dialog is a no-op.
+    /// </summary>
+    public void SaveProjectAs()
+    {
+        var dlg = new SaveFileDialog
+        {
+            Title = "Save textures project as",
+            Filter = "Textures project (*.pw_textureproject)|*.pw_textureproject",
+            DefaultExt = ".pw_textureproject",
+            FileName = IsProjectOpen ? Path.GetFileName(_projectPath!) : "textures.pw_textureproject",
+            AddExtension = true,
+            OverwritePrompt = true,
+        };
+        if (dlg.ShowDialog() != true)
+            return;
+
+        // Fold the live group list into the project before writing the copy, then switch to it.
+        _project.Groups = Groups.Select(g => g.Model).ToList();
+        _project.Save(dlg.FileName);
+        LoadProject(dlg.FileName, _project);
+    }
+
     public void RefreshCommands()
     {
         CloseProjectCommand.RaiseCanExecuteChanged();

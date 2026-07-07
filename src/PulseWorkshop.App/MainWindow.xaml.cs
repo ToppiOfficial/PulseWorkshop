@@ -735,6 +735,27 @@ public partial class MainWindow : Window
     protected override void OnPreviewKeyDown(KeyEventArgs e)
     {
         base.OnPreviewKeyDown(e);
+
+        // Ctrl+Shift+S: "Save project as" for the project owned by the active tab - the shared
+        // .pw_mdlproject on the Compile/Package tabs, the .pw_textureproject on the Textures tab.
+        // Works even with a text field focused (it's a command, not a typeable character).
+        if (e.Key == Key.S
+            && (Keyboard.Modifiers & (ModifierKeys.Control | ModifierKeys.Shift)) == (ModifierKeys.Control | ModifierKeys.Shift))
+        {
+            if (TexturesTab.IsSelected)
+            {
+                _vm.Textures.SaveProjectAs();
+                e.Handled = true;
+            }
+            else if (CompileTab.IsSelected || PackageTab.IsSelected)
+            {
+                _vm.AdvancedProject.SaveProjectAs();
+                e.Handled = true;
+            }
+            return;
+        }
+
+        // ~ / backtick toggles the shared console, unless a text field has focus (so it stays typeable).
         if (e.Key != Key.OemTilde || Keyboard.FocusedElement is TextBox or PasswordBox)
             return;
 

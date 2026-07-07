@@ -28,6 +28,13 @@ public sealed class AdvancedProjectSession : ObservableObject
     private string? _projectPath;
     private GameSetupEntryViewModel? _selectedGame;
 
+    // Set while a ProjectChanged fan-out is running. Each tab rebuilds its own entry list from the
+    // freshly-loaded project on its turn, but the tabs refresh one after another; a Save() fired by an
+    // early tab (e.g. the Compile tab's material-root fallback) would run every tab's sync handler,
+    // folding a not-yet-refreshed tab's STALE (previous project's) collection into the new project -
+    // clobbering it in memory and on disk. Suppressing Save during the fan-out prevents that.
+    private bool _suppressSave;
+
     public AdvancedProjectSession(GameSetupViewModel gameSetup)
     {
         _gameSetup = gameSetup;
@@ -167,19 +174,56 @@ public sealed class AdvancedProjectSession : ObservableObject
     /// <summary>Re-syncs both tabs' lists into the project, then writes it to disk (best-effort).</summary>
     public void Save()
     {
-        if (string.IsNullOrEmpty(_projectPath))
+        if (_suppressSave || string.IsNullOrEmpty(_projectPath))
             return;
         foreach (var sync in _syncHandlers)
             sync();
         _project.Save(_projectPath);
     }
 
+    /// <summary>
+    /// "Save As" (Ctrl+Shift+S from the Compile/Package tabs): picks a new <c>.pw_mdlproject</c> path,
+    /// writes the current in-memory project there, and makes that the open project. When nothing is
+    /// open yet it behaves like New-from-current-state (saving the empty project). Best-effort: a
+    /// cancelled dialog is a no-op.
+    /// </summary>
+    public void SaveProjectAs()
+    {
+        var dlg = new SaveFileDialog
+        {
+            Title = "Save project as",
+            Filter = "Project (*.pw_mdlproject)|*.pw_mdlproject",
+            DefaultExt = ".pw_mdlproject",
+            FileName = IsProjectOpen ? Path.GetFileName(_projectPath!) : "models.pw_mdlproject",
+            AddExtension = true,
+            OverwritePrompt = true,
+        };
+        if (dlg.ShowDialog() != true)
+            return;
+
+        // Fold both tabs' live lists into the project before writing the copy, then switch to it.
+        foreach (var sync in _syncHandlers)
+            sync();
+        _project.Save(dlg.FileName);
+        LoadProject(dlg.FileName, _project);
+    }
+
     /// <summary>Notifies subscribers the open project changed (used at startup to push the reopened
     /// project once the view models exist).</summary>
     public void RaiseProjectChanged()
     {
-        OnPropertyChanged(string.Empty); // refresh every project-level binding on the session
-        ProjectChanged?.Invoke();
+        // Tabs rebuild their entry lists one after another here; suppress saves so an early tab can't
+        // fold a later tab's stale (previous project's) list back into the freshly-loaded project.
+        _suppressSave = true;
+        try
+        {
+            OnPropertyChanged(string.Empty); // refresh every project-level binding on the session
+            ProjectChanged?.Invoke();
+        }
+        finally
+        {
+            _suppressSave = false;
+        }
     }
 
     // --- Path helpers (shared by both tabs) ----------------------------------------------------

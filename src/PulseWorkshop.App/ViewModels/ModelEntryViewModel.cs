@@ -1,3 +1,4 @@
+using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.IO;
 using Microsoft.Win32;
@@ -20,6 +21,7 @@ public sealed class ModelEntryViewModel : ObservableObject
     private bool _hasError;
     private string? _lastMdlPath;
     private string? _mdlInfo;
+    private MaterialDirEntry? _selectedMaterialDir;
 
     public ModelEntryViewModel(CompileAdvancedViewModel parent, ModelEntry model)
     {
@@ -36,6 +38,7 @@ public sealed class ModelEntryViewModel : ObservableObject
             () => { if (!string.IsNullOrEmpty(LastMdlPath)) _parent.RequestViewModel(LastMdlPath); },
             () => !string.IsNullOrEmpty(LastMdlPath));
         OpenQcCommand = new RelayCommand(OpenQc, CanOpenQc);
+        GoToMaterialsCommand = new RelayCommand(GoToMaterials, () => HasMaterialDirs);
     }
 
     public ModelEntry Model { get; }
@@ -94,6 +97,50 @@ public sealed class ModelEntryViewModel : ObservableObject
     {
         get => _mdlInfo;
         set => SetField(ref _mdlInfo, value);
+    }
+
+    /// <summary>Opens the model's material folder (created by "Make material's directory" after an
+    /// in-game compile) in Explorer. When the model has several, the dropdown beside it picks which.</summary>
+    public RelayCommand GoToMaterialsCommand { get; }
+
+    /// <summary>The model's material folders created under the game's <c>materials/</c> on the last
+    /// in-game compile with "Make material's directory" on. Empty otherwise. Not persisted.</summary>
+    public ObservableCollection<MaterialDirEntry> MaterialDirs { get; } = new();
+
+    /// <summary>Which material folder "Go to Materials" opens (bound to the dropdown). Defaults to the
+    /// first when the folders are set.</summary>
+    public MaterialDirEntry? SelectedMaterialDir
+    {
+        get => _selectedMaterialDir;
+        set => SetField(ref _selectedMaterialDir, value);
+    }
+
+    /// <summary>True when the last in-game compile created at least one material folder.</summary>
+    public bool HasMaterialDirs => MaterialDirs.Count > 0;
+
+    /// <summary>True when there is more than one material folder, so the picker dropdown is shown.</summary>
+    public bool HasMultipleMaterialDirs => MaterialDirs.Count > 1;
+
+    /// <summary>Replaces the entry's material folders (called after the compile creates them on disk),
+    /// selecting the first and refreshing the "Go to Materials" button + dropdown.</summary>
+    public void SetMaterialDirs(IReadOnlyList<MaterialDirEntry> dirs)
+    {
+        MaterialDirs.Clear();
+        foreach (var d in dirs)
+            MaterialDirs.Add(d);
+        SelectedMaterialDir = MaterialDirs.FirstOrDefault();
+        OnPropertyChanged(nameof(HasMaterialDirs));
+        OnPropertyChanged(nameof(HasMultipleMaterialDirs));
+        GoToMaterialsCommand.RaiseCanExecuteChanged();
+    }
+
+    private void GoToMaterials()
+    {
+        var target = SelectedMaterialDir ?? MaterialDirs.FirstOrDefault();
+        if (target is null || !Directory.Exists(target.FullPath))
+            return;
+        Process.Start(new ProcessStartInfo("explorer.exe", $"\"{target.FullPath}\"")
+            { UseShellExecute = true });
     }
 
     public string Name
@@ -278,4 +325,11 @@ public sealed class ModelEntryViewModel : ObservableObject
                 Name = Path.GetFileNameWithoutExtension(dlg.FileName);
         }
     }
+}
+
+/// <summary>One material folder created for a model: its path relative to <c>materials/</c> (shown
+/// in the picker dropdown) plus the absolute folder to open. The themed ComboBox renders ToString.</summary>
+public sealed record MaterialDirEntry(string RelativeDir, string FullPath)
+{
+    public override string ToString() => RelativeDir;
 }

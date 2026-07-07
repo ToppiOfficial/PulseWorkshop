@@ -157,6 +157,34 @@ public sealed class GameInfoMount : IPackedArchive
         return result;
     }
 
+    /// <summary>
+    /// The directory search paths a gameinfo.txt mounts (the game's content roots), in engine
+    /// priority order, deduped and existing-on-disk only. These are the folders a <c>materials/</c>
+    /// tree lives under; the "Make material's directory" feature lets the user pick which one to
+    /// create the model's folders in. Returns an empty list if the file is missing or malformed.
+    /// </summary>
+    public static IReadOnlyList<string> GetGameRoots(string gameinfoPath)
+    {
+        var result = new List<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            foreach (var dir in CollectSearchEntries(gameinfoPath, wantVpks: false))
+            {
+                if (!Directory.Exists(dir))
+                    continue;
+                var full = Path.GetFullPath(dir);
+                if (seen.Add(full))
+                    result.Add(full);
+            }
+        }
+        catch
+        {
+            // A missing or malformed gameinfo.txt yields no roots rather than throwing.
+        }
+        return result;
+    }
+
     /// <summary>Shared SearchPaths walk: either the directory entries or the .vpk references.</summary>
     private static List<string> CollectSearchEntries(string gameinfoPath, bool wantVpks)
     {

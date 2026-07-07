@@ -40,6 +40,18 @@ public sealed class ModelProject
     /// files can't leak into the moved output.</summary>
     public bool CleanBeforeTransfer { get; set; }
 
+    /// <summary>When true, after each successful <b>in-game</b> compile the model's material folders
+    /// (from its <c>$cdmaterials</c> paths) are created under the game's <c>materials/</c> folder.
+    /// Handy for a fresh, untextured model: the folders are ready for its textures. Non-in-game
+    /// compiles (Subfolder/Work folder) are left untouched.</summary>
+    public bool MakeMaterialDir { get; set; }
+
+    /// <summary>The game content root (a directory search path from gameinfo.txt) that
+    /// <see cref="MakeMaterialDir"/> creates the model's material folders under - a gameinfo can
+    /// mount several. Stored as a full path; if it is no longer among the game's roots (or empty)
+    /// the app falls back to the first available root.</summary>
+    public string MaterialDirGameRoot { get; set; } = string.Empty;
+
     /// <summary>The model entries, in compile order (significant - the UI lets the user reorder them).</summary>
     public List<ModelEntry> Entries { get; set; } = new();
 

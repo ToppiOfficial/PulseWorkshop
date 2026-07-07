@@ -7,6 +7,7 @@ using PulseWorkshop.App.Mvvm;
 using PulseWorkshop.App.Services;
 using PulseWorkshop.Core.Models;
 using PulseWorkshop.Core.Services;
+using PulseWorkshop.Core.Unpack;
 
 namespace PulseWorkshop.App.ViewModels;
 
@@ -28,6 +29,7 @@ public sealed class CompileAdvancedViewModel : ObservableObject
     private bool _isCompiling;
     private string _statusMessage = "No project open.";
     private CancellationTokenSource? _cancelSource;
+    private string? _selectedMaterialGameRoot;
 
     public CompileAdvancedViewModel(AdvancedProjectSession session, ConsoleViewModel console)
     {
@@ -104,6 +106,7 @@ public sealed class CompileAdvancedViewModel : ObservableObject
             Entries.Add(new ModelEntryViewModel(this, entry));
 
         SelectedEntry = Entries.FirstOrDefault();
+        RefreshMaterialGameRoots();
         OnPropertyChanged(string.Empty); // refresh every binding
         RefreshCommands();
         StatusMessage = IsProjectOpen ? $"Opened {ProjectName}." : "No project open.";
@@ -113,6 +116,7 @@ public sealed class CompileAdvancedViewModel : ObservableObject
     {
         OnPropertyChanged(nameof(SelectedGame));
         OnPropertyChanged(nameof(IsGameReady));
+        RefreshMaterialGameRoots();
         RefreshEntryCommandPreviews();
         RefreshCommands();
     }
@@ -220,6 +224,51 @@ public sealed class CompileAdvancedViewModel : ObservableObject
     {
         get => _session.Project.CleanBeforeTransfer;
         set { if (_session.Project.CleanBeforeTransfer != value) { _session.Project.CleanBeforeTransfer = value; OnPropertyChanged(); Save(); } }
+    }
+
+    /// <summary>When true, an in-game compile also creates the model's material folders (from its
+    /// <c>$cdmaterials</c> paths) under the game's <c>materials/</c>. Non-in-game compiles do nothing.</summary>
+    public bool MakeMaterialDir
+    {
+        get => _session.Project.MakeMaterialDir;
+        set { if (_session.Project.MakeMaterialDir != value) { _session.Project.MakeMaterialDir = value; OnPropertyChanged(); Save(); } }
+    }
+
+    /// <summary>The game content roots gameinfo.txt mounts (full paths, engine priority order). The
+    /// "Make material's directory" dropdown picks which one the model's folders are created under.</summary>
+    public ObservableCollection<string> MaterialGameRoots { get; } = new();
+
+    /// <summary>The chosen game root for <see cref="MakeMaterialDir"/> (bound to the dropdown, saved to
+    /// the project). Falls back to the first root when the saved choice is no longer available.</summary>
+    public string? SelectedMaterialGameRoot
+    {
+        get => _selectedMaterialGameRoot;
+        set
+        {
+            if (SetField(ref _selectedMaterialGameRoot, value))
+            {
+                _session.Project.MaterialDirGameRoot = value ?? string.Empty;
+                Save();
+            }
+        }
+    }
+
+    /// <summary>Rebuilds <see cref="MaterialGameRoots"/> from the selected game's gameinfo.txt and
+    /// restores the saved selection (or the first root if the saved one is gone). Called when the game
+    /// or project changes.</summary>
+    private void RefreshMaterialGameRoots()
+    {
+        MaterialGameRoots.Clear();
+        var gameInfoPath = SelectedGame?.GameInfo.ResolvedPath;
+        if (!string.IsNullOrWhiteSpace(gameInfoPath) && File.Exists(gameInfoPath))
+            foreach (var root in GameInfoMount.GetGameRoots(gameInfoPath))
+                MaterialGameRoots.Add(root);
+
+        var saved = _session.Project.MaterialDirGameRoot;
+        var match = MaterialGameRoots.FirstOrDefault(
+            r => string.Equals(r, saved, StringComparison.OrdinalIgnoreCase));
+        // Setting the property persists the fallback when the saved root is gone.
+        SelectedMaterialGameRoot = match ?? MaterialGameRoots.FirstOrDefault();
     }
 
     /// <summary>When true, the materials/ folder is written to <see cref="MaterialsOutputDir"/> (under the
@@ -554,6 +603,12 @@ public sealed class CompileAdvancedViewModel : ObservableObject
                         .Where(f => f.EndsWith(".mdl", StringComparison.OrdinalIgnoreCase)).ToList();
                 await RunMaterialCopyAsync(matMdls, ResolveMaterialsDestination(destination), ct);
             }
+
+            // "Make material's directory": in-game compiles only (destination is null). Creates the
+            // model's $cdmaterials folders under the game's materials/ so a fresh model's textures
+            // have a home, then lights up the entry's "Go to Materials" button.
+            if (MakeMaterialDir && destination is null && entry.LastMdlPath is { Length: > 0 })
+                await MakeMaterialDirsAsync(entry, ct);
             return true;
         }
         catch (OperationCanceledException)
@@ -687,6 +742,62 @@ public sealed class CompileAdvancedViewModel : ObservableObject
             svc.Output -= Log;
         }
         Log("--- Material copy done ---");
+    }
+
+    /// <summary>
+    /// Creates the model's material folders (from its <c>$cdmaterials</c> paths, read via ModelTool)
+    /// under the game's <c>materials/</c> folder, then hands the created folders to the entry for its
+    /// "Go to Materials" button + picker. In-game compiles only (the caller gates on a null
+    /// destination). Existing folders are left as-is; every failure is a best-effort log line.
+    /// </summary>
+    private async Task MakeMaterialDirsAsync(ModelEntryViewModel entry, CancellationToken ct)
+    {
+        if (GameInfoDir is not { } gameInfoDir)
+        {
+            Log("[Material dirs] Skipped: gameinfo.txt not configured.");
+            return;
+        }
+
+        // The game root the folders are created under (gameinfo can mount several); falls back to the
+        // gameinfo directory when the saved choice is gone or none is available.
+        var root = SelectedMaterialGameRoot;
+        if (string.IsNullOrWhiteSpace(root) || !Directory.Exists(root))
+            root = gameInfoDir;
+
+        var svc = new ModelMaterialDirsService();
+        var result = await svc.GetDirsAsync(new ModelMaterialDirsRequest(_modelToolPath, entry.LastMdlPath!), ct);
+        if (!result.Success)
+        {
+            Log($"[Material dirs] Failed: {result.Error}");
+            return;
+        }
+        if (result.Directories.Count == 0)
+        {
+            Log("[Material dirs] No material directories found in the model.");
+            entry.SetMaterialDirs(Array.Empty<MaterialDirEntry>());
+            return;
+        }
+
+        Log($"--- Make material directories (under {root}) ---");
+        var materialsRoot = Path.Combine(root, "materials");
+        var created = new List<MaterialDirEntry>();
+        foreach (var rel in result.Directories)
+        {
+            var full = Path.Combine(materialsRoot, rel.Replace('/', Path.DirectorySeparatorChar));
+            try
+            {
+                var existed = Directory.Exists(full);
+                Directory.CreateDirectory(full);
+                created.Add(new MaterialDirEntry(rel, full));
+                Log(existed ? $"[Material dirs] Exists: materials/{rel}" : $"[Material dirs] Created: materials/{rel}");
+            }
+            catch (Exception ex)
+            {
+                Log($"[Material dirs] WARNING: could not create materials/{rel}: {ex.Message}");
+            }
+        }
+        entry.SetMaterialDirs(created);
+        Log("--- Make material directories done ---");
     }
 
     /// <summary>Reads the just-compiled .mdl's stats (bones, hitboxes, poly count, dependencies) into

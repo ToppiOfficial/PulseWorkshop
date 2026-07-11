@@ -102,6 +102,9 @@ public sealed class PackageAdvancedViewModel : ObservableObject
     public string ProjectName => _session.ProjectName;
     public string? ProjectDir => _session.ProjectDir;
 
+    /// <summary>The recent-project list shown in the empty state's "Open recent" panel (shared session).</summary>
+    public ObservableCollection<RecentItemViewModel> RecentProjects => _session.RecentProjects;
+
     private void OnProjectChanged()
     {
         Entries.Clear();
@@ -150,6 +153,11 @@ public sealed class PackageAdvancedViewModel : ObservableObject
 
     /// <summary>Forwards an entry's "View Package" request to the Unpack tab.</summary>
     public void ViewPackage(string packagePath) => ViewPackageRequested?.Invoke(packagePath);
+
+    /// <summary>The Unpack tab, set by <c>MainViewModel</c>: before packing an entry, the pack asks
+    /// it to temporarily release the output package if it happens to be open there (its read handles
+    /// would block the packer), then reopens it once the pack finishes.</summary>
+    public UnpackViewModel? UnpackTab { get; set; }
 
     // --- Project-level bound state -------------------------------------------------------------
 
@@ -411,6 +419,14 @@ public sealed class PackageAdvancedViewModel : ObservableObject
             }
 
             // 2. Pack the folder.
+            // If the Unpack tab is browsing the very package this pack will overwrite, its open
+            // read handles would block the packer (and the rename) - close it there for the duration.
+            var packerExt = Path.GetFileNameWithoutExtension(PackerToolPath ?? string.Empty)
+                .Contains("gmad", StringComparison.OrdinalIgnoreCase) ? ".gma" : ".vpk";
+            string? reopenInUnpack = UnpackTab?.ReleaseForRepack(
+                PackageViewModel.PackOutputCandidates(folder, packerExt, entry.Model.OutputName));
+            string? packedPath = null;
+
             var service = new PackageService();
             service.Output += Log;
             try
@@ -436,6 +452,7 @@ public sealed class PackageAdvancedViewModel : ObservableObject
                 }
 
                 var finalPath = RenamePackage(result.OutputPackagePath, entry.Model.OutputName);
+                packedPath = finalPath;
 
                 entry.HasError = false;
                 entry.LastPackagePath = finalPath;
@@ -446,6 +463,15 @@ public sealed class PackageAdvancedViewModel : ObservableObject
             finally
             {
                 service.Output -= Log;
+
+                // Reopen the package in the Unpack tab if we closed it there: the fresh result
+                // when the pack succeeded, the old file otherwise (if it survived).
+                if (reopenInUnpack is not null)
+                {
+                    var reopen = packedPath ?? reopenInUnpack;
+                    if (File.Exists(reopen))
+                        await UnpackTab!.OpenFromPathAsync(reopen);
+                }
             }
         }
         catch (OperationCanceledException)

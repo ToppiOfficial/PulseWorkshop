@@ -14,11 +14,17 @@
     <Platform>x64</Platform>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <!-- App version. Shown in the window title at runtime (see MainWindow ctor). -->
-    <Version>0.4.2</Version>
+    <Version>0.4.6</Version>
   </PropertyGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\PulseWorkshop.Core\PulseWorkshop.Core.csproj" />
+  </ItemGroup>
+
+  <!-- Bundled UI assets (embedded as WPF resources, loaded via pack:// URIs). -->
+  <ItemGroup>
+    <Resource Include="Assets\ak12_move.gif" />
+    <Resource Include="Assets\rak12_lying.gif" />
   </ItemGroup>
 
   <!-- Single-file distribution: the build passes EmbeddedHostExe pointing at a freshly published,

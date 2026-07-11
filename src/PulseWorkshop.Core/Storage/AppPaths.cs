@@ -11,6 +11,9 @@ public static class AppPaths
 
     public static string TemplatesDir { get; } = Path.Combine(Root, "templates");
 
+    /// <summary>Folder holding crash reports written by the App's global exception handlers.</summary>
+    public static string CrashesDir { get; } = Path.Combine(Root, "crashes");
+
     /// <summary>Single JSON file holding persisted UI preferences (see <see cref="UiSettings"/>).</summary>
     public static string SettingsFile { get; } = Path.Combine(Root, "settings.json");
 

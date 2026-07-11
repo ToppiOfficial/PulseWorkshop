@@ -30,10 +30,39 @@ public sealed class UiSettings
     /// <summary>The index of the Package tab's Simple/Advanced sub-tab active when the app last closed.</summary>
     public int PackageSubTabIndex { get; set; }
 
+    /// <summary>App-wide compile toggle shared by both Compile tabs: when true, a successful compile
+    /// <b>copies</b> the model files to the output folder instead of moving them, so the just-built
+    /// model also stays in the game folder. Has no effect on the "leave in game" output mode.</summary>
+    public bool CompileCopyToDestination { get; set; }
+
     /// <summary>The archive (.vpk / .gma / gameinfo.txt) that was open in the Unpack tab when the app
     /// last closed; null if none. Reopened lazily the first time the user enters the Unpack tab (not
     /// at startup) so restoring a heavy gameinfo mount doesn't slow the launch.</summary>
     public string? UnpackLastArchive { get; set; }
+
+    /// <summary>The archives (.vpk / .gma / gameinfo.txt) most recently opened in the Unpack tab,
+    /// newest first, capped at <see cref="MaxRecentArchives"/>. Backs the empty state's "Open recent"
+    /// list. Use <see cref="RememberUnpackArchive"/> to add one.</summary>
+    public List<string> UnpackRecentArchives { get; set; } = new();
+
+    private const int MaxRecentArchives = 10;
+
+    /// <summary>Records an archive as the most-recently-opened one (moving it to the front) and saves.</summary>
+    public void RememberUnpackArchive(string path)
+    {
+        UnpackLastArchive = path;
+        UnpackRecentArchives.RemoveAll(p => string.Equals(p, path, StringComparison.OrdinalIgnoreCase));
+        UnpackRecentArchives.Insert(0, path);
+        if (UnpackRecentArchives.Count > MaxRecentArchives)
+            UnpackRecentArchives.RemoveRange(MaxRecentArchives, UnpackRecentArchives.Count - MaxRecentArchives);
+        Save();
+    }
+
+    /// <summary>When true, the Unpack tab exports to a fixed location beside the opened package
+    /// (a gameinfo mount -> an <c>unpack_files</c> subfolder next to gameinfo.txt; a bare .vpk/.gma
+    /// -> a <c>&lt;package name&gt;_unpack</c> subfolder next to it) instead of prompting for a
+    /// destination folder.</summary>
+    public bool UnpackExportBesidePackage { get; set; }
 
     private static readonly JsonSerializerOptions Options = new() { WriteIndented = true };
 

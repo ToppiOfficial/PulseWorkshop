@@ -9,6 +9,7 @@ using PulseWorkshop.App.Mvvm;
 using PulseWorkshop.App.Services;
 using PulseWorkshop.Core.Models;
 using PulseWorkshop.Core.Services;
+using PulseWorkshop.Core.Storage;
 
 namespace PulseWorkshop.App.ViewModels;
 
@@ -24,6 +25,7 @@ public sealed class CompileViewModel : ObservableObject
     private readonly GameSetupViewModel _gameSetup;
     private readonly ConsoleViewModel _console;
     private readonly CompileConfig _config;
+    private readonly UiSettings _settings;
     private readonly string _modelToolPath;
 
     private string _qcPath;
@@ -39,11 +41,12 @@ public sealed class CompileViewModel : ObservableObject
     private string? _lastMdlPath;
     private string? _mdlInfo;
 
-    public CompileViewModel(GameSetupViewModel gameSetup, ConsoleViewModel console)
+    public CompileViewModel(GameSetupViewModel gameSetup, ConsoleViewModel console, UiSettings settings)
     {
         _gameSetup = gameSetup;
         _console = console;
         _config = CompileConfig.Load();
+        _settings = settings;
         _modelToolPath = ToolLocator.ResolveModelToolPath();
 
         _qcPath = _config.QcPath;
@@ -220,6 +223,7 @@ public sealed class CompileViewModel : ObservableObject
                 OnPropertyChanged(nameof(ShowWorkFolder));
                 OnPropertyChanged(nameof(CanGetMaterials));
                 OnPropertyChanged(nameof(CanConfigureMaterials));
+                OnPropertyChanged(nameof(CanCopyToDestination));
                 CompileCommand.RaiseCanExecuteChanged();
             }
         }
@@ -302,6 +306,27 @@ public sealed class CompileViewModel : ObservableObject
             }
         }
     }
+
+    /// <summary>App-wide toggle (shared with Compile - Advanced): copy the compiled files to the output
+    /// folder instead of moving them, leaving the just-built model in the game folder too. No effect on
+    /// "leave in game" output (nothing is transferred there).</summary>
+    public bool CopyToDestination
+    {
+        get => _settings.CompileCopyToDestination;
+        set
+        {
+            if (_settings.CompileCopyToDestination != value)
+            {
+                _settings.CompileCopyToDestination = value;
+                _settings.Save();
+                OnPropertyChanged();
+            }
+        }
+    }
+
+    /// <summary>True when a transfer actually happens (Subfolder or WorkFolder) so the copy toggle is
+    /// meaningful; "leave in game" transfers nothing.</summary>
+    public bool CanCopyToDestination => _selectedOutputMode.Mode != CompileOutputMode.LeaveInGame;
 
     public bool IsCompiling
     {
@@ -434,7 +459,8 @@ public sealed class CompileViewModel : ObservableObject
             GameInfoDir: gameInfoDir,
             QcPath: QcPath,
             ExtraOptions: EffectiveOptions,
-            DestinationBase: destination);
+            DestinationBase: destination,
+            CopyToDestination: CopyToDestination);
 
         var service = new ModelCompileService();
         service.Output += Log;

@@ -16,6 +16,10 @@ public partial class App : Application
 
     protected override void OnStartup(StartupEventArgs e)
     {
+        // Catch otherwise-unhandled exceptions app-wide and write a crash report before we go down.
+        // Installed first so even a failure during startup is captured.
+        CrashReporter.Install();
+
         // A shell file-association / "Open with" launch passes the file path as an argument.
         var openPath = TryGetOpenPath(e.Args);
 

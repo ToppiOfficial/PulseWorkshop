@@ -7,6 +7,7 @@ using PulseWorkshop.App.Mvvm;
 using PulseWorkshop.App.Services;
 using PulseWorkshop.Core.Models;
 using PulseWorkshop.Core.Services;
+using PulseWorkshop.Core.Storage;
 using PulseWorkshop.Core.Unpack;
 
 namespace PulseWorkshop.App.ViewModels;
@@ -23,6 +24,7 @@ public sealed class CompileAdvancedViewModel : ObservableObject
 {
     private readonly AdvancedProjectSession _session;
     private readonly ConsoleViewModel _console;
+    private readonly UiSettings _settings;
     private readonly string _modelToolPath;
 
     private ModelEntryViewModel? _selectedEntry;
@@ -31,10 +33,11 @@ public sealed class CompileAdvancedViewModel : ObservableObject
     private CancellationTokenSource? _cancelSource;
     private string? _selectedMaterialGameRoot;
 
-    public CompileAdvancedViewModel(AdvancedProjectSession session, ConsoleViewModel console)
+    public CompileAdvancedViewModel(AdvancedProjectSession session, ConsoleViewModel console, UiSettings settings)
     {
         _session = session;
         _console = console;
+        _settings = settings;
         _modelToolPath = ToolLocator.ResolveModelToolPath();
 
         AddEntryCommand = new RelayCommand(AddEntry, () => IsProjectOpen);
@@ -98,6 +101,9 @@ public sealed class CompileAdvancedViewModel : ObservableObject
     public string ProjectPath => _session.ProjectPath;
     public string ProjectName => _session.ProjectName;
     public string? ProjectDir => _session.ProjectDir;
+
+    /// <summary>The recent-project list shown in the empty state's "Open recent" panel (shared session).</summary>
+    public ObservableCollection<RecentItemViewModel> RecentProjects => _session.RecentProjects;
 
     private void OnProjectChanged()
     {
@@ -224,6 +230,24 @@ public sealed class CompileAdvancedViewModel : ObservableObject
     {
         get => _session.Project.CleanBeforeTransfer;
         set { if (_session.Project.CleanBeforeTransfer != value) { _session.Project.CleanBeforeTransfer = value; OnPropertyChanged(); Save(); } }
+    }
+
+    /// <summary>App-wide toggle (shared with Compile - Simple): copy each entry's compiled files to its
+    /// output folder instead of moving them, leaving the just-built model in the game folder too. No
+    /// effect on the "compile in game" output mode (nothing is transferred there). Stored in the shared
+    /// UI settings, not the project, so it applies to every project.</summary>
+    public bool CopyToDestination
+    {
+        get => _settings.CompileCopyToDestination;
+        set
+        {
+            if (_settings.CompileCopyToDestination != value)
+            {
+                _settings.CompileCopyToDestination = value;
+                _settings.Save();
+                OnPropertyChanged();
+            }
+        }
     }
 
     /// <summary>When true, an in-game compile also creates the model's material folders (from its
@@ -554,7 +578,8 @@ public sealed class CompileAdvancedViewModel : ObservableObject
             QcPath: qc,
             ExtraOptions: ModelCompileService.CombineOptions(SelectedGame?.ModelCompilerCommand, GlobalCommand, entry.Command),
             DestinationBase: destination,
-            CleanBeforeTransfer: CleanBeforeTransfer);
+            CleanBeforeTransfer: CleanBeforeTransfer,
+            CopyToDestination: CopyToDestination);
 
         var service = new ModelCompileService();
         service.Output += Log;

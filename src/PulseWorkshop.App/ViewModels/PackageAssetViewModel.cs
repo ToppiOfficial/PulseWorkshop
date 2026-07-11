@@ -1,5 +1,7 @@
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using System.IO;
+using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using Microsoft.Win32;
@@ -41,6 +43,7 @@ public sealed class PackageAssetViewModel : ObservableObject
         _thumbnailSource = LoadThumbnail();
 
         BrowseInputCommand = new RelayCommand(BrowseInput);
+        OpenInputCommand = new RelayCommand(OpenInput, CanOpenInput);
         BrowseVmtTemplateCommand = new RelayCommand(BrowseVmtTemplate);
         RemoveCommand = new RelayCommand(() => _entry.RemoveAsset(this));
         CloneCommand = new RelayCommand(() => _entry.CloneAsset(this));
@@ -56,6 +59,11 @@ public sealed class PackageAssetViewModel : ObservableObject
     public ObservableCollection<RegexReplaceViewModel> Regexes { get; } = new();
 
     public RelayCommand BrowseInputCommand { get; }
+
+    /// <summary>Opens the asset's input file in the OS default program. Holding Alt instead reveals it
+    /// in Explorer (its folder, file selected). Mirrors the Compile - Advanced entry's "Open file".</summary>
+    public RelayCommand OpenInputCommand { get; }
+
     public RelayCommand BrowseVmtTemplateCommand { get; }
     public RelayCommand RemoveCommand { get; }
     public RelayCommand CloneCommand { get; }
@@ -132,6 +140,7 @@ public sealed class PackageAssetViewModel : ObservableObject
         if ((ResolvedInputPath() is not null) != (_thumbnailSource is not null))
             RefreshThumbnail();
         RefreshValidation();
+        OpenInputCommand.RaiseCanExecuteChanged();
     }
 
     /// <summary>The input path resolved against the project when it points at an existing file;
@@ -254,6 +263,7 @@ public sealed class PackageAssetViewModel : ObservableObject
                 OnPropertyChanged();
                 RefreshThumbnail();
                 RefreshValidation();
+                OpenInputCommand.RaiseCanExecuteChanged();
                 Save();
             }
         }
@@ -342,6 +352,17 @@ public sealed class PackageAssetViewModel : ObservableObject
     {
         OnPropertyChanged(nameof(ValidationError));
         OnPropertyChanged(nameof(IsInvalid));
+    }
+
+    private bool CanOpenInput() => ResolvedInputPath() is not null;
+
+    private void OpenInput()
+    {
+        if (ResolvedInputPath() is not { } path) return;
+        if (Keyboard.Modifiers.HasFlag(ModifierKeys.Alt))
+            Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{path}\"") { UseShellExecute = true });
+        else
+            Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
     }
 
     private void BrowseInput()

@@ -174,15 +174,61 @@ public partial class ConsoleWindow : Window
             return;
 
         _vm.Append("] " + cmd, ConsoleSeverity.Info); // echo the command, Source-style
-        switch (cmd.ToLowerInvariant())
+
+        // First token is the command; the rest are arguments (only "crash" takes one so far).
+        var parts = cmd.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var arg = parts.Length > 1 ? parts[1].ToLowerInvariant() : "";
+        switch (parts[0].ToLowerInvariant())
         {
             case "clear":
             case "cls":
             case "clr":
                 _vm.Clear();
                 break;
+            case "help":
+            case "?":
+                _vm.Append("Commands:", ConsoleSeverity.Info);
+                _vm.Append("  clear            - clear the console");
+                _vm.Append("  crash [ui|bg|task] - raise a test crash to exercise the crash reporter");
+                _vm.Append("  help             - show this list");
+                break;
+            case "crash":
+                RaiseTestCrash(arg);
+                break;
             default:
                 _vm.Append($"Unknown command: {cmd}", ConsoleSeverity.Warning);
+                break;
+        }
+    }
+
+    // Deliberately throws so the global crash reporter can be verified end to end: a report is written
+    // and the crash dialog shown. "ui" (default) crashes the UI thread and closes the app; "bg" crashes
+    // a background thread (also fatal); "task" faults an unawaited task (logged, non-fatal).
+    private void RaiseTestCrash(string kind)
+    {
+        var ex = new InvalidOperationException($"Test crash triggered from the console ({(kind.Length == 0 ? "ui" : kind)}).");
+        switch (kind)
+        {
+            case "bg":
+                _vm.Append("Raising a test crash on a background thread...", ConsoleSeverity.Warning);
+                new Thread(() => throw ex) { IsBackground = true }.Start();
+                break;
+            case "task":
+                _vm.Append("Faulting an unobserved task...", ConsoleSeverity.Warning);
+                // Fault a task and drop it so no one observes it; the finalizer raises the event later,
+                // so force a GC to make the report appear promptly rather than at some indefinite time.
+                _ = Task.Run(() => throw ex);
+                Dispatcher.BeginInvoke(() =>
+                {
+                    GC.Collect();
+                    GC.WaitForPendingFinalizers();
+                }, DispatcherPriority.Background);
+                break;
+            default:
+                _vm.Append("Raising a test crash on the UI thread...", ConsoleSeverity.Warning);
+                // Post it so this key handler returns first: the throw then surfaces as a genuine
+                // unhandled dispatcher exception rather than an error inside the input handler.
+                Dispatcher.BeginInvoke(new Action(() => throw ex), DispatcherPriority.Background);
                 break;
         }
     }

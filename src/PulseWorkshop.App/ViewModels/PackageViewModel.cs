@@ -96,6 +96,11 @@ public sealed class PackageViewModel : ObservableObject
     /// Wired by <c>MainViewModel</c> to open it there and switch tabs.</summary>
     public event Action<string>? ViewPackageRequested;
 
+    /// <summary>The Unpack tab, set by <c>MainViewModel</c>: before packing, the pack asks it to
+    /// temporarily release the output package if it happens to be open there (its read handles
+    /// would block the packer), then reopens it once the pack finishes.</summary>
+    public UnpackViewModel? UnpackTab { get; set; }
+
     private void ViewPackage()
     {
         if (!string.IsNullOrEmpty(LastPackagePath))
@@ -411,6 +416,11 @@ public sealed class PackageViewModel : ObservableObject
         _cancelSource = new CancellationTokenSource();
         var ct = _cancelSource.Token;
 
+        // If the Unpack tab is browsing the very package this pack will overwrite, its open read
+        // handles would block the packer (and the rename) - close it there for the duration.
+        string? reopenInUnpack = UnpackTab?.ReleaseForRepack(
+            PackOutputCandidates(folder, IsGmodPacker ? ".gma" : ".vpk", OutputName));
+
         var service = new PackageService();
         service.Output += Log;
 
@@ -475,7 +485,33 @@ public sealed class PackageViewModel : ObservableObject
             IsPackaging = false;
             _cancelSource.Dispose();
             _cancelSource = null;
+
+            // Reopen the package in the Unpack tab if we closed it there: the fresh result when
+            // the pack succeeded, the old file otherwise (if it survived).
+            if (reopenInUnpack is not null)
+            {
+                var reopen = LastPackagePath ?? reopenInUnpack;
+                if (File.Exists(reopen))
+                    await UnpackTab!.OpenFromPathAsync(reopen);
+            }
         }
+    }
+
+    /// <summary>The package files a pack of <paramref name="folder"/> may write: the packer's own
+    /// output beside the folder, plus the optional rename target (mirrors <see cref="RenamePackage"/>).</summary>
+    internal static IEnumerable<string> PackOutputCandidates(string folder, string ext, string outputName)
+    {
+        folder = folder.TrimEnd('\\', '/'); // the packer derives its output from the trimmed folder
+        yield return folder + ext;
+
+        if (string.IsNullOrWhiteSpace(outputName))
+            yield break;
+        var name = Path.GetFileName(outputName.Trim());
+        if (string.IsNullOrWhiteSpace(name))
+            yield break;
+        if (string.IsNullOrEmpty(Path.GetExtension(name)))
+            name += ext;
+        yield return Path.Combine(Path.GetDirectoryName(folder) ?? string.Empty, name);
     }
 
     /// <summary>Writes the buffered packer output to a <c>.log</c> file beside the folder when

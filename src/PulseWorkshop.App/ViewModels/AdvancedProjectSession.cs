@@ -49,6 +49,29 @@ public sealed class AdvancedProjectSession : ObservableObject
         if (!string.IsNullOrEmpty(_config.LastProjectPath) && File.Exists(_config.LastProjectPath)
             && ModelProject.Load(_config.LastProjectPath) is { } reopened)
             LoadProject(_config.LastProjectPath, reopened, raise: false);
+
+        RebuildRecentProjects();
+    }
+
+    /// <summary>The most-recently-opened projects that still exist on disk (newest first, capped at
+    /// <see cref="MaxRecentShown"/>), surfaced by both Advanced tabs' empty-state "Open recent" list.</summary>
+    public ObservableCollection<RecentItemViewModel> RecentProjects { get; } = new();
+
+    private const int MaxRecentShown = 8;
+
+    /// <summary>Rebuilds <see cref="RecentProjects"/> from the persisted list, dropping entries whose
+    /// file is gone. Called at startup and whenever the open project changes.</summary>
+    private void RebuildRecentProjects()
+    {
+        RecentProjects.Clear();
+        foreach (var path in _config.RecentProjects)
+        {
+            if (!File.Exists(path))
+                continue;
+            RecentProjects.Add(new RecentItemViewModel(path, p => OpenProjectFromPath(p)));
+            if (RecentProjects.Count >= MaxRecentShown)
+                break;
+        }
     }
 
     /// <summary>The single shared project instance both tabs read from and write into.</summary>
@@ -154,6 +177,7 @@ public sealed class AdvancedProjectSession : ObservableObject
         _selectedGame = null;
         _config.LastProjectPath = null;
         _config.Save();
+        RebuildRecentProjects();
         CloseProjectCommand.RaiseCanExecuteChanged();
         RaiseProjectChanged();
     }
@@ -166,6 +190,7 @@ public sealed class AdvancedProjectSession : ObservableObject
             ? _gameSetup.Games.FirstOrDefault(g => g.Model.Id == id)
             : null;
         _config.Remember(path);
+        RebuildRecentProjects();
         CloseProjectCommand.RaiseCanExecuteChanged();
         if (raise)
             RaiseProjectChanged();

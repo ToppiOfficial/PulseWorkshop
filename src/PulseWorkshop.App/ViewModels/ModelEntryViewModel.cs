@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.Diagnostics;
 using System.IO;
+using System.Windows.Input;
 using Microsoft.Win32;
 using PulseWorkshop.App.Mvvm;
 using PulseWorkshop.Core.Models;
@@ -54,7 +55,8 @@ public sealed class ModelEntryViewModel : ObservableObject
     /// <summary>Sends this entry's last compiled .mdl to the Model View tab (without launching the viewer).</summary>
     public RelayCommand ViewModelCommand { get; }
 
-    /// <summary>Opens this entry's .qc in the OS default editor (whatever is associated with .qc).</summary>
+    /// <summary>Opens this entry's .qc in the OS default editor (whatever is associated with .qc).
+    /// Holding Alt instead reveals the .qc in Explorer (its folder, file selected).</summary>
     public RelayCommand OpenQcCommand { get; }
 
     private bool CanOpenQc()
@@ -66,7 +68,11 @@ public sealed class ModelEntryViewModel : ObservableObject
     private void OpenQc()
     {
         if (!CanOpenQc()) return;
-        Process.Start(new ProcessStartInfo(ResolvedQcPath) { UseShellExecute = true });
+        var qc = ResolvedQcPath;
+        if (Keyboard.Modifiers.HasFlag(ModifierKeys.Alt))
+            Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{qc}\"") { UseShellExecute = true });
+        else
+            Process.Start(new ProcessStartInfo(qc) { UseShellExecute = true });
     }
 
     /// <summary>The .mdl from this entry's last successful compile (drives its own "Go to file").</summary>

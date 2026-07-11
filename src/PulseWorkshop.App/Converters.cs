@@ -83,6 +83,22 @@ public sealed class FirstLetterConverter : IValueConverter
         throw new NotSupportedException();
 }
 
+/// <summary>Positive count -> Visible, zero/negative -> Collapsed (e.g. hide an "Open recent" panel
+/// when the list is empty). ConverterParameter="invert" flips it.</summary>
+public sealed class CountToVisibilityConverter : IValueConverter
+{
+    public object Convert(object? value, Type targetType, object? parameter, CultureInfo culture)
+    {
+        var has = value is int count && count > 0;
+        if (string.Equals(parameter as string, "invert", StringComparison.OrdinalIgnoreCase))
+            has = !has;
+        return has ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    public object ConvertBack(object value, Type targetType, object? parameter, CultureInfo culture) =>
+        throw new NotSupportedException();
+}
+
 /// <summary>
 /// null -> Collapsed, non-null -> Visible (for showing the editor only when present).
 /// Pass ConverterParameter="invert" to flip the result (show only when null).

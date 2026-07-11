@@ -25,6 +25,11 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     private readonly DraftStore _drafts = new();
     private readonly TemplateStore _templates = new();
 
+    // App-wide persisted UI preferences. Owned here (not in MainWindow) so tabs that mutate a shared
+    // setting - e.g. the Compile tabs' "copy to output folder" toggle - and MainWindow's own
+    // window/tab bookkeeping all read and write the one instance instead of clobbering each other.
+    private readonly UiSettings _settings = UiSettings.Load();
+
     // Per-list text filters (plain substring by default, regex optional).
     private readonly ItemFilter _publishedFilter = new();
     private readonly ItemFilter _draftsFilter = new();
@@ -51,9 +56,6 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         AppPaths.EnsureCreated();
         _service = new WorkshopService(HostLocator.ResolveHostExePath());
 
-        // Resolve the developer's public Steam avatar for the About tab (best-effort, no API key).
-        _ = ResolveDeveloperAvatarAsync();
-
         ConnectCommand = new AsyncRelayCommand(ConnectAsync, () => !IsBusy && !IsConnected);
         DisconnectCommand = new AsyncRelayCommand(DisconnectAsync, () => !IsBusy && IsConnected);
         LaunchGameCommand = new AsyncRelayCommand(LaunchGameAsync, () => !IsBusy && IsConnected);
@@ -67,13 +69,13 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
 
         // The Compile / Package tabs reuse Game Setup's tool paths. Every tab writes to the one shared
         // console (rendered by the detached ConsoleWindow), so it's created first and handed to each.
-        Compile = new CompileViewModel(GameSetup, Console);
+        Compile = new CompileViewModel(GameSetup, Console, _settings);
         Package = new PackageViewModel(GameSetup, Console);
 
         // Compile - Advanced and Package - Advanced share one open .pw_mdlproject via this session, so
         // both edit the same project (different lists) without clobbering each other.
         AdvancedProject = new AdvancedProjectSession(GameSetup);
-        CompileAdvanced = new CompileAdvancedViewModel(AdvancedProject, Console);
+        CompileAdvanced = new CompileAdvancedViewModel(AdvancedProject, Console, _settings);
         PackageAdvanced = new PackageAdvancedViewModel(AdvancedProject, Console);
 
         // The Textures tab is a standalone project workflow (its own .pw_textureproject); it reuses
@@ -93,12 +95,22 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
 
         // The Unpack tab browses/extracts .vpk and .gma archives (or a whole game via its
         // gameinfo.txt); export runs log to the same shared console.
-        Unpack = new UnpackViewModel(Console);
+        Unpack = new UnpackViewModel(Console, _settings);
+
+        // "View model" on the Unpack tab hands a just-exported .mdl's on-disk path to the Model View
+        // tab, switching to it - same bridge the Compile tabs use for their compiled models.
+        Unpack.ViewModelRequested += OnViewModelRequested;
 
         // "View Package" on either Package tab opens the just-packed .vpk/.gma in the Unpack tab and
         // switches to it.
         Package.ViewPackageRequested += OnViewPackageRequested;
         PackageAdvanced.ViewPackageRequested += OnViewPackageRequested;
+
+        // And the reverse hook: before packing, either Package tab asks the Unpack tab to
+        // temporarily release the output package if it is open there (an open archive holds read
+        // handles that would block the packer), reopening it once the pack finishes.
+        Package.UnpackTab = Unpack;
+        PackageAdvanced.UnpackTab = Unpack;
 
         // Live-filtered views over each list.
         PublishedView = CollectionViewSource.GetDefaultView(PublishedItems);
@@ -125,6 +137,10 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         // Drafts/Templates are populated only after a successful Connect (see LoadLocalLists), so the
         // lists start empty until the user connects.
     }
+
+    /// <summary>The app-wide persisted UI preferences, owned here and shared with MainWindow so the two
+    /// never clobber each other's file.</summary>
+    public UiSettings Settings => _settings;
 
     public IReadOnlyList<GameConfig> Games { get; } = KnownGames.All;
 
@@ -290,9 +306,19 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
                 // Switching games invalidates the loaded list and the open editor.
                 Editor = null;
                 PublishedItems.Clear();
-                NotifyConnectionChanged(); // host is for the previous game now
-                LoadLocalLists(); // clears Drafts/Templates (not connected to the new game yet)
-                StatusMessage = $"Selected {value.DisplayName}. Click Connect to load items.";
+                NotifyConnectionChanged(); // host may still be for the previous game
+                if (IsConnected)
+                {
+                    // Switched back to a game whose host is still live: the lists were just cleared,
+                    // so reload them instead of leaving the user staring at an empty "connected" list.
+                    StatusMessage = $"Selected {value.DisplayName}. Reloading items...";
+                    _ = ReloadForActiveGameAsync();
+                }
+                else
+                {
+                    LoadLocalLists(); // clears Drafts/Templates (not connected to the new game yet)
+                    StatusMessage = $"Selected {value.DisplayName}. Click Connect to load items.";
+                }
             }
         }
     }
@@ -377,29 +403,21 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
 
     // --- About tab (developer + app info) --------------------------------------------------
 
-    /// <summary>The developer's SteamID64 (used for the About card and its avatar/profile link).</summary>
-    public const ulong DeveloperSteamId = 76561198279098225;
-
-    private string? _developerAvatarUrl;
-
     /// <summary>Developer display name shown on the About tab.</summary>
     public string DeveloperName => "Toppi";
 
     /// <summary>Developer's GitHub URL (opened from the About tab).</summary>
     public string DeveloperGitHubUrl => "https://github.com/ToppiOfficial";
 
-    /// <summary>Developer's avatar image URL, resolved in the background (null until/if it loads).</summary>
-    public string? DeveloperAvatarUrl
-    {
-        get => _developerAvatarUrl;
-        private set => SetField(ref _developerAvatarUrl, value);
-    }
+    /// <summary>Developer's avatar image, taken from the GitHub profile picture.</summary>
+    public string DeveloperAvatarUrl => "https://github.com/ToppiOfficial.png";
 
     /// <summary>Description of the app shown on the About tab.</summary>
     public string AppDescription =>
-        "A friendly Steam Workshop manager for Left 4 Dead 2 and Garry's Mod. " +
-        "Browse, create, and edit your own Workshop items - title, description, tags, " +
-        "content file, and preview image - all in one window, reusing your running Steam session. " +
+        "A friendly content toolkit for Source-engine games. " +
+        "Compile models, pack VPK/GMA content, bulk-convert textures to VTF, and browse or " +
+        "export packed archives - plus manage your own Steam Workshop items when you want to, " +
+        "reusing your running Steam session. " +
         "PulseWorkshop is the successor to KitsuneResource.";
 
     public string KitsuneResourceUrl => "https://github.com/ToppiOfficial/KitsuneResource";
@@ -414,23 +432,6 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         }
     }
 
-    /// <summary>
-    /// Fetches the developer's avatar from the public Steam Community profile XML (best-effort).
-    /// Leaves the avatar empty (placeholder initial shows) on any failure.
-    /// </summary>
-    private async Task ResolveDeveloperAvatarAsync()
-    {
-        try
-        {
-            var url = await SteamProfile.GetAvatarUrlAsync(DeveloperSteamId);
-            if (!string.IsNullOrEmpty(url))
-                Application.Current.Dispatcher.Invoke(() => DeveloperAvatarUrl = url);
-        }
-        catch
-        {
-            // Best-effort: a missing avatar is not an error worth surfacing.
-        }
-    }
 
     public bool IsBusy
     {
@@ -764,6 +765,18 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
                      .Where(t => t.AppId == SelectedGame.AppId)
                      .OrderBy(t => t.Name))
             Templates.Add(new TemplateListItemViewModel(t));
+    }
+
+    /// <summary>
+    /// Reloads the Published list (then Drafts/Templates) for a game whose Steam host is already live -
+    /// used when the user switches the game selector back to an already-connected game, whose lists the
+    /// <see cref="SelectedGame"/> setter had just cleared.
+    /// </summary>
+    private async Task ReloadForActiveGameAsync()
+    {
+        await LoadAllPublishedAsync();
+        // Published items are loaded now, so Drafts/Templates preview fallbacks can resolve.
+        LoadLocalLists();
     }
 
     private async Task ConnectAsync()

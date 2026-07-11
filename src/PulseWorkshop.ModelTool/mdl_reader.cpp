@@ -44,9 +44,18 @@ static constexpr size_t IKCHAIN_STRUCT_SIZE = 16;
 static constexpr size_t BODYPART_STRUCT_SIZE = 16;
 static constexpr size_t BODYPART_OFF_NUMMODELS = 4;
 static constexpr size_t BODYPART_OFF_MODELIDX  = 12;
-// mstudiomodel_t on disk: name[64] ... numeyeballs(100) eyeballindex(104) ... = 148 bytes
+// mstudiomodel_t on disk: name[64](0) type(64) boundingradius(68) nummeshes(72) meshindex(76)
+// numvertices(80) ... numeyeballs(100) eyeballindex(104) ... = 148 bytes
 static constexpr size_t MODEL_STRUCT_SIZE    = 148;
+static constexpr size_t MODEL_OFF_NAME        = 0;   // char name[64], inline (not an offset)
+static constexpr size_t MODEL_OFF_NUMMESHES   = 72;
+static constexpr size_t MODEL_OFF_MESHINDEX   = 76;  // relative to the model struct start
+static constexpr size_t MODEL_OFF_NUMVERTS    = 80;
 static constexpr size_t MODEL_OFF_NUMEYEBALLS = 100;
+// mstudiomesh_t on disk: material(0) modelindex(4) numvertices(8) vertexoffset(12) numflexes(16)
+// flexindex(20) ... = 116 bytes
+static constexpr size_t MESH_STRUCT_SIZE      = 116;
+static constexpr size_t MESH_OFF_NUMFLEXES    = 16;
 static constexpr size_t MODELGROUP_SIZE   = 8;   // sizeof(mstudiomodelgroup_t): szlabelindex + sznameindex
 static constexpr size_t MODELGROUP_OFF_NAME = 4; // sznameindex, relative to the struct start
 static constexpr size_t TEX_STRUCT_SIZE   = 64;  // sizeof(mstudiotexture_t) as stored on disk
@@ -200,17 +209,42 @@ MdlInfo read_mdl_info(const std::filesystem::path& mdl_path) {
         info.ik_chains.push_back(read_cstr(data, struct_start + static_cast<size_t>(nameoff)));
     }
 
-    // Eyeballs live per-model: walk bodypart -> model and sum each model's numeyeballs.
+    // Body parts (bodygroups) -> models (sets) -> meshes. Walk the tree to collect the set names,
+    // per-set mesh/vertex/flex counts (flexes == morph targets), and the total eyeball count. A set
+    // is a "morph" set when any of its meshes carries flexes; it is flagged as flex-controller-driven
+    // when the model also defines flex controllers (they live in the header, shared across sets).
     int32_t num_bp  = read_i32(data, OFF_NUMBODYPARTS);
     int32_t bp_idx  = read_i32(data, OFF_BODYPARTIDX);
     for (int32_t bp = 0; bp < num_bp; ++bp) {
         size_t bp_start   = static_cast<size_t>(bp_idx) + static_cast<size_t>(bp) * BODYPART_STRUCT_SIZE;
+        int32_t nameoff   = read_i32(data, bp_start); // sznameindex: relative to bp_start
         int32_t nummodels = read_i32(data, bp_start + BODYPART_OFF_NUMMODELS);
         int32_t modeloff  = read_i32(data, bp_start + BODYPART_OFF_MODELIDX); // relative to bp_start
+
+        MdlBodyPart part;
+        part.name = read_cstr(data, bp_start + static_cast<size_t>(nameoff));
+
         for (int32_t m = 0; m < nummodels; ++m) {
             size_t model_start = bp_start + static_cast<size_t>(modeloff) + static_cast<size_t>(m) * MODEL_STRUCT_SIZE;
             info.num_eyeballs += read_i32(data, model_start + MODEL_OFF_NUMEYEBALLS);
+
+            MdlBodyPartSet set;
+            set.name         = read_cstr(data, model_start + MODEL_OFF_NAME); // char name[64], inline
+            set.num_meshes   = read_i32(data, model_start + MODEL_OFF_NUMMESHES);
+            set.num_vertices = read_i32(data, model_start + MODEL_OFF_NUMVERTS);
+            int32_t meshoff  = read_i32(data, model_start + MODEL_OFF_MESHINDEX); // relative to model_start
+
+            for (int32_t msh = 0; msh < set.num_meshes; ++msh) {
+                size_t mesh_start = model_start + static_cast<size_t>(meshoff) + static_cast<size_t>(msh) * MESH_STRUCT_SIZE;
+                set.num_flexes += read_i32(data, mesh_start + MESH_OFF_NUMFLEXES);
+            }
+
+            set.has_morph          = set.num_flexes > 0;
+            set.has_flexcontroller = set.has_morph && info.num_flex_ctrls > 0;
+            part.sets.push_back(std::move(set));
         }
+
+        info.bodyparts.push_back(std::move(part));
     }
 
     // Materials (texture names), read the same way as read_mdl_materials.

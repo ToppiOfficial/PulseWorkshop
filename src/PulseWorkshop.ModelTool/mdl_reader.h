@@ -14,6 +14,23 @@ struct MdlHitboxSet {
     int         num_hitboxes = 0;
 };
 
+// One "set" (an mstudiomodel_t) inside a body part - the selectable sub-model of a bodygroup
+// (e.g. body / none). Flex info is per-mesh, so it is summed across the set's meshes.
+struct MdlBodyPartSet {
+    std::string name;                    // the model name (may be blank for empty/"blank" sets)
+    int         num_meshes        = 0;
+    int         num_vertices      = 0;
+    int         num_flexes        = 0;   // total mesh flexes (morph targets) in this set
+    bool        has_morph         = false; // this set carries morph targets (numflexes > 0)
+    bool        has_flexcontroller = false; // model defines flex controllers AND this set has morphs
+};
+
+// One body part (bodygroup) and its selectable sets (models).
+struct MdlBodyPart {
+    std::string                 name;
+    std::vector<MdlBodyPartSet> sets;
+};
+
 // Header-level model stats parsed straight from the studiohdr_t. Triangle/vertex counts and LOD
 // count live in the sibling .vtx/.vvd files, not here (see model_stats.h).
 struct MdlInfo {
@@ -34,6 +51,7 @@ struct MdlInfo {
     std::vector<std::string>  ik_chains;             // IK chain names (numikchains / mstudioikchain_t)
     std::vector<std::string>  attachments;           // attachment names (numlocalattachments)
     int                       num_eyeballs      = 0; // eyeballs summed across all bodyparts/models
+    std::vector<MdlBodyPart>  bodyparts;             // bodygroups and their sets (with per-set flex flags)
 };
 
 // Parse a compiled MDL. Supports versions 44-49 (HL2 through L4D2 / Portal 2).

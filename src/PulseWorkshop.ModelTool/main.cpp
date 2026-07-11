@@ -75,12 +75,29 @@ static int cmd_info(int argc, char* argv[]) {
         std::cout << "MDL version:  " << info.version << "\n";
         std::cout << "Triangles:    " << (stats.have_vtx ? with_commas(stats.triangles) : "n/a") << "\n";
         std::cout << "Vertices:     " << (stats.have_vvd ? with_commas(stats.vertices)  : "n/a") << "\n";
-        std::cout << "Body parts:   " << info.num_bodyparts << "\n";
         std::cout << "Eyeballs:     " << info.num_eyeballs << "\n";
         std::cout << "LODs:         " << (stats.have_vtx ? std::to_string(stats.lods) : "n/a") << "\n";
         // Per-LOD triangle counts (LOD 0 is the full-detail mesh).
         for (size_t i = 0; i < stats.lod_triangles.size(); ++i)
             std::cout << "  LOD " << i << ":       " << with_commas(stats.lod_triangles[i]) << " tris\n";
+
+        // Body parts (bodygroups) -> sets (models). Each set is marked (morph) when it carries
+        // morph targets, and (flexcontroller) when the model also defines flex controllers.
+        std::cout << "\n";
+        std::cout << "Body parts:   " << info.num_bodyparts << "\n";
+        for (const auto& part : info.bodyparts) {
+            std::cout << "  - \"" << (part.name.empty() ? "unnamed" : part.name) << "\" ("
+                      << part.sets.size() << " set" << (part.sets.size() == 1 ? "" : "s") << ")\n";
+            for (size_t i = 0; i < part.sets.size(); ++i) {
+                const auto& set = part.sets[i];
+                std::cout << "      [" << i << "] " << (set.name.empty() ? "(blank)" : set.name)
+                          << " - " << set.num_meshes << " mesh" << (set.num_meshes == 1 ? "" : "es")
+                          << ", " << with_commas(set.num_vertices) << " verts";
+                if (set.has_morph)          std::cout << " (morph)";
+                if (set.has_flexcontroller) std::cout << " (flexcontroller)";
+                std::cout << "\n";
+            }
+        }
 
         // Bones
         std::cout << "\n";

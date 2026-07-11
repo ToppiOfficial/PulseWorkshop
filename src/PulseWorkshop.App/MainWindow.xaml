@@ -15,6 +15,21 @@
         <local:StringToVisibilityConverter x:Key="StringToVis" />
         <local:FirstLetterConverter x:Key="FirstLetter" />
         <local:PathEllipsisConverter x:Key="PathEllipsis" />
+        <local:CountToVisibilityConverter x:Key="CountToVis" />
+
+        <!-- "Open recent" list used in the empty states of the Compile/Package Advanced and Unpack
+             tabs. Bind an ItemsControl's ItemsSource to a RecentItemViewModel collection and its
+             ItemTemplate to this: each row is a full-width button that reopens the file. -->
+        <DataTemplate x:Key="RecentItemTemplate">
+            <Button HorizontalContentAlignment="Stretch" Margin="0,2" Padding="10,6"
+                    Command="{Binding OpenCommand}" ToolTip="{Binding Path}">
+                <StackPanel>
+                    <TextBlock Text="{Binding Name}" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                    <TextBlock Text="{Binding Directory}" Style="{StaticResource MutedText}"
+                               TextTrimming="CharacterEllipsis" />
+                </StackPanel>
+            </Button>
+        </DataTemplate>
     </Window.Resources>
 
     <Grid Margin="10,2,10,10">
@@ -1001,6 +1016,10 @@
                       BorderThickness="1" CornerRadius="3"
                       Visibility="{Binding IsArchiveOpen, Converter={StaticResource BoolToVis}, ConverterParameter=invert}">
                 <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                    <!-- Looping chibi mascot on the empty state (just for fun). -->
+                    <Image Height="120" Stretch="Uniform" HorizontalAlignment="Center" Margin="0,0,0,16"
+                           RenderOptions.BitmapScalingMode="HighQuality"
+                           local:AnimatedGif.SourceUri="pack://application:,,,/Assets/rak12_lying.gif" />
                     <TextBlock Text="Unpack" FontSize="15" FontWeight="SemiBold" HorizontalAlignment="Center" />
                     <TextBlock Style="{StaticResource MutedText}" HorizontalAlignment="Center"
                                Margin="0,6,0,14" TextAlignment="Center" MaxWidth="480" TextWrapping="Wrap"
@@ -1015,6 +1034,17 @@
                     <ProgressBar Width="220" IsIndeterminate="True" Margin="0,8,0,0"
                                  HorizontalAlignment="Center"
                                  Visibility="{Binding IsLoading, Converter={StaticResource BoolToVis}}" />
+
+                    <!-- Open recent: the last few archives opened here. -->
+                    <StackPanel Margin="0,22,0,0" MaxWidth="440" HorizontalAlignment="Center"
+                                Visibility="{Binding RecentArchives.Count, Converter={StaticResource CountToVis}}">
+                        <TextBlock Text="Open recent" FontWeight="SemiBold"
+                                   HorizontalAlignment="Center" Margin="0,0,0,4" />
+                        <ScrollViewer MaxHeight="220" VerticalScrollBarVisibility="Auto">
+                            <ItemsControl ItemsSource="{Binding RecentArchives}"
+                                          ItemTemplate="{StaticResource RecentItemTemplate}" />
+                        </ScrollViewer>
+                    </StackPanel>
                 </StackPanel>
               </Border>
 
@@ -1035,6 +1065,10 @@
                           <ColumnDefinition Width="*" />
                           <ColumnDefinition Width="Auto" />
                       </Grid.ColumnDefinitions>
+                      <Grid.RowDefinitions>
+                          <RowDefinition Height="Auto" />
+                          <RowDefinition Height="Auto" />
+                      </Grid.RowDefinitions>
                       <StackPanel>
                           <TextBlock Text="{Binding ArchiveName}" FontWeight="SemiBold" />
                           <TextBlock Text="{Binding ArchivePath}" TextTrimming="CharacterEllipsis" TextWrapping="NoWrap"
@@ -1045,6 +1079,31 @@
                           <Button Content="Open" Padding="10,4" Command="{Binding OpenCommand}" />
                           <Button Content="Close" Margin="6,0,0,0" Padding="10,4" Command="{Binding CloseCommand}" />
                       </StackPanel>
+
+                      <!-- View model: the .mdl files unpacked (exported) this session. Pick one and
+                           open it in the Model View tab. Hidden until a model has been exported. -->
+                      <Grid Grid.Row="1" Grid.ColumnSpan="2" Margin="0,8,0,0"
+                            Visibility="{Binding HasModelFiles, Converter={StaticResource BoolToVis}}">
+                          <Grid.ColumnDefinitions>
+                              <ColumnDefinition Width="Auto" />
+                              <ColumnDefinition Width="*" />
+                              <ColumnDefinition Width="Auto" />
+                          </Grid.ColumnDefinitions>
+                          <TextBlock Text="Unpacked model" VerticalAlignment="Center" Margin="0,0,8,0"
+                                     Style="{StaticResource MutedText}" />
+                          <ComboBox Grid.Column="1" ItemsSource="{Binding ModelFiles}"
+                                    SelectedItem="{Binding SelectedModel}"
+                                    VerticalContentAlignment="Center"
+                                    ToolTip="The .mdl files you have exported from this archive this session. Pick one and click View model to open it in the Model View tab." />
+                          <StackPanel Grid.Column="2" Orientation="Horizontal">
+                              <Button Content="Browse file" Margin="8,0,0,0" Padding="12,4"
+                                      Command="{Binding BrowseModelCommand}"
+                                      ToolTip="Open the folder the selected unpacked model is in (Explorer, with the file selected)." />
+                              <Button Content="View model" Margin="6,0,0,0" Padding="12,4"
+                                      Style="{StaticResource AccentButton}" Command="{Binding ViewModelCommand}"
+                                      ToolTip="Open the selected unpacked model in the Model View tab." />
+                          </StackPanel>
+                      </Grid>
                   </Grid>
                 </Border>
 
@@ -1248,14 +1307,25 @@
                 <Grid Grid.Row="2" Margin="0,10,0,0">
                     <StackPanel Orientation="Horizontal">
                         <Button Content="{Binding ExportButtonLabel}" Style="{StaticResource AccentButton}" MinWidth="130"
-                                Padding="16,8" Command="{Binding ExportSelectedCommand}"
+                                Height="34" Padding="16,0" VerticalAlignment="Center" Command="{Binding ExportSelectedCommand}"
                                 ToolTip="Exports the active selection: highlighted file rows (Ctrl/Shift multi-select), or - with nothing highlighted - the folder selected in the tree, recursively." />
+                        <!-- Where the export writes: prompt for a folder, or a fixed location beside
+                             the opened package (unpack_files next to a gameinfo.txt, or a
+                             <name>_unpack subfolder next to a bare .vpk/.gma). -->
+                        <ComboBox Width="140" Height="34" Margin="8,0,0,0" VerticalAlignment="Center"
+                                  Style="{StaticResource DropUpComboBox}"
+                                  ItemsSource="{Binding ExportModes}"
+                                  SelectedItem="{Binding SelectedExportMode}"
+                                  ToolTip="Export destination. Choose folder...: pick a folder each time. Beside package: write to a fixed location next to the opened package - an unpack_files folder beside gameinfo.txt, or a &lt;package name&gt;_unpack folder beside a .vpk/.gma." />
                         <Button Content="Cancel" Style="{StaticResource DangerButton}" Margin="8,0,0,0"
-                                Padding="14,8" Command="{Binding CancelExportCommand}"
+                                Height="34" Padding="14,0" VerticalAlignment="Center" Command="{Binding CancelExportCommand}"
                                 Visibility="{Binding IsExporting, Converter={StaticResource BoolToVis}}" />
                         <StackPanel VerticalAlignment="Center" Margin="14,0,0,0">
                             <TextBlock Text="{Binding StatusMessage}" Style="{StaticResource MutedText}"
                                        TextTrimming="CharacterEllipsis" Margin="0,0,0,4" MaxWidth="520" />
+                            <TextBlock Text="{Binding BesideExportHint}" Style="{StaticResource MutedText}"
+                                       TextTrimming="CharacterEllipsis" Margin="0,0,0,4" MaxWidth="520"
+                                       Visibility="{Binding IsExporting, Converter={StaticResource BoolToVis}, ConverterParameter=invert}" />
                             <ProgressBar Width="220" Value="{Binding ExportProgress, Mode=OneWay}"
                                          Maximum="100" HorizontalAlignment="Left"
                                          Visibility="{Binding IsExporting, Converter={StaticResource BoolToVis}}" />
@@ -1435,6 +1505,11 @@
                             <!-- Material options: all on one line. Localize + Flat patch are always
                                  visible but disabled until "Get materials on compile" is checked. -->
                             <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                                <CheckBox Content="Copy to output"
+                                          IsChecked="{Binding CopyToDestination}"
+                                          IsEnabled="{Binding CanCopyToDestination}"
+                                          Margin="0,0,14,0" Foreground="{StaticResource TextBrush}"
+                                          ToolTip="Copy the compiled files to the output folder instead of moving them, so the just-built model also stays in the game folder. Applies to both Compile tabs. No effect on 'Leave in game'." />
                                 <CheckBox Content="Get materials on compile"
                                           IsChecked="{Binding GetMaterialOnCompile}"
                                           IsEnabled="{Binding CanGetMaterials}"
@@ -1487,6 +1562,10 @@
                             BorderThickness="1" CornerRadius="3"
                             Visibility="{Binding IsProjectOpen, Converter={StaticResource BoolToVis}, ConverterParameter=invert}">
                       <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                          <!-- Looping chibi mascot on the empty state (just for fun). -->
+                          <Image Height="120" Stretch="Uniform" HorizontalAlignment="Center" Margin="0,0,0,16"
+                                 RenderOptions.BitmapScalingMode="HighQuality"
+                                 local:AnimatedGif.SourceUri="pack://application:,,,/Assets/rak12_lying.gif" />
                           <TextBlock Text="Advanced compile" FontSize="15" FontWeight="SemiBold"
                                      HorizontalAlignment="Center" />
                           <TextBlock Style="{StaticResource MutedText}" HorizontalAlignment="Center"
@@ -1497,6 +1576,17 @@
                                       Padding="16,8" Command="{Binding NewProjectCommand}" />
                               <Button Content="Open project..." Margin="8,0,0,0" Padding="16,8"
                                       Command="{Binding OpenProjectCommand}" />
+                          </StackPanel>
+
+                          <!-- Open recent: the last few projects (shared with the Package tab). -->
+                          <StackPanel Margin="0,22,0,0" MaxWidth="420" HorizontalAlignment="Center"
+                                      Visibility="{Binding RecentProjects.Count, Converter={StaticResource CountToVis}}">
+                              <TextBlock Text="Open recent" FontWeight="SemiBold"
+                                         HorizontalAlignment="Center" Margin="0,0,0,4" />
+                              <ScrollViewer MaxHeight="220" VerticalScrollBarVisibility="Auto">
+                                  <ItemsControl ItemsSource="{Binding RecentProjects}"
+                                                ItemTemplate="{StaticResource RecentItemTemplate}" />
+                              </ScrollViewer>
                           </StackPanel>
                       </StackPanel>
                     </Border>
@@ -1631,8 +1721,12 @@
                                         BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="3"
                                         Padding="12,10">
                                     <StackPanel>
-                                        <CheckBox Content="Clean before transfer" IsChecked="{Binding CleanBeforeTransfer}"
+                                        <CheckBox Content="Copy to output (keep in game)" IsChecked="{Binding CopyToDestination}"
                                                   Foreground="{StaticResource TextBrush}"
+                                                  ToolTip="Copy each entry's compiled files to its output folder instead of moving them, so the just-built model also stays in the game folder. Applies to both Compile tabs. No effect on 'Compile in game'." />
+
+                                        <CheckBox Content="Clean before transfer" IsChecked="{Binding CleanBeforeTransfer}"
+                                                  Margin="0,8,0,0" Foreground="{StaticResource TextBrush}"
                                                   ToolTip="Before a non-in-game compile, delete the previous in-game build so stale files can't leak into the moved output." />
 
                                         <CheckBox Content="Make material's directory" IsChecked="{Binding MakeMaterialDir}"
@@ -1879,7 +1973,7 @@
                                                                VerticalContentAlignment="Center" ToolTip="{Binding ResolvedQcPath}" />
                                                       <Button Grid.Column="2" Content="Open file" Margin="6,0,0,0"
                                                               Command="{Binding OpenQcCommand}"
-                                                              ToolTip="Open the .qc in the OS default editor." />
+                                                              ToolTip="Open the .qc in the OS default editor. Hold Alt to reveal it in Explorer instead." />
                                                       <Button Grid.Column="3" Content="Browse..." Margin="6,0,0,0"
                                                               Command="{Binding BrowseQcCommand}" />
                                                   </Grid>
@@ -2207,6 +2301,17 @@
                                       Padding="16,8" Command="{Binding NewProjectCommand}" />
                               <Button Content="Open project..." Margin="8,0,0,0" Padding="16,8"
                                       Command="{Binding OpenProjectCommand}" />
+                          </StackPanel>
+
+                          <!-- Open recent: the last few projects (shared with the Compile tab). -->
+                          <StackPanel Margin="0,22,0,0" MaxWidth="420" HorizontalAlignment="Center"
+                                      Visibility="{Binding RecentProjects.Count, Converter={StaticResource CountToVis}}">
+                              <TextBlock Text="Open recent" FontWeight="SemiBold"
+                                         HorizontalAlignment="Center" Margin="0,0,0,4" />
+                              <ScrollViewer MaxHeight="220" VerticalScrollBarVisibility="Auto">
+                                  <ItemsControl ItemsSource="{Binding RecentProjects}"
+                                                ItemTemplate="{StaticResource RecentItemTemplate}" />
+                              </ScrollViewer>
                           </StackPanel>
                       </StackPanel>
                     </Border>
@@ -2557,6 +2662,7 @@
                                                                         <ColumnDefinition Width="*" />
                                                                         <ColumnDefinition Width="Auto" />
                                                                         <ColumnDefinition Width="Auto" />
+                                                                        <ColumnDefinition Width="Auto" />
                                                                     </Grid.ColumnDefinitions>
                                                                     <TextBlock Text="Kind" Style="{StaticResource PkgEntryLabel}" />
                                                                     <ComboBox Grid.Column="1" ItemsSource="{Binding AssetKinds}"
@@ -2566,9 +2672,12 @@
                                                                     <TextBox Grid.Column="3" Text="{Binding InputPath, UpdateSourceTrigger=PropertyChanged}"
                                                                              Tag="Source file (relative to the project, or absolute)"
                                                                              VerticalContentAlignment="Center" />
-                                                                    <Button Grid.Column="4" Content="Browse..." Margin="6,0,0,0"
+                                                                    <Button Grid.Column="4" Content="Open file" Margin="6,0,0,0"
+                                                                            Command="{Binding OpenInputCommand}"
+                                                                            ToolTip="Open the input file in its default program. Hold Alt to reveal it in Explorer instead." />
+                                                                    <Button Grid.Column="5" Content="Browse..." Margin="6,0,0,0"
                                                                             Command="{Binding BrowseInputCommand}" />
-                                                                    <StackPanel Grid.Column="5" Orientation="Horizontal" Margin="2,0,0,0">
+                                                                    <StackPanel Grid.Column="6" Orientation="Horizontal" Margin="2,0,0,0">
                                                                         <Button Style="{StaticResource CloneButton}" Command="{Binding CloneCommand}"
                                                                                 ToolTip="Duplicate this asset." />
                                                                         <Button Style="{StaticResource TrashButton}" Command="{Binding RemoveCommand}"
@@ -2752,6 +2861,10 @@
                       BorderThickness="1" CornerRadius="3"
                       Visibility="{Binding IsProjectOpen, Converter={StaticResource BoolToVis}, ConverterParameter=invert}">
                 <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                    <!-- Looping chibi mascot on the empty state (just for fun). -->
+                    <Image Height="120" Stretch="Uniform" HorizontalAlignment="Center" Margin="0,0,0,16"
+                           RenderOptions.BitmapScalingMode="HighQuality"
+                           local:AnimatedGif.SourceUri="pack://application:,,,/Assets/rak12_lying.gif" />
                     <TextBlock Text="Textures" FontSize="15" FontWeight="SemiBold" HorizontalAlignment="Center" />
                     <TextBlock Style="{StaticResource MutedText}" HorizontalAlignment="Center"
                                Margin="0,6,0,14" TextAlignment="Center" MaxWidth="460" TextWrapping="Wrap"
@@ -3229,8 +3342,14 @@
                       VerticalAlignment="Stretch" Margin="0"
                       MinHeight="{Binding ViewportHeight, ElementName=AboutScroll}">
                 <StackPanel>
-                    <!-- Developer: circular avatar + name + SteamID, like the Steam profile header. -->
-                    <StackPanel Orientation="Horizontal">
+                    <!-- Developer: circular avatar + name + SteamID, like the Steam profile header.
+                         A looping chibi sits at the far right of the row (just for fun). -->
+                    <Grid>
+                      <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                      </Grid.ColumnDefinitions>
+                      <StackPanel Grid.Column="0" Orientation="Horizontal">
                         <Border Width="96" Height="96" CornerRadius="48"
                                 Background="{StaticResource PanelAltBrush}"
                                 BorderBrush="{StaticResource BorderBrush}" BorderThickness="1">
@@ -3256,7 +3375,14 @@
                                     Padding="12,4" Click="OpenDeveloperGitHub_Click"
                                     ToolTip="Open the developer's GitHub." />
                         </StackPanel>
-                    </StackPanel>
+                      </StackPanel>
+
+                      <!-- Looping chibi (AK-12) at the far right of the profile row. -->
+                      <Image Grid.Column="1" Stretch="Uniform" Height="150"
+                             VerticalAlignment="Center" HorizontalAlignment="Right" Margin="16,0,0,0"
+                             RenderOptions.BitmapScalingMode="HighQuality"
+                             local:AnimatedGif.SourceUri="pack://application:,,,/Assets/ak12_move.gif" />
+                    </Grid>
 
                     <!-- Divider -->
                     <Border Height="1" Background="{StaticResource BorderBrush}" Margin="0,22,0,18" />

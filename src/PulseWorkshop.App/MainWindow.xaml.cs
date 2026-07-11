@@ -21,7 +21,9 @@ public partial class MainWindow : Window
     private readonly MainViewModel _vm = new();
 
     // Persisted UI preferences (console window open state + bounds), loaded on startup, saved on close.
-    private readonly UiSettings _settings = UiSettings.Load();
+    // Owned by the view model so tabs that mutate a shared setting and this window's own bookkeeping
+    // read/write the one instance instead of clobbering each other.
+    private UiSettings _settings => _vm.Settings;
 
     // The detached, shared output console. Created lazily on first show and kept for the app's lifetime
     // (so hiding it with the X or ~ preserves its history and scroll position).
@@ -32,6 +34,12 @@ public partial class MainWindow : Window
         InitializeComponent();
         DataContext = _vm;
         Title = $"PulseWorkshop v{AppVersion}";
+#if DEBUG
+        // Debug builds append a short SHA-256 of the running executable so different local builds are
+        // distinguishable. Release builds omit this entirely, so official releases show a clean title.
+        if (!string.IsNullOrWhiteSpace(ExecutableSha))
+            Title += $" [{ExecutableSha}]";
+#endif
         _vm.NavigateToDrafts += () => DraftsTab.IsSelected = true;
         _vm.NavigateToTemplates += () => TemplatesTab.IsSelected = true;
         _vm.NavigateToModelView += () => ModelViewTab.IsSelected = true;
@@ -798,6 +806,34 @@ public partial class MainWindow : Window
             return v is null ? "0.0.0" : $"{v.Major}.{v.Minor}.{v.Build}";
         }
     }
+
+#if DEBUG
+    /// <summary>Short SHA-256 (first 8 hex chars) of the compiled app assembly, shown in the window
+    /// title on Debug builds so distinct local builds are distinguishable. Hashes the assembly file
+    /// (PulseWorkshop.dll) rather than the thin apphost .exe, which stays constant across rebuilds.
+    /// Null if the file can't be read.</summary>
+    private static string? ExecutableSha
+    {
+        get
+        {
+            try
+            {
+                var path = System.Reflection.Assembly.GetExecutingAssembly().Location;
+                if (string.IsNullOrEmpty(path) || !File.Exists(path))
+                    path = Environment.ProcessPath;
+                if (string.IsNullOrEmpty(path) || !File.Exists(path))
+                    return null;
+                using var stream = File.OpenRead(path);
+                var hash = System.Security.Cryptography.SHA256.HashData(stream);
+                return Convert.ToHexString(hash, 0, 4).ToLowerInvariant();
+            }
+            catch
+            {
+                return null;
+            }
+        }
+    }
+#endif
 
     /// <summary>
     /// Enter in a search box flushes the pending (debounced) filter immediately instead of waiting

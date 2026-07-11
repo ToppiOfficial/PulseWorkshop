@@ -28,7 +28,8 @@ public sealed record CompileRequest(
     string QcPath,
     string ExtraOptions,
     string? DestinationBase,
-    bool CleanBeforeTransfer = false);
+    bool CleanBeforeTransfer = false,
+    bool CopyToDestination = false);
 
 /// <summary>The outcome of a compile: process result plus the model files found and copied.</summary>
 public sealed record CompileResult(
@@ -206,10 +207,12 @@ public sealed class ModelCompileService
     }
 
     /// <summary>
-    /// Moves every gathered model file to the chosen destination, preserving the path relative to the
-    /// gameinfo dir (so the result lands under <c>&lt;dest&gt;\models\...</c> and is pack-ready). The
-    /// files are <b>moved</b>, not copied, so the game folder is left clean (Crowbar-style).
-    /// No-op when the mode is "leave in game" (null destination).
+    /// Transfers every gathered model file to the chosen destination, preserving the path relative to
+    /// the gameinfo dir (so the result lands under <c>&lt;dest&gt;\models\...</c> and is pack-ready).
+    /// By default the files are <b>moved</b>, so the game folder is left clean (Crowbar-style); when
+    /// <see cref="CompileRequest.CopyToDestination"/> is set they are <b>copied</b> instead, leaving
+    /// the just-compiled build in the game folder as well. No-op when the mode is "leave in game"
+    /// (null destination).
     /// </summary>
     private IReadOnlyList<string> CopyOutputs(CompileRequest req, IReadOnlyList<string> mdlPaths)
     {
@@ -220,29 +223,34 @@ public sealed class ModelCompileService
         foreach (var mdl in mdlPaths)
             sources.AddRange(GatherModelFiles(mdl));
 
-        var moved = new List<string>();
+        var copy = req.CopyToDestination;
+        var verb = copy ? "copied" : "moved";
+        var transferred = new List<string>();
         foreach (var src in sources.Distinct(StringComparer.OrdinalIgnoreCase))
         {
             try
             {
                 var rel = Path.GetRelativePath(req.GameInfoDir, src);
-                // If the file isn't under the game dir, fall back to moving it by name only.
+                // If the file isn't under the game dir, fall back to transferring it by name only.
                 if (rel.StartsWith("..", StringComparison.Ordinal) || Path.IsPathRooted(rel))
                     rel = Path.GetFileName(src);
 
                 var dest = Path.Combine(req.DestinationBase, rel);
                 Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
-                File.Move(src, dest, overwrite: true);
-                moved.Add(dest);
-                Output?.Invoke($"moved {rel}");
+                if (copy)
+                    File.Copy(src, dest, overwrite: true);
+                else
+                    File.Move(src, dest, overwrite: true);
+                transferred.Add(dest);
+                Output?.Invoke($"{verb} {rel}");
             }
             catch (Exception ex)
             {
-                Output?.Invoke($"WARNING: could not move {src}: {ex.Message}");
+                Output?.Invoke($"WARNING: could not {(copy ? "copy" : "move")} {src}: {ex.Message}");
             }
         }
 
-        return moved;
+        return transferred;
     }
 
     /// <summary>

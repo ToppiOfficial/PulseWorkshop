@@ -1,21 +1,21 @@
 <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
 
-    <!-- Greyscale palette tuned toward the Steam web look: deep cool darks, semi-opaque panels. -->
-    <Color x:Key="BgColor">#16181C</Color>
-    <Color x:Key="PanelColor">#1F2227</Color>
-    <Color x:Key="PanelAltColor">#2A2E35</Color>
-    <Color x:Key="BorderColor">#3A3F47</Color>
-    <Color x:Key="TextColor">#E6E7EA</Color>
-    <Color x:Key="MutedTextColor">#8B9097</Color>
+    <!-- Greyscale palette tuned toward the Steam web look: deep blue-cool darks, semi-opaque panels. -->
+    <Color x:Key="BgColor">#15191F</Color>
+    <Color x:Key="PanelColor">#1D222B</Color>
+    <Color x:Key="PanelAltColor">#28303B</Color>
+    <Color x:Key="BorderColor">#38414F</Color>
+    <Color x:Key="TextColor">#E6E8EC</Color>
+    <Color x:Key="MutedTextColor">#89909C</Color>
     <Color x:Key="AccentColor">#5B86C5</Color>
     <Color x:Key="AccentHoverColor">#6E97D2</Color>
 
     <!-- Gradient stops for the subtle top-light panel gradient (Steam-style). -->
-    <Color x:Key="PanelTopColor">#262A31</Color>
-    <Color x:Key="PanelBottomColor">#1B1E23</Color>
-    <Color x:Key="HeaderTopColor">#343A44</Color>
-    <Color x:Key="HeaderBottomColor">#252A31</Color>
+    <Color x:Key="PanelTopColor">#242B36</Color>
+    <Color x:Key="PanelBottomColor">#191D25</Color>
+    <Color x:Key="HeaderTopColor">#323A49</Color>
+    <Color x:Key="HeaderBottomColor">#232A35</Color>
 
     <SolidColorBrush x:Key="BgBrush" Color="{StaticResource BgColor}" />
     <SolidColorBrush x:Key="PanelBrush" Color="{StaticResource PanelColor}" />
@@ -269,6 +269,38 @@
                             <Border Background="{StaticResource PanelAltBrush}"
                                     BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
                                     CornerRadius="3" MinWidth="{TemplateBinding ActualWidth}" Margin="0,2,0,0">
+                                <ScrollViewer>
+                                    <StackPanel IsItemsHost="True" />
+                                </ScrollViewer>
+                            </Border>
+                        </Popup>
+                    </Grid>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- Drop-up variant: identical to the default ComboBox, but its popup opens above the
+         control. Use for comboboxes pinned near the bottom of the window where a downward
+         popup would be clipped by the window edge or taskbar. -->
+    <Style x:Key="DropUpComboBox" TargetType="ComboBox" BasedOn="{StaticResource {x:Type ComboBox}}">
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ComboBox">
+                    <Grid>
+                        <ToggleButton Style="{StaticResource ComboToggle}"
+                                      IsChecked="{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}"
+                                      Focusable="False" ClickMode="Press" />
+                        <ContentPresenter Margin="{TemplateBinding Padding}" VerticalAlignment="Center"
+                                          HorizontalAlignment="Left"
+                                          Content="{TemplateBinding SelectionBoxItem}"
+                                          ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}"
+                                          IsHitTestVisible="False" />
+                        <Popup IsOpen="{TemplateBinding IsDropDownOpen}" Placement="Top"
+                               AllowsTransparency="True" Focusable="False" PopupAnimation="Slide">
+                            <Border Background="{StaticResource PanelAltBrush}"
+                                    BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
+                                    CornerRadius="3" MinWidth="{TemplateBinding ActualWidth}" Margin="0,0,0,2">
                                 <ScrollViewer>
                                     <StackPanel IsItemsHost="True" />
                                 </ScrollViewer>

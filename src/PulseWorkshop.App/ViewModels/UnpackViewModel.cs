@@ -1,9 +1,11 @@
 using System.Collections.ObjectModel;
+using System.Diagnostics;
 using System.IO;
 using System.Windows;
 using System.Windows.Threading;
 using Microsoft.Win32;
 using PulseWorkshop.App.Mvvm;
+using PulseWorkshop.Core.Storage;
 using PulseWorkshop.Core.Unpack;
 
 namespace PulseWorkshop.App.ViewModels;
@@ -23,7 +25,12 @@ public sealed class UnpackViewModel : ObservableObject
     /// <summary>Filter results are capped so typing one letter over a full-game mount stays snappy.</summary>
     private const int MaxFilterResults = 5000;
 
+    /// <summary>Exporting at least this many files prompts a confirmation first, so a stray click on a
+    /// large folder (or the whole-package root) doesn't spill thousands of files without warning.</summary>
+    private const int ExportConfirmThreshold = 100;
+
     private readonly ConsoleViewModel _console;
+    private readonly UiSettings _settings;
 
     private IPackedArchive? _archive;
     private UnpackFolderViewModel? _treeRoot;
@@ -40,30 +47,50 @@ public sealed class UnpackViewModel : ObservableObject
     private CancellationTokenSource? _exportCancel;
     private UnpackSortColumn _sortColumn = UnpackSortColumn.Name;
     private bool _sortAscending = true;
+    private string _selectedExportMode = ExportModeChoose;
     // Set while we programmatically clear one pane's selection to make the other the active one, so
     // the cross-clearing does not bounce back and forth.
     private bool _syncingSelection;
+    // Bumped by every Close(). An open that awaited across a newer close/open discards its result
+    // instead of committing, otherwise two packages would end up open at once (e.g. a second
+    // "View Package" click or a dropped file while the first load is still running).
+    private int _openGeneration;
+    // Opens currently awaiting their background load; IsLoading clears when the last one finishes.
+    private int _pendingOpens;
+
+    // The .mdl files the user has exported this session, surfaced by the "View model" bar so an
+    // unpacked model can be sent straight to the Model View tab.
+    private UnpackedModelViewModel? _selectedModel;
 
     // Typing restarts this timer; the search itself runs when it fires (or on Enter). Matching a
     // full-game mount is fast, but repopulating a 5000-row list on every keystroke is not.
     private readonly DispatcherTimer _searchDebounce;
 
-    public UnpackViewModel(ConsoleViewModel console)
+    public UnpackViewModel(ConsoleViewModel console, UiSettings settings)
     {
         _console = console;
+        _settings = settings;
+        _selectedExportMode = settings.UnpackExportBesidePackage ? ExportModeBeside : ExportModeChoose;
 
         _searchDebounce = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(300) };
         _searchDebounce.Tick += (_, _) => ApplyFilterNow();
 
         OpenCommand = new AsyncRelayCommand(OpenAsync, () => !IsLoading && !IsExporting);
         CloseCommand = new RelayCommand(Close, () => IsArchiveOpen && !IsLoading && !IsExporting);
+        RebuildRecentArchives();
         ExportSelectedCommand = new AsyncRelayCommand(ExportSelectedAsync, () => CanExportSelected);
         CancelExportCommand = new RelayCommand(CancelExport, () => IsExporting);
+        ViewModelCommand = new RelayCommand(ViewSelectedModel, () => CanViewModel);
+        BrowseModelCommand = new RelayCommand(BrowseSelectedModel, () => CanViewModel);
     }
 
     /// <summary>Raised (on the UI thread) when a row should be scrolled into view - after
     /// "Go to file" navigates to the folder and selects the target file.</summary>
     public event Action<UnpackFileViewModel>? ScrollFileIntoView;
+
+    /// <summary>Raised when the user clicks "View model": the on-disk path of an exported .mdl to hand
+    /// to the Model View tab.</summary>
+    public event Action<string>? ViewModelRequested;
 
     // --- Commands -------------------------------------------------------------------------
 
@@ -71,6 +98,8 @@ public sealed class UnpackViewModel : ObservableObject
     public RelayCommand CloseCommand { get; }
     public AsyncRelayCommand ExportSelectedCommand { get; }
     public RelayCommand CancelExportCommand { get; }
+    public RelayCommand ViewModelCommand { get; }
+    public RelayCommand BrowseModelCommand { get; }
 
     // --- Bound state ------------------------------------------------------------------------
 
@@ -104,6 +133,52 @@ public sealed class UnpackViewModel : ObservableObject
 
     /// <summary>Files shown on the right: the selected folder's files, or flat filter matches.</summary>
     public ObservableCollection<UnpackFileViewModel> Files { get; } = new();
+
+    /// <summary>The archives most recently opened here that still exist on disk (newest first, capped
+    /// at <see cref="MaxRecentShown"/>), shown in the empty state's "Open recent" list.</summary>
+    public ObservableCollection<RecentItemViewModel> RecentArchives { get; } = new();
+
+    private const int MaxRecentShown = 8;
+
+    /// <summary>Rebuilds <see cref="RecentArchives"/> from the persisted list, dropping entries whose
+    /// file is gone. Called at startup and after each successful open.</summary>
+    private void RebuildRecentArchives()
+    {
+        RecentArchives.Clear();
+        foreach (var path in _settings.UnpackRecentArchives)
+        {
+            if (!File.Exists(path))
+                continue;
+            RecentArchives.Add(new RecentItemViewModel(path, p => _ = OpenFromPathAsync(p)));
+            if (RecentArchives.Count >= MaxRecentShown)
+                break;
+        }
+    }
+
+    // --- Model View bridge ----------------------------------------------------------------------
+
+    /// <summary>The .mdl files exported this session (from the open archive), by archive-relative path -
+    /// the "View model" picker. Grows as models are exported; cleared on close.</summary>
+    public ObservableCollection<UnpackedModelViewModel> ModelFiles { get; } = new();
+
+    /// <summary>True once at least one .mdl has been unpacked this session (shows the "View model" bar).</summary>
+    public bool HasModelFiles => ModelFiles.Count > 0;
+
+    /// <summary>The exported .mdl chosen in the picker to hand to the Model View tab.</summary>
+    public UnpackedModelViewModel? SelectedModel
+    {
+        get => _selectedModel;
+        set
+        {
+            if (!SetField(ref _selectedModel, value))
+                return;
+            ViewModelCommand.RaiseCanExecuteChanged();
+            BrowseModelCommand.RaiseCanExecuteChanged();
+        }
+    }
+
+    /// <summary>"View model" is available once an exported model is picked.</summary>
+    private bool CanViewModel => _selectedModel is not null;
 
     /// <summary>Caption above the file list ("materials/models - 120 files" or match info).</summary>
     public string FileListCaption
@@ -200,6 +275,59 @@ public sealed class UnpackViewModel : ObservableObject
             ShowFilterResults();
     }
 
+    // --- Export destination mode ----------------------------------------------------------------
+
+    public const string ExportModeChoose = "Choose folder...";
+    public const string ExportModeBeside = "Beside package";
+
+    /// <summary>The two export destinations: prompt for a folder each time, or a fixed location
+    /// beside the opened package (see <see cref="ResolveBesideExportRoot"/>).</summary>
+    public IReadOnlyList<string> ExportModes { get; } = [ExportModeChoose, ExportModeBeside];
+
+    public string SelectedExportMode
+    {
+        get => _selectedExportMode;
+        set
+        {
+            if (!SetField(ref _selectedExportMode, value))
+                return;
+            _settings.UnpackExportBesidePackage = value == ExportModeBeside;
+            OnPropertyChanged(nameof(BesideExportHint));
+        }
+    }
+
+    /// <summary>One-line preview of where "Beside package" would write, shown next to the picker so
+    /// the fixed location is visible before exporting. Empty in "Choose folder" mode or with nothing
+    /// open.</summary>
+    public string BesideExportHint =>
+        _selectedExportMode == ExportModeBeside && ResolveBesideExportRoot() is { } root
+            ? $"-> {root}"
+            : string.Empty;
+
+    /// <summary>The fixed export root for "Beside package" mode: a gameinfo mount writes into an
+    /// <c>unpack_files</c> subfolder next to gameinfo.txt; a bare .vpk/.gma writes into a
+    /// <c>&lt;package name&gt;_unpack</c> subfolder next to the package. Null with nothing open.</summary>
+    private string? ResolveBesideExportRoot()
+    {
+        if (_archive is null)
+            return null;
+
+        string source;
+        try { source = Path.GetFullPath(_archive.SourcePath); }
+        catch { return null; }
+        var dir = Path.GetDirectoryName(source) ?? string.Empty;
+
+        if (_archive is GameInfoMount)
+            return Path.Combine(dir, "unpack_files");
+
+        // Bare pack: a <package name>_unpack subfolder beside it. The opened VPK is the "_dir" file;
+        // strip that suffix so the folder is named after the package, not the directory index.
+        var name = Path.GetFileNameWithoutExtension(source);
+        if (name.EndsWith("_dir", StringComparison.OrdinalIgnoreCase))
+            name = name[..^4];
+        return Path.Combine(dir, name + "_unpack");
+    }
+
     public bool IsLoading
     {
         get => _isLoading;
@@ -290,6 +418,8 @@ public sealed class UnpackViewModel : ObservableObject
         CloseCommand.RaiseCanExecuteChanged();
         ExportSelectedCommand.RaiseCanExecuteChanged();
         CancelExportCommand.RaiseCanExecuteChanged();
+        ViewModelCommand.RaiseCanExecuteChanged();
+        BrowseModelCommand.RaiseCanExecuteChanged();
     }
 
     // --- Open / close ---------------------------------------------------------------------------
@@ -320,6 +450,8 @@ public sealed class UnpackViewModel : ObservableObject
         }
 
         Close();
+        int gen = _openGeneration;
+        _pendingOpens++;
         IsLoading = true;
         StatusMessage = $"Opening {Path.GetFileName(path)}...";
         try
@@ -340,12 +472,23 @@ public sealed class UnpackViewModel : ObservableObject
                 }
             });
 
+            if (gen != _openGeneration)
+            {
+                // A newer open (or close) superseded this load while it ran - drop the result.
+                archive.Dispose();
+                return;
+            }
+
             _archive = archive;
             _treeRoot = root;
             TreeRoots.Add(root);
             root.IsExpanded = true;
             root.IsSelected = true;
             SelectedFolder = root;
+
+            // Remember it for the empty state's "Open recent" list (also updates the last-open pointer).
+            _settings.RememberUnpackArchive(archive.SourcePath);
+            RebuildRecentArchives();
 
             StatusMessage = $"Opened {archive.DisplayName}.";
             Log($"=== Unpack: opened {archive.SourcePath} ({archive.Entries.Count:N0} files) ===");
@@ -364,21 +507,25 @@ public sealed class UnpackViewModel : ObservableObject
         }
         catch (Exception ex)
         {
-            StatusMessage = $"Failed to open: {ex.Message}";
+            if (gen == _openGeneration)
+                StatusMessage = $"Failed to open: {ex.Message}";
             Log($"Unpack: failed to open {path}: {ex.Message}");
         }
         finally
         {
-            IsLoading = false;
+            if (--_pendingOpens == 0)
+                IsLoading = false;
             OnPropertyChanged(nameof(IsArchiveOpen));
             OnPropertyChanged(nameof(ArchiveName));
             OnPropertyChanged(nameof(ArchivePath));
             OnPropertyChanged(nameof(ArchiveSummary));
+            OnPropertyChanged(nameof(BesideExportHint));
         }
     }
 
     private void Close()
     {
+        _openGeneration++; // supersedes any open still loading in the background
         _exportCancel?.Cancel();
         _searchDebounce.Stop();
         _archive?.Dispose();
@@ -387,13 +534,67 @@ public sealed class UnpackViewModel : ObservableObject
         _selectedFolder = null;
         _filterText = string.Empty;
         _filter.Query = string.Empty;
+        _selectedModel = null;
         TreeRoots.Clear();
         Files.Clear();
+        ModelFiles.Clear();
         FileListCaption = string.Empty;
         StatusMessage = "No package open.";
         CleanPreviewDir();
         OnPropertyChanged(string.Empty); // refresh every binding
         RefreshCommands();
+    }
+
+    /// <summary>Pack integration: when the archive open here is (part of) the package a pack is
+    /// about to overwrite, its read handles would block the packer (and the rename that follows) -
+    /// close it and return the archive's path so the caller can reopen the fresh package after the
+    /// pack. Returns null when the pack touches nothing that is open here.</summary>
+    public string? ReleaseForRepack(IEnumerable<string> packOutputPaths)
+    {
+        if (_archive is null)
+            return null;
+
+        var targets = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var p in packOutputPaths)
+            if (!string.IsNullOrWhiteSpace(p))
+                targets.Add(PackageFamilyKey(p));
+        if (targets.Count == 0)
+            return null;
+
+        // The files this archive holds (or may lazily open) read handles on: the archive itself,
+        // or - for a gameinfo mount - every mounted VPK.
+        IEnumerable<string> held = _archive is GameInfoMount mount
+            ? mount.MountedVpks
+            : new[] { _archive.SourcePath };
+        if (!held.Any(h => targets.Contains(PackageFamilyKey(h))))
+            return null;
+
+        var reopen = _archive.SourcePath;
+        var name = _archive.DisplayName;
+        Close();
+        StatusMessage = $"Closed {name} while it is being repacked.";
+        Log($"Unpack: closed {name} - it is about to be repacked.");
+        return reopen;
+    }
+
+    /// <summary>Collapses a package path to its "family" so related files compare equal: a
+    /// <c>x_dir.vpk</c>, its numbered chunks (<c>x_000.vpk</c>, ...) and a single-file <c>x.vpk</c>
+    /// all map to <c>x.vpk</c>. Non-vpk paths just normalize.</summary>
+    private static string PackageFamilyKey(string path)
+    {
+        string full;
+        try { full = Path.GetFullPath(path); }
+        catch { return path; }
+        if (!full.EndsWith(".vpk", StringComparison.OrdinalIgnoreCase))
+            return full;
+
+        var name = Path.GetFileNameWithoutExtension(full);
+        if (name.EndsWith("_dir", StringComparison.OrdinalIgnoreCase))
+            name = name[..^4];
+        else if (name.Length > 4 && name[^4] == '_'
+                 && char.IsAsciiDigit(name[^3]) && char.IsAsciiDigit(name[^2]) && char.IsAsciiDigit(name[^1]))
+            name = name[..^4];
+        return Path.Combine(Path.GetDirectoryName(full) ?? string.Empty, name + ".vpk");
     }
 
     // --- Tree building ----------------------------------------------------------------------
@@ -710,10 +911,29 @@ public sealed class UnpackViewModel : ObservableObject
         if (_archive is null)
             return;
 
-        var dlg = new OpenFolderDialog { Title = $"Export {what} to..." };
-        if (dlg.ShowDialog() != true)
+        // A large export (a big folder, or the whole-package root) can spill thousands of files -
+        // confirm intent before prompting for a destination.
+        if (entries.Count >= ExportConfirmThreshold && !ConfirmLargeExport(entries.Count, what))
+        {
+            StatusMessage = "Export cancelled.";
             return;
-        string destRoot = Path.GetFullPath(dlg.FolderName);
+        }
+
+        string destRoot;
+        if (SelectedExportMode == ExportModeBeside)
+        {
+            // Fixed location beside the opened package - no prompt.
+            if (ResolveBesideExportRoot() is not { } besideRoot)
+                return;
+            destRoot = besideRoot;
+        }
+        else
+        {
+            var dlg = new OpenFolderDialog { Title = $"Export {what} to..." };
+            if (dlg.ShowDialog() != true)
+                return;
+            destRoot = Path.GetFullPath(dlg.FolderName);
+        }
 
         _exportCancel = new CancellationTokenSource();
         var ct = _exportCancel.Token;
@@ -797,6 +1017,9 @@ public sealed class UnpackViewModel : ObservableObject
         }
         finally
         {
+            // Whatever landed on disk (full export, partial, or cancelled) - surface any .mdl among it
+            // in the "View model" picker.
+            RegisterExportedModels(entries, destRoot);
             Log($"=== {StatusMessage} ===");
             IsExporting = false;
             ExportProgress = 0;
@@ -809,6 +1032,21 @@ public sealed class UnpackViewModel : ObservableObject
     {
         _exportCancel?.Cancel();
         StatusMessage = "Cancelling export...";
+    }
+
+    /// <summary>Confirms a large export (see <see cref="ExportConfirmThreshold"/>) before it runs.</summary>
+    private static bool ConfirmLargeExport(int count, string what)
+    {
+        var message = $"You're about to export {what}.\n\n"
+            + $"This will write {count:N0} files to disk. Continue?";
+        const string title = "Export many files";
+        var owner = Application.Current?.MainWindow;
+        var result = owner is not null
+            ? MessageBox.Show(owner, message, title,
+                MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No)
+            : MessageBox.Show(message, title,
+                MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No);
+        return result == MessageBoxResult.Yes;
     }
 
     // --- Preview --------------------------------------------------------------------------------
@@ -870,6 +1108,88 @@ public sealed class UnpackViewModel : ObservableObject
         catch
         {
             // A preview window may still hold a file open; %TEMP% cleanup gets the rest.
+        }
+    }
+
+    // --- Model View bridge ----------------------------------------------------------------------
+
+    /// <summary>Adds any .mdl among the just-exported entries that actually landed on disk to the
+    /// "View model" picker (new paths only). Called after every export - full, partial, or cancelled.</summary>
+    private void RegisterExportedModels(IReadOnlyList<PackedEntry> entries, string destRoot)
+    {
+        var added = false;
+        foreach (var entry in entries)
+        {
+            if (!entry.Extension.Equals("mdl", StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            string target;
+            try
+            {
+                target = Path.GetFullPath(Path.Combine(destRoot,
+                    entry.Path.Replace('/', Path.DirectorySeparatorChar)));
+            }
+            catch
+            {
+                continue;
+            }
+            if (!File.Exists(target))
+                continue; // skipped (zip-slip guard) or failed to write
+            if (ModelFiles.Any(m => string.Equals(m.FilePath, target, StringComparison.OrdinalIgnoreCase)))
+                continue; // already listed from an earlier export
+
+            ModelFiles.Add(new UnpackedModelViewModel(entry.Path, target));
+            added = true;
+        }
+
+        if (!added)
+            return;
+        SelectedModel ??= ModelFiles.FirstOrDefault();
+        OnPropertyChanged(nameof(HasModelFiles));
+    }
+
+    /// <summary>"View model": hands the picked exported .mdl's on-disk path to the Model View tab (its
+    /// .vvd/.vtx/.phy siblings were written alongside it by the export), via
+    /// <see cref="ViewModelRequested"/>.</summary>
+    private void ViewSelectedModel()
+    {
+        if (_selectedModel is not { } model)
+            return;
+        if (!File.Exists(model.FilePath))
+        {
+            StatusMessage = $"{Path.GetFileName(model.FilePath)} is no longer on disk - export it again.";
+            ModelFiles.Remove(model);
+            SelectedModel = ModelFiles.FirstOrDefault();
+            OnPropertyChanged(nameof(HasModelFiles));
+            return;
+        }
+        StatusMessage = $"Opened {Path.GetFileName(model.FilePath)} in Model View.";
+        Log($"Unpack: viewing exported model {model.FilePath} in Model View.");
+        ViewModelRequested?.Invoke(model.FilePath);
+    }
+
+    /// <summary>"Browse file": opens the folder the picked exported .mdl lives in (Explorer, with the
+    /// file selected).</summary>
+    private void BrowseSelectedModel()
+    {
+        if (_selectedModel is not { } model)
+            return;
+        if (!File.Exists(model.FilePath))
+        {
+            StatusMessage = $"{Path.GetFileName(model.FilePath)} is no longer on disk - export it again.";
+            ModelFiles.Remove(model);
+            SelectedModel = ModelFiles.FirstOrDefault();
+            OnPropertyChanged(nameof(HasModelFiles));
+            return;
+        }
+        try
+        {
+            Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{model.FilePath}\"")
+                { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"Couldn't open the folder: {ex.Message}";
         }
     }
 
@@ -1030,4 +1350,25 @@ public sealed class UnpackFileViewModel : ObservableObject
                 _owner.OnFileSelectionChanged();
         }
     }
+}
+
+/// <summary>One entry in the Unpack tab's "View model" picker: an exported .mdl, shown by its
+/// archive-relative path and resolved to its on-disk location for the Model View tab.</summary>
+public sealed class UnpackedModelViewModel
+{
+    public UnpackedModelViewModel(string displayPath, string filePath)
+    {
+        DisplayPath = displayPath;
+        FilePath = filePath;
+    }
+
+    /// <summary>Archive-relative path shown in the dropdown (e.g. <c>models/foo.mdl</c>).</summary>
+    public string DisplayPath { get; }
+
+    /// <summary>Full on-disk path of the exported .mdl handed to the Model View tab.</summary>
+    public string FilePath { get; }
+
+    // The dark-theme ComboBox's selection box renders the item via ToString(), so return the path here
+    // (DisplayMemberPath alone only reaches the dropdown items, not the closed selection box).
+    public override string ToString() => DisplayPath;
 }

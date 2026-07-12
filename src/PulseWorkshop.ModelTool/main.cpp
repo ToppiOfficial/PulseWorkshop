@@ -73,6 +73,13 @@ static int cmd_info(int argc, char* argv[]) {
 
         // Geometry
         std::cout << "MDL version:  " << info.version << "\n";
+        {
+            // studiohdr_t.checksum - the hash studiomdl writes so the engine can verify the
+            // .mdl matches its .vtx/.vvd/.phy siblings. Shown as hex (how studiomdl reports it).
+            std::ostringstream cs;
+            cs << "0x" << std::hex << std::uppercase << info.checksum;
+            std::cout << "Checksum:     " << cs.str() << "\n";
+        }
         std::cout << "Triangles:    " << (stats.have_vtx ? with_commas(stats.triangles) : "n/a") << "\n";
         std::cout << "Vertices:     " << (stats.have_vvd ? with_commas(stats.vertices)  : "n/a") << "\n";
         std::cout << "Eyeballs:     " << info.num_eyeballs << "\n";

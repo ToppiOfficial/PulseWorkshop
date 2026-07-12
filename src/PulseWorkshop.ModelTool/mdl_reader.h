@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 #include <filesystem>
 #include <string>
 #include <vector>
@@ -35,6 +36,7 @@ struct MdlBodyPart {
 // count live in the sibling .vtx/.vvd files, not here (see model_stats.h).
 struct MdlInfo {
     int                       version           = 0;
+    uint32_t                  checksum          = 0; // studiohdr_t.checksum - matches the .mdl to its .vtx/.vvd siblings
     int                       num_bones         = 0;
     int                       num_procedural    = 0; // driver/helper bones (proctype 1-4: axis/quat interp, aim) - excludes jiggle
     int                       num_jiggle        = 0; // jiggle bones (proctype == STUDIO_PROC_JIGGLE, 5)

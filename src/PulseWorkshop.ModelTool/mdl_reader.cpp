@@ -10,6 +10,7 @@ namespace {
 // studiohdr_t field offsets - stable across MDL versions 44-49
 // (from valve source sdk / KitsuneResource mdl.py)
 static constexpr size_t OFF_VERSION       = 4;
+static constexpr size_t OFF_CHECKSUM      = 8; // int checksum (must match the .vtx/.vvd/.phy siblings)
 static constexpr size_t OFF_NUMBONES      = 156;
 static constexpr size_t OFF_BONEINDEX     = 160;
 static constexpr size_t OFF_NUMBONECTRLS  = 164;
@@ -149,6 +150,7 @@ MdlInfo read_mdl_info(const std::filesystem::path& mdl_path) {
 
     MdlInfo info;
     info.version        = version;
+    info.checksum       = static_cast<uint32_t>(read_i32(data, OFF_CHECKSUM));
     info.num_bones      = read_i32(data, OFF_NUMBONES);
     info.num_bone_ctrls = read_i32(data, OFF_NUMBONECTRLS);
     info.num_bodyparts  = read_i32(data, OFF_NUMBODYPARTS);

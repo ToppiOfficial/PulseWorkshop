@@ -344,18 +344,25 @@ public partial class MainWindow : Window
 
     private void AdvancedEntries_DragOver(object sender, DragEventArgs e)
     {
+        // Only claim reorder drags; a genuine file drop over the list falls through to Window_DragOver.
+        if (e.Data.GetData(typeof(ModelEntryViewModel)) is not ModelEntryViewModel)
+            return;
         if (_advDragAdorner is not null)
         {
             var pos = e.GetPosition(AdvancedEntriesList);
             _advDragAdorner.SetPosition(pos.X, pos.Y);
         }
         e.Effects = DragDropEffects.Move;
+        // Stop the bubble here so the window-level file-drop handler doesn't override the effect.
+        e.Handled = true;
     }
 
     private void AdvancedEntries_Drop(object sender, DragEventArgs e)
     {
-        if (e.Data.GetData(typeof(ModelEntryViewModel)) is not ModelEntryViewModel dragged
-            || DataContext is not MainViewModel vm)
+        if (e.Data.GetData(typeof(ModelEntryViewModel)) is not ModelEntryViewModel dragged)
+            return;
+        e.Handled = true;
+        if (DataContext is not MainViewModel vm)
             return;
 
         var list = vm.CompileAdvanced.Entries;
@@ -417,18 +424,25 @@ public partial class MainWindow : Window
 
     private void PackageEntries_DragOver(object sender, DragEventArgs e)
     {
+        // Only claim reorder drags; a genuine file drop over the list falls through to Window_DragOver.
+        if (e.Data.GetData(typeof(PackageEntryViewModel)) is not PackageEntryViewModel)
+            return;
         if (_pkgDragAdorner is not null)
         {
             var pos = e.GetPosition(PackageEntriesList);
             _pkgDragAdorner.SetPosition(pos.X, pos.Y);
         }
         e.Effects = DragDropEffects.Move;
+        // Stop the bubble here so the window-level file-drop handler doesn't override the effect.
+        e.Handled = true;
     }
 
     private void PackageEntries_Drop(object sender, DragEventArgs e)
     {
-        if (e.Data.GetData(typeof(PackageEntryViewModel)) is not PackageEntryViewModel dragged
-            || DataContext is not MainViewModel vm)
+        if (e.Data.GetData(typeof(PackageEntryViewModel)) is not PackageEntryViewModel dragged)
+            return;
+        e.Handled = true;
+        if (DataContext is not MainViewModel vm)
             return;
 
         var list = vm.PackageAdvanced.Entries;
@@ -490,18 +504,25 @@ public partial class MainWindow : Window
 
     private void TextureGroups_DragOver(object sender, DragEventArgs e)
     {
+        // Only claim reorder drags; a genuine file drop over the list falls through to Window_DragOver.
+        if (e.Data.GetData(typeof(TextureGroupViewModel)) is not TextureGroupViewModel)
+            return;
         if (_texDragAdorner is not null)
         {
             var pos = e.GetPosition(TextureGroupsList);
             _texDragAdorner.SetPosition(pos.X, pos.Y);
         }
         e.Effects = DragDropEffects.Move;
+        // Stop the bubble here so the window-level file-drop handler doesn't override the effect.
+        e.Handled = true;
     }
 
     private void TextureGroups_Drop(object sender, DragEventArgs e)
     {
-        if (e.Data.GetData(typeof(TextureGroupViewModel)) is not TextureGroupViewModel dragged
-            || DataContext is not MainViewModel vm)
+        if (e.Data.GetData(typeof(TextureGroupViewModel)) is not TextureGroupViewModel dragged)
+            return;
+        e.Handled = true;
+        if (DataContext is not MainViewModel vm)
             return;
 
         var list = vm.Textures.Groups;

@@ -62,6 +62,19 @@ namespace SteamBridge {
         property System::String^ Error;  // populated when Success is false
     };
 
+    /// <summary>Result of downloading an item through the Steam client. On success the item's content
+    /// sits in <see cref="InstallFolder"/> (Steam's local workshop cache); the caller copies it out to
+    /// the user's chosen folder.</summary>
+    public ref class BridgeDownloadResult
+    {
+    public:
+        property bool Success;
+        property System::String^ Error;          // populated when Success is false
+        property System::UInt64 PublishedFileId;
+        property System::String^ InstallFolder;  // Steam's local cache folder holding the content
+        property System::UInt64 SizeOnDisk;      // bytes on disk in InstallFolder
+    };
+
     /// <summary>The fields to write when creating or updating an item.</summary>
     public ref class BridgeEdit
     {
@@ -128,6 +141,12 @@ namespace SteamBridge {
         /// <summary>Permanently deletes the user's published Workshop item. Irreversible.
         /// Pass useUgc=true for games on the modern UGC Workshop (GMod).</summary>
         BridgeDeleteResult^ DeletePublishedFile(System::UInt64 publishedFileId, bool useUgc);
+
+        /// <summary>Downloads a Workshop item for the active app through the Steam client
+        /// (ISteamUGC::DownloadItem) and reports the local cache folder Steam placed it in. Only works
+        /// for the game this session is connected to and that the account owns; items belonging to
+        /// another app fail with a descriptive error. Progress is written to stderr as it downloads.</summary>
+        BridgeDownloadResult^ DownloadItem(System::UInt64 publishedFileId);
 
         /// <summary>Progress of the most recent <see cref="Publish"/> upload.</summary>
         BridgeProgress^ GetProgress();

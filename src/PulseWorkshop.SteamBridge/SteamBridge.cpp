@@ -734,5 +734,101 @@ BridgeProgress^ SteamWorkshop::GetProgress()
     return progress;
 }
 
+BridgeDownloadResult^ SteamWorkshop::DownloadItem(System::UInt64 publishedFileId)
+{
+    BridgeDownloadResult^ result = gcnew BridgeDownloadResult();
+    result->Success = false;
+    result->PublishedFileId = publishedFileId;
+
+    if (!_initialized)
+    {
+        result->Error = "Steam is not initialized.";
+        return result;
+    }
+    if (publishedFileId == 0)
+    {
+        result->Error = "No published file id supplied.";
+        return result;
+    }
+
+    ISteamUGC* ugc = SteamUGC();
+    PublishedFileId_t fileId = static_cast<PublishedFileId_t>(publishedFileId);
+
+    // Kick a download only when the item is not already installed (or Steam says it needs updating);
+    // a cached copy is copied straight out.
+    uint32 state = ugc->GetItemState(fileId);
+    bool installed = (state & k_EItemStateInstalled) != 0;
+    bool needsUpdate = (state & k_EItemStateNeedsUpdate) != 0;
+
+    if (!installed || needsUpdate)
+    {
+        // bHighPriority=true so Steam fetches it now rather than queueing behind other updates.
+        if (!ugc->DownloadItem(fileId, true))
+        {
+            result->Error = "DownloadItem failed - the item may belong to a different game than the "
+                            "one this session is connected to, or it may not exist.";
+            return result;
+        }
+
+        Console::Error->WriteLine(String::Format(
+            "[download] downloading item {0} via the Steam client...", publishedFileId));
+
+        const double mb = 1024.0 * 1024.0;
+        const int timeoutMs = 3600000; // 1h ceiling for very large items
+        int waited = 0;
+        int lastPercent = -1;
+        while (true)
+        {
+            SteamAPI_RunCallbacks();
+
+            state = ugc->GetItemState(fileId);
+            if ((state & k_EItemStateInstalled) &&
+                !(state & (k_EItemStateDownloading | k_EItemStateDownloadPending)))
+                break;
+
+            uint64 downloaded = 0, total = 0;
+            if (ugc->GetItemDownloadInfo(fileId, &downloaded, &total) && total > 0)
+            {
+                int percent = static_cast<int>((downloaded * 100) / total);
+                if (percent != lastPercent)
+                {
+                    lastPercent = percent;
+                    if (percent % 10 == 0)
+                        Console::Error->WriteLine(String::Format(
+                            "[download] {0:0.0} / {1:0.0} MB ({2}%)", downloaded / mb, total / mb, percent));
+                }
+            }
+
+            ::Sleep(200);
+            waited += 200;
+            if (waited >= timeoutMs)
+            {
+                result->Error = "Timed out downloading the item.";
+                return result;
+            }
+        }
+    }
+    else
+    {
+        Console::Error->WriteLine(String::Format(
+            "[download] item {0} is already in Steam's cache.", publishedFileId));
+    }
+
+    uint64 sizeOnDisk = 0;
+    char folder[2048] = { 0 };
+    uint32 timeStamp = 0;
+    if (!ugc->GetItemInstallInfo(fileId, &sizeOnDisk, folder, sizeof(folder), &timeStamp))
+    {
+        result->Error = "The item downloaded but its install location could not be read.";
+        return result;
+    }
+
+    result->InstallFolder = ToManaged(folder);
+    result->SizeOnDisk = sizeOnDisk;
+    result->Success = true;
+    Console::Error->WriteLine(String::Format("[download] ready at {0}", result->InstallFolder));
+    return result;
+}
+
 }
 }

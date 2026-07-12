@@ -58,6 +58,10 @@ public sealed class UiSettings
         Save();
     }
 
+    /// <summary>The folder the Workshop -> Download tab writes downloaded items into; null until the
+    /// user picks one (then a <c>downloads</c> subfolder under the app data root is offered as default).</summary>
+    public string? WorkshopDownloadFolder { get; set; }
+
     /// <summary>When true, the Unpack tab exports to a fixed location beside the opened package
     /// (a gameinfo mount -> an <c>unpack_files</c> subfolder next to gameinfo.txt; a bare .vpk/.gma
     /// -> a <c>&lt;package name&gt;_unpack</c> subfolder next to it) instead of prompting for a

@@ -65,6 +65,7 @@ internal sealed class HostServer
                 RequestKind.Publish => PipeJson.Serialize(HandlePublish(request.PayloadJson)),
                 RequestKind.Delete => PipeJson.Serialize(HandleDelete(request.PayloadJson)),
                 RequestKind.GetProgress => PipeJson.Serialize(HandleProgress()),
+                RequestKind.Download => PipeJson.Serialize(HandleDownload(request.PayloadJson)),
                 _ => null,
             };
 
@@ -205,6 +206,28 @@ internal sealed class HostServer
             ? $"Delete result: id={req.PublishedFileId} success=True"
             : $"Delete result: id={req.PublishedFileId} success=False error='{result.Error}'");
         return new DeleteResult { Success = result.Success, Error = result.Error };
+    }
+
+    private DownloadResult HandleDownload(string? payloadJson)
+    {
+        var req = PipeJson.Deserialize<DownloadRequest>(payloadJson ?? "null")
+            ?? throw new InvalidOperationException("Missing download payload.");
+
+        if (req.PublishedFileId == 0)
+            return new DownloadResult { Success = false, Error = "No published file id supplied." };
+
+        Log($"Download: id={req.PublishedFileId}");
+        var result = _workshop.DownloadItem(req.PublishedFileId);
+        Log(result.Success
+            ? $"Download result: id={req.PublishedFileId} success=True folder='{result.InstallFolder}'"
+            : $"Download result: id={req.PublishedFileId} success=False error='{result.Error}'");
+        return new DownloadResult
+        {
+            Success = result.Success,
+            Error = result.Error,
+            InstallFolder = result.InstallFolder,
+            SizeOnDisk = result.SizeOnDisk,
+        };
     }
 
     private ProgressResult HandleProgress()

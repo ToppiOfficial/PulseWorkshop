@@ -21,6 +21,8 @@ public enum RequestKind
     Publish,
     Delete,
     GetProgress,
+    /// <summary>Download an item for the active app through the Steam client (UGC fallback).</summary>
+    Download,
     Shutdown,
 }
 
@@ -92,6 +94,22 @@ public sealed class DeleteResult
 {
     public bool Success { get; init; }
     public string? Error { get; init; }
+}
+
+/// <summary>Asks the host to download an item for the active app via the Steam client.</summary>
+public sealed class DownloadRequest
+{
+    public ulong PublishedFileId { get; init; }
+}
+
+/// <summary>Where the Steam client placed a downloaded item (its local workshop cache folder). The
+/// App copies the content out of <see cref="InstallFolder"/> into the user's chosen destination.</summary>
+public sealed class DownloadResult
+{
+    public bool Success { get; init; }
+    public string? Error { get; init; }
+    public string? InstallFolder { get; init; }
+    public ulong SizeOnDisk { get; init; }
 }
 
 /// <summary>Progress of an in-flight upload, polled by the App while publishing.</summary>

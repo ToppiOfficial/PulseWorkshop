@@ -324,7 +324,13 @@
           </TabItem>
 
           <TabItem Header="Workshop" x:Name="WorkshopTab">
-            <DockPanel Margin="0,8,0,0">
+            <TabControl x:Name="WorkshopTabs" Background="Transparent" BorderThickness="0"
+                        Padding="0" Margin="0,8,0,0">
+
+            <!-- Upload: the user's own published items, drafts, templates, and the editor/publisher.
+                 Disabled while the Download tab borrows the Steam session for a UGC client fetch. -->
+            <TabItem Header="Upload" x:Name="WorkshopUploadTab">
+            <DockPanel IsEnabled="{Binding IsUploadInteractive}">
             <!-- Connection bar: game picker + connect (Workshop-only). -->
             <Border DockPanel.Dock="Top" Background="{StaticResource HeaderGradientBrush}"
                 BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
@@ -1005,6 +1011,116 @@
             </Grid>
             </Grid>
             </DockPanel>
+            </TabItem>
+
+            <!-- Download: paste a Workshop link/id and pull the item's content file via Steam's public
+                 web API + CDN (Crowbar-style: no login, no game ownership). Self-contained - it does
+                 not use the Steam session, so it works whether or not you are connected. -->
+            <TabItem Header="Download" x:Name="WorkshopDownloadTab" DataContext="{Binding Download}">
+              <DockPanel Margin="0,8,0,0">
+
+                <!-- Input + destination bar. -->
+                <Border DockPanel.Dock="Top" Background="{StaticResource HeaderGradientBrush}"
+                        BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
+                        CornerRadius="3" Padding="12,10" Margin="0,0,0,8">
+                  <StackPanel>
+                    <TextBlock Text="Workshop link or item id" Style="{StaticResource MutedText}" />
+                    <Grid Margin="0,6,0,0">
+                      <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                      </Grid.ColumnDefinitions>
+                      <TextBox Grid.Column="0" VerticalAlignment="Center"
+                               Text="{Binding DownloadInput, UpdateSourceTrigger=PropertyChanged}"
+                               Tag="Paste a Workshop URL or the numeric id...">
+                        <TextBox.InputBindings>
+                          <KeyBinding Key="Enter" Command="{Binding DownloadCommand}" />
+                        </TextBox.InputBindings>
+                      </TextBox>
+                      <Button Grid.Column="1" Content="Download" MinWidth="110" Margin="8,0,0,0"
+                              Style="{StaticResource AccentButton}" Command="{Binding DownloadCommand}"
+                              Visibility="{Binding IsDownloading, Converter={StaticResource BoolToVis}, ConverterParameter=invert}" />
+                      <Button Grid.Column="2" Content="Cancel" MinWidth="110" Margin="8,0,0,0"
+                              Style="{StaticResource DisconnectButton}" Command="{Binding CancelCommand}"
+                              Visibility="{Binding IsDownloading, Converter={StaticResource BoolToVis}}" />
+                    </Grid>
+
+                    <Grid Margin="0,10,0,0">
+                      <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                      </Grid.ColumnDefinitions>
+                      <TextBlock Grid.Column="0" Text="Save to" VerticalAlignment="Center"
+                                 Margin="0,0,8,0" Style="{StaticResource MutedText}" />
+                      <TextBox Grid.Column="1" VerticalAlignment="Center"
+                               Text="{Binding DownloadFolder, UpdateSourceTrigger=PropertyChanged}" />
+                      <Button Grid.Column="2" Content="Browse..." Padding="10,4" Margin="8,0,0,0"
+                              Command="{Binding BrowseFolderCommand}" />
+                      <Button Grid.Column="3" Content="Open" Padding="10,4" Margin="8,0,0,0"
+                              Command="{Binding OpenFolderCommand}"
+                              ToolTip="Open the destination folder in your file browser." />
+                    </Grid>
+                  </StackPanel>
+                </Border>
+
+                <!-- Status + progress. -->
+                <Grid DockPanel.Dock="Top" Margin="2,0,2,8">
+                  <TextBlock Text="{Binding StatusMessage}" Style="{StaticResource MutedText}"
+                             TextTrimming="CharacterEllipsis" Margin="0,0,0,4" />
+                  <ProgressBar Height="6" VerticalAlignment="Bottom" Minimum="0" Maximum="100"
+                               Value="{Binding Progress, Mode=OneWay}"
+                               Visibility="{Binding IsDownloading, Converter={StaticResource BoolToVis}}" />
+                </Grid>
+
+                <!-- Downloaded-this-session list. -->
+                <Border Background="{StaticResource PanelGradientBrush}"
+                        BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
+                        CornerRadius="3" Padding="8">
+                  <Grid>
+                    <TextBlock Text="Downloaded items appear here. Paste a link above to get started."
+                               Style="{StaticResource MutedText}" HorizontalAlignment="Center"
+                               VerticalAlignment="Center" TextWrapping="Wrap" MaxWidth="360"
+                               TextAlignment="Center"
+                               Visibility="{Binding Downloads.Count, Converter={StaticResource CountToVis}, ConverterParameter=invert}" />
+                    <ListBox ItemsSource="{Binding Downloads}" BorderThickness="0" Background="Transparent"
+                             ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                      <ListBox.ItemTemplate>
+                        <DataTemplate>
+                          <Grid Margin="2,6">
+                            <Grid.ColumnDefinitions>
+                              <ColumnDefinition Width="*" />
+                              <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                              <TextBlock Text="{Binding Title}" FontWeight="SemiBold"
+                                         TextTrimming="CharacterEllipsis" />
+                              <TextBlock Text="{Binding FilePath}" Style="{StaticResource MutedText}"
+                                         TextTrimming="CharacterEllipsis" />
+                            </StackPanel>
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                              <Button Content="Open in Unpack" Padding="10,4"
+                                      Style="{StaticResource AccentButton}"
+                                      Command="{Binding OpenInUnpackCommand}"
+                                      Visibility="{Binding CanOpenInUnpack, Converter={StaticResource BoolToVis}}"
+                                      ToolTip="Browse this .vpk/.gma in the Unpack tab." />
+                              <Button Content="Reveal" Padding="10,4" Margin="6,0,0,0"
+                                      Command="{Binding RevealCommand}"
+                                      ToolTip="Show this file in your file browser." />
+                            </StackPanel>
+                          </Grid>
+                        </DataTemplate>
+                      </ListBox.ItemTemplate>
+                    </ListBox>
+                  </Grid>
+                </Border>
+
+              </DockPanel>
+            </TabItem>
+
+            </TabControl>
           </TabItem>
 
           <!-- Unpack: browse + export .vpk / .gma archives, or a whole game via gameinfo.txt. -->
@@ -2291,6 +2407,10 @@
                             BorderThickness="1" CornerRadius="3"
                             Visibility="{Binding IsProjectOpen, Converter={StaticResource BoolToVis}, ConverterParameter=invert}">
                       <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                          <!-- Looping chibi mascot on the empty state (just for fun). -->
+                          <Image Height="120" Stretch="Uniform" HorizontalAlignment="Center" Margin="0,0,0,16"
+                                 RenderOptions.BitmapScalingMode="HighQuality"
+                                 local:AnimatedGif.SourceUri="pack://application:,,,/Assets/rak12_lying.gif" />
                           <TextBlock Text="Advanced package" FontSize="15" FontWeight="SemiBold"
                                      HorizontalAlignment="Center" />
                           <TextBlock Style="{StaticResource MutedText}" HorizontalAlignment="Center"
@@ -2874,6 +2994,17 @@
                                 Padding="16,8" Command="{Binding NewProjectCommand}" />
                         <Button Content="Open project..." Margin="8,0,0,0" Padding="16,8"
                                 Command="{Binding OpenProjectCommand}" />
+                    </StackPanel>
+
+                    <!-- Open recent: the last few texture projects. -->
+                    <StackPanel Margin="0,22,0,0" MaxWidth="440" HorizontalAlignment="Center"
+                                Visibility="{Binding RecentProjects.Count, Converter={StaticResource CountToVis}}">
+                        <TextBlock Text="Open recent" FontWeight="SemiBold"
+                                   HorizontalAlignment="Center" Margin="0,0,0,4" />
+                        <ScrollViewer MaxHeight="220" VerticalScrollBarVisibility="Auto">
+                            <ItemsControl ItemsSource="{Binding RecentProjects}"
+                                          ItemTemplate="{StaticResource RecentItemTemplate}" />
+                        </ScrollViewer>
                     </StackPanel>
                 </StackPanel>
               </Border>

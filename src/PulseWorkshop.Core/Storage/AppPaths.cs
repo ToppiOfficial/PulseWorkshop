@@ -14,6 +14,10 @@ public static class AppPaths
     /// <summary>Folder holding crash reports written by the App's global exception handlers.</summary>
     public static string CrashesDir { get; } = Path.Combine(Root, "crashes");
 
+    /// <summary>Default destination for the Workshop -> Download tab, used until the user picks their
+    /// own folder (see <see cref="UiSettings.WorkshopDownloadFolder"/>).</summary>
+    public static string DownloadsDir { get; } = Path.Combine(Root, "downloads");
+
     /// <summary>Single JSON file holding persisted UI preferences (see <see cref="UiSettings"/>).</summary>
     public static string SettingsFile { get; } = Path.Combine(Root, "settings.json");
 

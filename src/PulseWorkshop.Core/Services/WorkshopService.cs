@@ -94,6 +94,30 @@ public sealed class WorkshopService : IAsyncDisposable
         return PipeJson.Deserialize<DeleteResult>(response)!;
     }
 
+    /// <summary>
+    /// Downloads an item for the active game through the Steam client (the UGC fallback for items with
+    /// no direct web URL) and copies it out of Steam's local cache into <paramref name="destinationFolder"/>.
+    /// Requires the host to be connected to the game that owns the item. Progress streams to the shared
+    /// console via the host's stderr.
+    /// </summary>
+    public async Task<WorkshopDownloadResult> DownloadViaClientAsync(
+        ulong publishedFileId, string? title, string destinationFolder,
+        IProgress<double>? progress = null, CancellationToken ct = default)
+    {
+        var payload = PipeJson.Serialize(new DownloadRequest { PublishedFileId = publishedFileId });
+        var response = await SendAsync(RequestKind.Download, payload, ct).ConfigureAwait(false);
+        var result = PipeJson.Deserialize<DownloadResult>(response)!;
+
+        if (!result.Success || string.IsNullOrEmpty(result.InstallFolder))
+            return new WorkshopDownloadResult(false, null,
+                result.Error ?? "The Steam client could not download the item.", publishedFileId, title);
+
+        // The host is a local child process, so its install folder is directly readable here - copy the
+        // content out to the user's destination with the same "(id)" naming the web-API path uses.
+        return WorkshopDownloadService.CopyFromInstallFolder(
+            result.InstallFolder, destinationFolder, publishedFileId, title);
+    }
+
     public async Task<ProgressResult> GetProgressAsync(CancellationToken ct = default)
     {
         var response = await SendAsync(RequestKind.GetProgress, (string?)null, ct).ConfigureAwait(false);

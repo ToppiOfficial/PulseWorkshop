@@ -19,7 +19,7 @@ namespace PulseWorkshop.App.ViewModels;
 /// Top-level view model: game picker, connection status, and the three separate lists
 /// (Published / Drafts / Templates), plus the active editor.
 /// </summary>
-public sealed class MainViewModel : ObservableObject, IAsyncDisposable
+public sealed class MainViewModel : ObservableObject, IAsyncDisposable, IUgcClientDownloader
 {
     private readonly WorkshopService _service;
     private readonly DraftStore _drafts = new();
@@ -101,6 +101,15 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
         // tab, switching to it - same bridge the Compile tabs use for their compiled models.
         Unpack.ViewModelRequested += OnViewModelRequested;
 
+        // The Workshop -> Download tab uses Steam's public web API (no Steam session) for items with a
+        // direct URL; for UGC-only items (no URL) it falls back to the Steam client via this view model
+        // (IUgcClientDownloader), which needs the game owned + connected. Shares the console + settings.
+        Download = new WorkshopDownloadViewModel(Console, _settings, this);
+
+        // "Open in Unpack" on a downloaded .vpk/.gma opens it in the Unpack tab and switches to it -
+        // the same bridge the Package tabs' "View Package" uses.
+        Download.OpenInUnpackRequested += OnViewPackageRequested;
+
         // "View Package" on either Package tab opens the just-packed .vpk/.gma in the Unpack tab and
         // switches to it.
         Package.ViewPackageRequested += OnViewPackageRequested;
@@ -170,6 +179,10 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
 
     /// <summary>The Unpack panel (browse + export .vpk / .gma / gameinfo.txt mounts).</summary>
     public UnpackViewModel Unpack { get; }
+
+    /// <summary>The Workshop -> Download panel (paste a link/id, pull the item via Steam's public web
+    /// API - no login or game ownership needed, Crowbar-style).</summary>
+    public WorkshopDownloadViewModel Download { get; }
 
     public ObservableCollection<WorkshopItem> PublishedItems { get; } = new();
     public ObservableCollection<DraftListItemViewModel> Drafts { get; } = new();
@@ -453,6 +466,27 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
             }
         }
     }
+
+    // True only while the Download tab has "borrowed" the Steam session for a UGC client fetch (it may
+    // connect/switch/disconnect the shared host). The Upload tab binds IsEnabled to the inverse so its
+    // controls can't collide with the borrowed host/pipe for the duration; normal publishes don't set it.
+    private bool _isUploadLocked;
+
+    /// <summary>False while the Download tab is borrowing the Steam session; the Upload tab disables
+    /// itself against it (see <see cref="IsUploadInteractive"/>).</summary>
+    public bool IsUploadLocked
+    {
+        get => _isUploadLocked;
+        private set
+        {
+            if (SetField(ref _isUploadLocked, value))
+                OnPropertyChanged(nameof(IsUploadInteractive));
+        }
+    }
+
+    /// <summary>Drives the Upload tab's <c>IsEnabled</c>: false while a Download client-fetch is
+    /// borrowing the shared Steam session.</summary>
+    public bool IsUploadInteractive => !_isUploadLocked;
 
     public EditorViewModel? Editor
     {
@@ -1257,6 +1291,134 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable
     {
         NavigateToUnpack?.Invoke();
         _ = Unpack.OpenFromPathAsync(packagePath);
+    }
+
+    // --- IUgcClientDownloader: the Download tab's Steam-client fallback for UGC-only items ----------
+
+    // A collection download brackets its items with BeginBatch/EndBatchAsync so one borrowed session
+    // spans them all. These track that borrowed session; outside a batch they stay at their defaults.
+    private bool _downloadBatchActive;
+    private bool _downloadBatchConnected;
+    private uint? _downloadBatchOriginal;
+
+    /// <summary>Starts a collection batch: a session borrowed for a UGC child is held until
+    /// <see cref="IUgcClientDownloader.EndBatchAsync"/>, not restored per item.</summary>
+    void IUgcClientDownloader.BeginBatch()
+    {
+        _downloadBatchActive = true;
+        _downloadBatchConnected = false;
+        _downloadBatchOriginal = null;
+    }
+
+    /// <summary>Ends a collection batch, releasing any session borrowed during it once (reconnect to
+    /// the game we started on, or disconnect if we started disconnected). No-op for web-only collections.</summary>
+    async Task IUgcClientDownloader.EndBatchAsync()
+    {
+        _downloadBatchActive = false;
+        if (!_downloadBatchConnected)
+            return; // no UGC child borrowed a session
+
+        try
+        {
+            await RestoreConnectionAsync(_downloadBatchOriginal);
+        }
+        finally
+        {
+            _downloadBatchConnected = false;
+            IsBusy = false;
+            IsUploadLocked = false;
+        }
+    }
+
+    /// <summary>
+    /// Fetches a UGC-only item (no direct web URL, e.g. GMod) through the Steam client, auto-managing
+    /// the connection so the user never has to connect by hand. Standalone it connects (if needed),
+    /// downloads, and restores the prior state; inside a collection batch it connects once (on the first
+    /// UGC item) and leaves the session for <see cref="IUgcClientDownloader.EndBatchAsync"/> to release.
+    /// The Upload tab is locked (IsBusy + IsUploadLocked) for as long as the session is borrowed.
+    /// </summary>
+    async Task<WorkshopDownloadResult> IUgcClientDownloader.DownloadAsync(
+        ulong id, uint consumerAppId, string? title, string destinationFolder,
+        IProgress<double>? progress, CancellationToken ct)
+    {
+        if (consumerAppId == 0)
+            return new WorkshopDownloadResult(false, null,
+                "Could not determine which game this item belongs to.", id, title);
+
+        // Only games the tool knows how to host can be connected for a client download.
+        var game = KnownGames.FindByAppId(consumerAppId);
+        if (game is null)
+            return new WorkshopDownloadResult(false, null,
+                $"This item belongs to app {consumerAppId}, which isn't in the tool's game list, so the " +
+                "Steam client can't fetch it here.", id, title);
+
+        // Batch mode (collection): borrow the session once, hold it until the batch ends.
+        if (_downloadBatchActive)
+        {
+            if (!_downloadBatchConnected)
+            {
+                _downloadBatchOriginal = _service.ActiveAppId;
+                _downloadBatchConnected = true;
+                IsBusy = true;
+                IsUploadLocked = true;
+            }
+            if (await EnsureConnectedForDownloadAsync(game, consumerAppId, ct) is { } batchErr)
+                return new WorkshopDownloadResult(false, null, batchErr, id, title);
+            return await _service.DownloadViaClientAsync(id, title, destinationFolder, progress, ct);
+        }
+
+        // Standalone item: borrow, download, restore.
+        var original = _service.ActiveAppId;
+        IsBusy = true;
+        IsUploadLocked = true;
+        try
+        {
+            if (await EnsureConnectedForDownloadAsync(game, consumerAppId, ct) is { } err)
+                return new WorkshopDownloadResult(false, null, err, id, title);
+            return await _service.DownloadViaClientAsync(id, title, destinationFolder, progress, ct);
+        }
+        finally
+        {
+            // Only restore if we actually switched away from where we started.
+            if (original != consumerAppId)
+                await RestoreConnectionAsync(original);
+            IsBusy = false;
+            IsUploadLocked = false;
+        }
+    }
+
+    /// <summary>Connects the host to <paramref name="appId"/> if it isn't already, confirming the Steam
+    /// session hooked. Returns an error message on failure, or null on success.</summary>
+    private async Task<string?> EnsureConnectedForDownloadAsync(GameConfig game, uint appId, CancellationToken ct)
+    {
+        if (_service.ActiveAppId == appId)
+            return null; // already on the item's game (e.g. connected via the Upload tab)
+
+        Console.Append($"=== Download: connecting to {game.DisplayName} to fetch this item... ===");
+        await _service.SelectGameAsync(appId, ct);
+        var ping = await _service.PingAsync(ct);
+        if (!ping.SteamRunning)
+            return $"Couldn't hook a Steam session for {game.DisplayName} - make sure Steam is running " +
+                   "and the account owns the game.";
+        return null;
+    }
+
+    /// <summary>Restores the connection captured before a borrow: reconnect to <paramref name="original"/>,
+    /// or disconnect when it is null. Uses a non-cancellable token so a cancelled download still tidies up.</summary>
+    private async Task RestoreConnectionAsync(uint? original)
+    {
+        try
+        {
+            if (original is { } prev)
+                await _service.SelectGameAsync(prev, CancellationToken.None);
+            else
+                await _service.DisconnectAsync();
+            Console.Append("=== Download: restored the previous Steam connection state. ===");
+        }
+        catch (Exception ex)
+        {
+            Console.Append($"=== Download: could not restore the previous connection: {ex.Message} ===");
+        }
     }
 
     /// <summary>Raised to select (and thereby open) a specific draft row by id, e.g. a just-made clone.</summary>

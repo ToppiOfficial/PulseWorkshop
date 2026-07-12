@@ -53,6 +53,29 @@ public sealed class TexturesViewModel : ObservableObject
             LoadProject(_config.LastProjectPath, reopened);
         else
             OnProjectChanged();
+
+        RebuildRecentProjects();
+    }
+
+    /// <summary>The most-recently-opened texture projects that still exist on disk (newest first,
+    /// capped at <see cref="MaxRecentShown"/>), shown in the empty state's "Open recent" list.</summary>
+    public ObservableCollection<RecentItemViewModel> RecentProjects { get; } = new();
+
+    private const int MaxRecentShown = 8;
+
+    /// <summary>Rebuilds <see cref="RecentProjects"/> from the persisted list, dropping entries whose
+    /// file is gone. Called at startup and whenever the open project changes.</summary>
+    private void RebuildRecentProjects()
+    {
+        RecentProjects.Clear();
+        foreach (var path in _config.RecentProjects)
+        {
+            if (!File.Exists(path))
+                continue;
+            RecentProjects.Add(new RecentItemViewModel(path, p => OpenProjectFromPath(p)));
+            if (RecentProjects.Count >= MaxRecentShown)
+                break;
+        }
     }
 
     // --- Commands -----------------------------------------------------------------------------
@@ -156,6 +179,7 @@ public sealed class TexturesViewModel : ObservableObject
         _project = new TextureProject();
         _selectedGame = null;
         _config.Clear();
+        RebuildRecentProjects();
         OnProjectChanged();
     }
 
@@ -167,6 +191,7 @@ public sealed class TexturesViewModel : ObservableObject
             ? _gameSetup.Games.FirstOrDefault(g => g.Model.Id == id)
             : null;
         _config.Remember(path);
+        RebuildRecentProjects();
         OnProjectChanged();
     }
 

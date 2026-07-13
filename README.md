@@ -104,3 +104,15 @@ machine needs the **.NET 10 Desktop Runtime** installed - see [Prerequisites](#t
 
 Have **Steam running** and own the target game. Launch `PulseWorkshop.exe`, pick a game, and
 your published Workshop items load — no extra login prompt.
+
+## Artwork attribution
+
+> [!IMPORTANT]
+> The chibi artwork bundled with the App (`src/PulseWorkshop.App/Assets/ak12_move.gif`,
+> `src/PulseWorkshop.App/Assets/rak12_lying.gif`) belongs to **MICA Team** from **Girls' Frontline**.
+> It is included here for decoration only and is **not** covered by this project's GPL-3.0 license.
+>
+> This project is GPL-3.0, so you are free to fork, modify, and redistribute the code. However,
+> that permission does **not** extend to the copyrighted chibi artwork. If you fork, modify, or
+> distribute this project, **remove the copyrighted MICA Team / Girls' Frontline artwork first**
+> and replace it with your own assets.

@@ -100,6 +100,32 @@ namespace {
         }
     }
 
+    // True when the item's Steam install folder exists and actually contains content on disk. Steam can
+    // report an item as "installed" while its content folder is missing or empty (a pending manifest, a
+    // cleaned-up cache), so a real download must confirm files are present, not just trust the state bit.
+    bool InstallFolderHasFiles(ISteamUGC* ugc, PublishedFileId_t fileId)
+    {
+        uint64 sizeOnDisk = 0;
+        char folder[2048] = { 0 };
+        uint32 timeStamp = 0;
+        if (!ugc->GetItemInstallInfo(fileId, &sizeOnDisk, folder, sizeof(folder), &timeStamp) || folder[0] == '\0')
+            return false;
+
+        String^ path = ToManaged(folder);
+        try
+        {
+            // GetItemInstallInfo returns the containing folder; a single-file item may report the file itself.
+            if (System::IO::File::Exists(path))
+                return true;
+            return System::IO::Directory::Exists(path) &&
+                   System::IO::Directory::EnumerateFileSystemEntries(path)->GetEnumerator()->MoveNext();
+        }
+        catch (...)
+        {
+            return false;
+        }
+    }
+
 } // anonymous namespace
 
 SteamWorkshop::SteamWorkshop()
@@ -754,13 +780,16 @@ BridgeDownloadResult^ SteamWorkshop::DownloadItem(System::UInt64 publishedFileId
     ISteamUGC* ugc = SteamUGC();
     PublishedFileId_t fileId = static_cast<PublishedFileId_t>(publishedFileId);
 
-    // Kick a download only when the item is not already installed (or Steam says it needs updating);
-    // a cached copy is copied straight out.
+    // Kick a download unless we already have real files on disk. An item can report "installed" while a
+    // newer manifest is pending (state = Installed | NeedsUpdate) or while its content folder is empty
+    // (cleaned-up cache), so we trust files-on-disk, not the state bit alone.
     uint32 state = ugc->GetItemState(fileId);
-    bool installed = (state & k_EItemStateInstalled) != 0;
-    bool needsUpdate = (state & k_EItemStateNeedsUpdate) != 0;
+    bool needsDownload =
+        !(state & k_EItemStateInstalled) ||
+        (state & (k_EItemStateNeedsUpdate | k_EItemStateDownloading | k_EItemStateDownloadPending)) ||
+        !InstallFolderHasFiles(ugc, fileId);
 
-    if (!installed || needsUpdate)
+    if (needsDownload)
     {
         // bHighPriority=true so Steam fetches it now rather than queueing behind other updates.
         if (!ugc->DownloadItem(fileId, true))
@@ -782,8 +811,11 @@ BridgeDownloadResult^ SteamWorkshop::DownloadItem(System::UInt64 publishedFileId
             SteamAPI_RunCallbacks();
 
             state = ugc->GetItemState(fileId);
-            if ((state & k_EItemStateInstalled) &&
-                !(state & (k_EItemStateDownloading | k_EItemStateDownloadPending)))
+            // Done only when Steam is no longer downloading/updating AND the content is actually on disk.
+            // NeedsUpdate must be clear too: right after DownloadItem a stale-installed item still carries
+            // it (the update is merely queued), and breaking then would read an empty folder mid-commit.
+            bool busy = (state & (k_EItemStateDownloading | k_EItemStateDownloadPending | k_EItemStateNeedsUpdate)) != 0;
+            if ((state & k_EItemStateInstalled) && !busy && InstallFolderHasFiles(ugc, fileId))
                 break;
 
             uint64 downloaded = 0, total = 0;

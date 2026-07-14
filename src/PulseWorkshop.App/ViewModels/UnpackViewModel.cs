@@ -13,6 +13,9 @@ namespace PulseWorkshop.App.ViewModels;
 /// <summary>Which column the Unpack file list is sorted by (the clickable header ribbon).</summary>
 public enum UnpackSortColumn { Name, Type, Source, Size }
 
+/// <summary>Kind of hover preview a file row supports (see <see cref="UnpackFileViewModel.PreviewKind"/>).</summary>
+public enum UnpackPreviewKind { None, Image, Vtf }
+
 /// <summary>
 /// The Unpack tab: opens a packed Source archive (.vpk or .gma) - or a whole game via its
 /// gameinfo.txt, which mounts every VPK the SearchPaths reference in engine priority order
@@ -1084,6 +1087,30 @@ public sealed class UnpackViewModel : ObservableObject
         }
     }
 
+    /// <summary>Reads an entry's bytes into memory (for the hover preview, which decodes images and
+    /// .vtf textures directly rather than writing a temp file per hover). Capped at
+    /// <paramref name="maxBytes"/> - entries larger than that return null so a hover never pulls a
+    /// huge file into memory. Returns null on any read failure or cancellation.</summary>
+    public async Task<byte[]?> ReadEntryBytesAsync(PackedEntry entry, int maxBytes, CancellationToken ct)
+    {
+        if (_archive is null || entry.Size > maxBytes)
+            return null;
+        var archive = _archive;
+        try
+        {
+            return await Task.Run(() =>
+            {
+                using var ms = new MemoryStream(entry.Size > 0 ? (int)entry.Size : 0);
+                archive.Extract(entry, ms, ct);
+                return ms.ToArray();
+            }, ct);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     /// <summary>Reports that the shell could not open a previewed file (no handler, launch error).</summary>
     public void ReportPreviewOpenFailed(PackedEntry entry, Exception ex)
     {
@@ -1313,6 +1340,20 @@ public sealed class UnpackFileViewModel : ObservableObject
     public UnpackFolderViewModel? Folder { get; }
 
     public bool IsFolder => Folder is not null;
+
+    /// <summary>What kind of hover preview this row supports, from its extension: a raster image WPF
+    /// can decode, a .vtf texture (decoded by our lite reader), or none.</summary>
+    public UnpackPreviewKind PreviewKind => Folder is not null || Entry is null
+        ? UnpackPreviewKind.None
+        : Entry.Extension.ToLowerInvariant() switch
+        {
+            "png" or "jpg" or "jpeg" or "bmp" or "gif" or "tif" or "tiff" or "ico" => UnpackPreviewKind.Image,
+            "vtf" => UnpackPreviewKind.Vtf,
+            _ => UnpackPreviewKind.None,
+        };
+
+    /// <summary>True when hovering the row should show a thumbnail popup.</summary>
+    public bool CanPreview => PreviewKind != UnpackPreviewKind.None;
 
     /// <summary>File name in folder view; the scope-relative path in search results.</summary>
     public string DisplayName { get; }

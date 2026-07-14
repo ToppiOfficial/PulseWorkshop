@@ -7,7 +7,10 @@ namespace PulseWorkshop.Core.Services;
 /// <summary>What to fetch and where to put it (see <see cref="WorkshopDownloadService.DownloadAsync"/>).</summary>
 public sealed record WorkshopDownloadRequest(string UrlOrId, string DestinationFolder);
 
-/// <summary>The public details Steam returns for a Workshop item (the subset we use).</summary>
+/// <summary>The public details Steam returns for a Workshop item (the subset we use).
+/// <paramref name="Creator"/> is the author's SteamID64 (0 when unknown); <paramref name="TimeCreated"/>
+/// and <paramref name="TimeUpdated"/> are Unix seconds for the item's first upload and last update
+/// (0 when unknown).</summary>
 public sealed record WorkshopItemDetails(
     ulong PublishedFileId,
     string Title,
@@ -15,7 +18,10 @@ public sealed record WorkshopItemDetails(
     string? FileName,
     ulong FileSize,
     uint ConsumerAppId,
-    string? PreviewUrl);
+    string? PreviewUrl,
+    ulong Creator = 0,
+    long TimeCreated = 0,
+    long TimeUpdated = 0);
 
 /// <summary>A Workshop collection: its id, display name, and the ids of the items it contains.</summary>
 public sealed record WorkshopCollection(ulong Id, string Name, IReadOnlyList<ulong> ChildIds);
@@ -97,10 +103,26 @@ public sealed class WorkshopDownloadService
     }
 
     /// <summary>
-    /// Fetches the item's public details from Steam's web API. Returns null when the id is unknown or
-    /// the endpoint reports no result.
+    /// Fetches the item's public details. Tries Steam's legacy keyless web API first; if that endpoint
+    /// doesn't know the item (modern UGC-only games such as CS2 report it as "not found" there), falls
+    /// back to reading the item's app id and title off its public Workshop page so the Steam-client
+    /// download path can still fetch it. Returns null only when neither source can resolve the item.
     /// </summary>
     public async Task<WorkshopItemDetails?> GetDetailsAsync(ulong publishedFileId, CancellationToken ct = default)
+    {
+        var details = await GetDetailsFromWebApiAsync(publishedFileId, ct).ConfigureAwait(false);
+        if (details is not null)
+            return details;
+
+        // The legacy endpoint returns no record for modern UGC-only games (e.g. CS2 -> result 9). Scrape
+        // the public Workshop page to learn at least the consumer app id + title; the download then goes
+        // through the owning Steam client (see DownloadAsync's NeedsSteamClient path).
+        return await GetDetailsFromWorkshopPageAsync(publishedFileId, ct).ConfigureAwait(false);
+    }
+
+    /// <summary>Resolves the item via Steam's legacy keyless web API. Returns null when the endpoint
+    /// reports no result for the id.</summary>
+    private async Task<WorkshopItemDetails?> GetDetailsFromWebApiAsync(ulong publishedFileId, CancellationToken ct)
     {
         var form = new FormUrlEncodedContent(new Dictionary<string, string>
         {
@@ -132,7 +154,63 @@ public sealed class WorkshopDownloadService
             FileName: GetString(d, "filename"),
             FileSize: GetUInt64(d, "file_size", 0),
             ConsumerAppId: (uint)GetUInt64(d, "consumer_app_id", 0),
-            PreviewUrl: GetString(d, "preview_url"));
+            PreviewUrl: GetString(d, "preview_url"),
+            Creator: GetUInt64(d, "creator", 0),
+            TimeCreated: (long)GetUInt64(d, "time_created", 0),
+            TimeUpdated: (long)GetUInt64(d, "time_updated", 0));
+    }
+
+    /// <summary>
+    /// Reads the item's consumer app id (and, best-effort, its title and preview image) off its public
+    /// Workshop page - a keyless fallback for items the legacy web API doesn't serve (modern UGC-only
+    /// games like CS2). The returned details carry no <c>FileUrl</c>, so the caller routes the download
+    /// through the owning Steam client. Returns null when the page doesn't identify a game (the item is
+    /// private, removed, or the id is wrong).
+    /// </summary>
+    private async Task<WorkshopItemDetails?> GetDetailsFromWorkshopPageAsync(ulong id, CancellationToken ct)
+    {
+        var url = $"https://steamcommunity.com/sharedfiles/filedetails/?id={id.ToString(CultureInfo.InvariantCulture)}";
+        string html;
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get, url);
+            // Bypass the mature-content age gate so mature items resolve to their real page.
+            request.Headers.Add("Cookie", "wants_mature_content=1; birthtime=0; lastagecheckage=1-January-1970");
+            using var response = await Http.SendAsync(request, HttpCompletionOption.ResponseContentRead, ct)
+                .ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode)
+                return null;
+            html = await response.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch
+        {
+            return null;
+        }
+
+        var appMatch = Regex.Match(html, @"data-appid=""(\d+)""");
+        if (!appMatch.Success || !uint.TryParse(appMatch.Groups[1].Value, out var appId) || appId == 0)
+            return null; // page didn't identify a game -> treat the item as unresolved
+
+        var titleMatch = Regex.Match(html, @"<title>\s*Steam Workshop::(.*?)</title>", RegexOptions.Singleline);
+        var title = titleMatch.Success
+            ? System.Net.WebUtility.HtmlDecode(titleMatch.Groups[1].Value).Trim()
+            : string.Empty;
+
+        var ogMatch = Regex.Match(html, @"<meta\s+property=""og:image""\s+content=""([^""]+)""");
+        var preview = ogMatch.Success ? System.Net.WebUtility.HtmlDecode(ogMatch.Groups[1].Value) : null;
+
+        return new WorkshopItemDetails(
+            PublishedFileId: id,
+            Title: title,
+            FileUrl: null,          // no direct URL -> forces the Steam-client download path
+            FileName: null,
+            FileSize: 0,
+            ConsumerAppId: appId,
+            PreviewUrl: preview);
     }
 
     /// <summary>
@@ -195,9 +273,12 @@ public sealed class WorkshopDownloadService
     /// Resolves the item and streams its content file into <see cref="WorkshopDownloadRequest.DestinationFolder"/>.
     /// Progress (0..100) is reported through <paramref name="progress"/> and mirrored to <see cref="Output"/>.
     /// </summary>
+    /// <param name="knownDetails">Already-resolved details for this item (from a prior
+    /// <see cref="GetDetailsAsync"/> the caller made to show metadata); when supplied and matching the
+    /// requested id, the redundant resolve round-trip is skipped.</param>
     public async Task<WorkshopDownloadResult> DownloadAsync(
         WorkshopDownloadRequest req, IProgress<double>? progress = null,
-        bool overwrite = false, CancellationToken ct = default)
+        bool overwrite = false, CancellationToken ct = default, WorkshopItemDetails? knownDetails = null)
     {
         var id = ParseId(req.UrlOrId);
         if (id is null)
@@ -225,26 +306,29 @@ public sealed class WorkshopDownloadService
                 Path.GetFileNameWithoutExtension(already), AlreadyExisted: true);
         }
 
-        Log($"=== Download: resolving item {id.Value}... ===");
-
-        WorkshopItemDetails? details;
-        try
+        WorkshopItemDetails? details = knownDetails?.PublishedFileId == id.Value ? knownDetails : null;
+        if (details is null)
         {
-            details = await GetDetailsAsync(id.Value, ct).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException)
-        {
-            return Fail(id.Value, null, "Cancelled.");
-        }
-        catch (Exception ex)
-        {
-            return Fail(id.Value, null, $"Could not reach Steam to resolve the item: {ex.Message}");
+            Log($"=== Download: resolving item {id.Value}... ===");
+            try
+            {
+                details = await GetDetailsAsync(id.Value, ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                return Fail(id.Value, null, "Cancelled.");
+            }
+            catch (Exception ex)
+            {
+                return Fail(id.Value, null, $"Could not reach Steam to resolve the item: {ex.Message}");
+            }
         }
 
         if (details is null)
             return Fail(id.Value, null, $"Item {id.Value} was not found (it may be private, removed, or the id is wrong).");
 
-        Log($"Found \"{details.Title}\" (app {details.ConsumerAppId}, {FormatSize(details.FileSize)}).");
+        Log($"Found \"{details.Title}\" (app {details.ConsumerAppId}"
+            + (details.FileSize > 0 ? $", {FormatSize(details.FileSize)}" : "") + ").");
 
         if (string.IsNullOrWhiteSpace(details.FileUrl))
         {
@@ -469,7 +553,7 @@ public sealed class WorkshopDownloadService
         try { if (File.Exists(path)) File.Delete(path); } catch { /* best effort */ }
     }
 
-    internal static string FormatSize(ulong bytes)
+    public static string FormatSize(ulong bytes)
     {
         string[] units = ["B", "KB", "MB", "GB", "TB"];
         double size = bytes;

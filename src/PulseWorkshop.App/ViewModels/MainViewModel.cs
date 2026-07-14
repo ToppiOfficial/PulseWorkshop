@@ -435,6 +435,25 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable, IUgcClie
 
     public string KitsuneResourceUrl => "https://github.com/ToppiOfficial/KitsuneResource";
 
+    /// <summary>Author of Crowbar, the tool PulseWorkshop is inspired by (About tab).</summary>
+    public string CrowbarAuthorName => "ZeqMacaw";
+
+    /// <summary>Crowbar author's GitHub URL (opened from the About tab).</summary>
+    public string CrowbarAuthorGitHubUrl => "https://github.com/ZeqMacaw";
+
+    /// <summary>Crowbar author's avatar image, taken from the GitHub profile picture.</summary>
+    public string CrowbarAuthorAvatarUrl => "https://github.com/ZeqMacaw.png";
+
+    /// <summary>Crowbar project URL (opened from the About tab).</summary>
+    public string CrowbarUrl => "https://github.com/ZeqMacaw/Crowbar";
+
+    /// <summary>Paragraph crediting Crowbar as the inspiration for PulseWorkshop (About tab).</summary>
+    public string CrowbarCredit =>
+        "PulseWorkshop is inspired by Crowbar, ZeqMacaw's long-standing Source-engine model " +
+        "compiler/decompiler and Workshop tool. Crowbar's per-game Workshop handling and content " +
+        "workflow shaped much of how PulseWorkshop approaches the same problems. Huge thanks to Zeq " +
+        "for years of work on it.";
+
     /// <summary>App version (from the assembly version), shown as "v1.2.3" on the About tab.</summary>
     public string AppVersionDisplay
     {
@@ -1345,12 +1364,10 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable, IUgcClie
             return new WorkshopDownloadResult(false, null,
                 "Could not determine which game this item belongs to.", id, title);
 
-        // Only games the tool knows how to host can be connected for a client download.
-        var game = KnownGames.FindByAppId(consumerAppId);
-        if (game is null)
-            return new WorkshopDownloadResult(false, null,
-                $"This item belongs to app {consumerAppId}, which isn't in the tool's game list, so the " +
-                "Steam client can't fetch it here.", id, title);
+        // The client download path is game-agnostic: any app id works as long as the logged-in account
+        // owns the game (free titles such as CS2 included), so we don't require it to be in the tool's
+        // game list. A known game just supplies a friendlier display name for the log/errors.
+        var gameName = KnownGames.FindByAppId(consumerAppId)?.DisplayName ?? $"app {consumerAppId}";
 
         // Batch mode (collection): borrow the session once, hold it until the batch ends.
         if (_downloadBatchActive)
@@ -1362,7 +1379,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable, IUgcClie
                 IsBusy = true;
                 IsUploadLocked = true;
             }
-            if (await EnsureConnectedForDownloadAsync(game, consumerAppId, ct) is { } batchErr)
+            if (await EnsureConnectedForDownloadAsync(gameName, consumerAppId, ct) is { } batchErr)
                 return new WorkshopDownloadResult(false, null, batchErr, id, title);
             return await _service.DownloadViaClientAsync(id, title, destinationFolder, progress, ct);
         }
@@ -1373,7 +1390,7 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable, IUgcClie
         IsUploadLocked = true;
         try
         {
-            if (await EnsureConnectedForDownloadAsync(game, consumerAppId, ct) is { } err)
+            if (await EnsureConnectedForDownloadAsync(gameName, consumerAppId, ct) is { } err)
                 return new WorkshopDownloadResult(false, null, err, id, title);
             return await _service.DownloadViaClientAsync(id, title, destinationFolder, progress, ct);
         }
@@ -1389,16 +1406,16 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable, IUgcClie
 
     /// <summary>Connects the host to <paramref name="appId"/> if it isn't already, confirming the Steam
     /// session hooked. Returns an error message on failure, or null on success.</summary>
-    private async Task<string?> EnsureConnectedForDownloadAsync(GameConfig game, uint appId, CancellationToken ct)
+    private async Task<string?> EnsureConnectedForDownloadAsync(string gameName, uint appId, CancellationToken ct)
     {
         if (_service.ActiveAppId == appId)
             return null; // already on the item's game (e.g. connected via the Upload tab)
 
-        Console.Append($"=== Download: connecting to {game.DisplayName} to fetch this item... ===");
+        Console.Append($"=== Download: connecting to {gameName} to fetch this item... ===");
         await _service.SelectGameAsync(appId, ct);
         var ping = await _service.PingAsync(ct);
         if (!ping.SteamRunning)
-            return $"Couldn't hook a Steam session for {game.DisplayName} - make sure Steam is running " +
+            return $"Couldn't hook a Steam session for {gameName} - make sure Steam is running " +
                    "and the account owns the game.";
         return null;
     }

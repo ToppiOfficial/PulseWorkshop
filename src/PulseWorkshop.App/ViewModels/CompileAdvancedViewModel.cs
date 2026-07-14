@@ -457,6 +457,71 @@ public sealed class CompileAdvancedViewModel : ObservableObject
         RefreshCommands();
     }
 
+    /// <summary>Context-menu "Duplicate selected": clones every highlighted entry, inserting each copy
+    /// after its source, then moves the highlight onto the new copies. One row behaves like its Clone.</summary>
+    public void CloneSelectedEntries()
+    {
+        var selected = Entries.Where(e => e.IsSelected).ToList();
+        if (selected.Count == 0)
+            return;
+
+        var clones = new List<ModelEntryViewModel>();
+        foreach (var entry in selected)
+        {
+            var clone = entry.Model.Clone();
+            clone.Name = string.IsNullOrWhiteSpace(entry.Model.Name)
+                ? "Copy"
+                : entry.Model.Name + " (copy)";
+
+            var index = Entries.IndexOf(entry);
+            var vm = new ModelEntryViewModel(this, clone);
+            if (index >= 0)
+                Entries.Insert(index + 1, vm);
+            else
+                Entries.Add(vm);
+            clones.Add(vm);
+        }
+
+        // Move the selection onto the new copies (the SelectedItem binding follows to the first).
+        foreach (var entry in selected)
+            entry.IsSelected = false;
+        foreach (var clone in clones)
+            clone.IsSelected = true;
+        SelectedEntry = clones[^1];
+
+        Save();
+        RefreshCommands();
+    }
+
+    /// <summary>Context-menu "Delete selected": removes every highlighted entry after one confirmation.</summary>
+    public void RemoveSelectedEntries()
+    {
+        var selected = Entries.Where(e => e.IsSelected).ToList();
+        if (selected.Count == 0)
+            return;
+
+        var what = selected.Count == 1
+            ? (string.IsNullOrWhiteSpace(selected[0].Name) ? "this entry" : $"\"{selected[0].Name}\"")
+            : $"{selected.Count} entries";
+        var owner = Application.Current?.MainWindow;
+        var result = owner is not null
+            ? MessageBox.Show(owner, $"Remove {what} from the project?", "Remove entries",
+                MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No)
+            : MessageBox.Show($"Remove {what} from the project?", "Remove entries",
+                MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No);
+        if (result != MessageBoxResult.Yes)
+            return;
+
+        var firstIndex = Entries.IndexOf(selected[0]);
+        var selectionAffected = selected.Any(e => ReferenceEquals(SelectedEntry, e));
+        foreach (var entry in selected)
+            Entries.Remove(entry);
+        if (selectionAffected)
+            SelectedEntry = Entries.Count == 0 ? null : Entries[Math.Min(firstIndex, Entries.Count - 1)];
+        Save();
+        RefreshCommands();
+    }
+
     // --- Compile ------------------------------------------------------------------------------
 
     /// <summary>Requests cancellation of the in-progress compile (single or batch).</summary>

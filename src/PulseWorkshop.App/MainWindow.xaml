@@ -1066,13 +1066,18 @@
                   </StackPanel>
                 </Border>
 
-                <!-- Status + progress. -->
+                <!-- Overall status line (each entry below carries its own progress bar) + Clear list. -->
                 <Grid DockPanel.Dock="Top" Margin="2,0,2,8">
-                  <TextBlock Text="{Binding StatusMessage}" Style="{StaticResource MutedText}"
-                             TextTrimming="CharacterEllipsis" Margin="0,0,0,4" />
-                  <ProgressBar Height="6" VerticalAlignment="Bottom" Minimum="0" Maximum="100"
-                               Value="{Binding Progress, Mode=OneWay}"
-                               Visibility="{Binding IsDownloading, Converter={StaticResource BoolToVis}}" />
+                  <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                  </Grid.ColumnDefinitions>
+                  <TextBlock Grid.Column="0" Text="{Binding StatusMessage}" VerticalAlignment="Center"
+                             Style="{StaticResource MutedText}" TextTrimming="CharacterEllipsis" />
+                  <Button Grid.Column="1" Content="Clear list" Padding="10,4" Margin="8,0,0,0"
+                          Command="{Binding ClearListCommand}"
+                          Visibility="{Binding Downloads.Count, Converter={StaticResource CountToVis}}"
+                          ToolTip="Remove finished entries from the list. The downloaded files are left on disk." />
                 </Grid>
 
                 <!-- Downloaded-this-session list. -->
@@ -1086,31 +1091,134 @@
                                TextAlignment="Center"
                                Visibility="{Binding Downloads.Count, Converter={StaticResource CountToVis}, ConverterParameter=invert}" />
                     <ListBox ItemsSource="{Binding Downloads}" BorderThickness="0" Background="Transparent"
+                             HorizontalContentAlignment="Stretch"
                              ScrollViewer.HorizontalScrollBarVisibility="Disabled">
                       <ListBox.ItemTemplate>
                         <DataTemplate>
-                          <Grid Margin="2,6">
-                            <Grid.ColumnDefinitions>
-                              <ColumnDefinition Width="*" />
-                              <ColumnDefinition Width="Auto" />
-                            </Grid.ColumnDefinitions>
-                            <StackPanel Grid.Column="0" VerticalAlignment="Center">
-                              <TextBlock Text="{Binding Title}" FontWeight="SemiBold"
-                                         TextTrimming="CharacterEllipsis" />
-                              <TextBlock Text="{Binding FilePath}" Style="{StaticResource MutedText}"
-                                         TextTrimming="CharacterEllipsis" />
-                            </StackPanel>
-                            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                              <Button Content="Open in Unpack" Padding="10,4"
-                                      Style="{StaticResource AccentButton}"
-                                      Command="{Binding OpenInUnpackCommand}"
-                                      Visibility="{Binding CanOpenInUnpack, Converter={StaticResource BoolToVis}}"
-                                      ToolTip="Browse this .vpk/.gma in the Unpack tab." />
-                              <Button Content="Reveal" Padding="10,4" Margin="6,0,0,0"
-                                      Command="{Binding RevealCommand}"
-                                      ToolTip="Show this file in your file browser." />
-                            </StackPanel>
-                          </Grid>
+                          <!-- One download entry: title + Workshop-page link + actions, a metadata row
+                               (id / author / uploaded / updated / size), then its own progress bar or,
+                               when finished, the file path. -->
+                          <Border Background="{StaticResource PanelAltBrush}"
+                                  BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
+                                  CornerRadius="4" Padding="10,8" Margin="0,3">
+                            <Grid>
+                              <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                              </Grid.ColumnDefinitions>
+
+                              <!-- Item preview image, fetched from Steam. Uniform so the whole image is
+                                   visible (never cropped); a neutral square panel shows behind it until it
+                                   loads / if the item has no preview. -->
+                              <Border Grid.Column="0" Width="92" Height="92" CornerRadius="3"
+                                      Background="{StaticResource PanelGradientBrush}"
+                                      BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
+                                      VerticalAlignment="Top">
+                                <Border.Clip>
+                                  <RectangleGeometry Rect="0,0,92,92" RadiusX="3" RadiusY="3" />
+                                </Border.Clip>
+                                <Image Stretch="Uniform" RenderOptions.BitmapScalingMode="HighQuality"
+                                       Source="{Binding PreviewUrl, TargetNullValue={x:Null}}"
+                                       Visibility="{Binding PreviewUrl, Converter={StaticResource StringToVis}}" />
+                              </Border>
+
+                              <!-- Text content column. -->
+                              <Grid Grid.Column="1" Margin="10,0,0,0">
+                              <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                              </Grid.ColumnDefinitions>
+                              <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                              </Grid.RowDefinitions>
+
+                              <!-- Title, itself a link to the item's Steam Workshop page. -->
+                              <TextBlock Grid.Row="0" Grid.Column="0" TextTrimming="CharacterEllipsis"
+                                         VerticalAlignment="Center">
+                                <Hyperlink Command="{Binding OpenWorkshopPageCommand}"
+                                           ToolTip="Open this item's Steam Workshop page."><Run
+                                     Text="{Binding Title, Mode=OneWay}" FontWeight="SemiBold" /></Hyperlink>
+                              </TextBlock>
+
+                              <!-- Right-side actions: Cancel while active; Open-in-Unpack / Reveal once done. -->
+                              <StackPanel Grid.Row="0" Grid.Column="1" Orientation="Horizontal"
+                                          VerticalAlignment="Center">
+                                <Button Content="Cancel" Padding="10,4"
+                                        Style="{StaticResource DisconnectButton}"
+                                        Command="{Binding CancelCommand}"
+                                        Visibility="{Binding CanCancel, Converter={StaticResource BoolToVis}}"
+                                        ToolTip="Cancel just this download." />
+                                <Button Content="Open in Unpack" Padding="10,4"
+                                        Style="{StaticResource AccentButton}"
+                                        Command="{Binding OpenInUnpackCommand}"
+                                        Visibility="{Binding CanOpenInUnpack, Converter={StaticResource BoolToVis}}"
+                                        ToolTip="Browse this .vpk/.gma in the Unpack tab." />
+                                <Button Content="Reveal" Padding="10,4" Margin="6,0,0,0"
+                                        Command="{Binding RevealCommand}"
+                                        Visibility="{Binding IsDone, Converter={StaticResource BoolToVis}}"
+                                        ToolTip="Show this file in your file browser." />
+                                <Button Style="{StaticResource TrashButton}" Margin="6,0,0,0"
+                                        Command="{Binding RemoveCommand}"
+                                        Visibility="{Binding CanRemove, Converter={StaticResource BoolToVis}}"
+                                        ToolTip="Remove this entry from the list. The downloaded files are left on disk." />
+                              </StackPanel>
+
+                              <!-- Metadata: id, author (workshop profile), upload + update dates, size.
+                                   The title itself already links to the item's Workshop page. -->
+                              <WrapPanel Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="2" Margin="0,4,0,0">
+                                <TextBlock Text="{Binding IdText}" Style="{StaticResource MutedText}"
+                                           Margin="0,0,10,0" />
+                                <TextBlock Margin="0,0,10,0"
+                                           Visibility="{Binding OwnerText, Converter={StaticResource StringToVis}}">
+                                  <Run Text="by " Foreground="{StaticResource MutedTextBrush}" /><Hyperlink
+                                       Command="{Binding OpenAuthorProfileCommand}"
+                                       ToolTip="Open the author's Steam Workshop profile."><Run Text="{Binding OwnerText, Mode=OneWay}" /></Hyperlink>
+                                </TextBlock>
+                                <TextBlock Style="{StaticResource MutedText}" Margin="0,0,10,0"
+                                           Visibility="{Binding UploadedText, Converter={StaticResource StringToVis}}">
+                                  <Run Text="Uploaded " /><Run Text="{Binding UploadedText, Mode=OneWay}" />
+                                </TextBlock>
+                                <TextBlock Style="{StaticResource MutedText}" Margin="0,0,10,0"
+                                           Visibility="{Binding UpdatedText, Converter={StaticResource StringToVis}}">
+                                  <Run Text="Updated " /><Run Text="{Binding UpdatedText, Mode=OneWay}" />
+                                </TextBlock>
+                                <TextBlock Text="{Binding SizeText}" Style="{StaticResource MutedText}"
+                                           Visibility="{Binding SizeText, Converter={StaticResource StringToVis}}" />
+                              </WrapPanel>
+
+                              <!-- Live progress (while active) OR the written file path (once done). -->
+                              <Grid Grid.Row="2" Grid.Column="0" Grid.ColumnSpan="2" Margin="0,6,0,0">
+                                <Grid Visibility="{Binding ShowProgress, Converter={StaticResource BoolToVis}}">
+                                  <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                  </Grid.ColumnDefinitions>
+                                  <ProgressBar Grid.Column="0" Height="6" VerticalAlignment="Center"
+                                               Minimum="0" Maximum="100" Value="{Binding Progress, Mode=OneWay}"
+                                               IsIndeterminate="{Binding IsIndeterminate}" />
+                                  <TextBlock Grid.Column="1" Text="{Binding StatusText}" Margin="8,0,0,0"
+                                             Style="{StaticResource MutedText}" VerticalAlignment="Center" />
+                                </Grid>
+                                <!-- Done: a green "Downloaded" tag beside the file it was written to. -->
+                                <StackPanel Orientation="Horizontal"
+                                            Visibility="{Binding IsDone, Converter={StaticResource BoolToVis}}">
+                                  <Border Background="#2E4A34" CornerRadius="3" Padding="6,1"
+                                          Margin="0,0,8,0" VerticalAlignment="Center">
+                                    <TextBlock Text="{Binding StatusText}" Foreground="#8FD69A"
+                                               FontWeight="SemiBold" FontSize="11" />
+                                  </Border>
+                                  <TextBlock Text="{Binding FilePath}" Style="{StaticResource MutedText}"
+                                             TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+                                </StackPanel>
+                                <TextBlock Text="{Binding StatusText}" Style="{StaticResource MutedText}"
+                                           TextWrapping="Wrap"
+                                           Visibility="{Binding IsFailed, Converter={StaticResource BoolToVis}}" />
+                              </Grid>
+                              </Grid>
+                            </Grid>
+                          </Border>
                         </DataTemplate>
                       </ListBox.ItemTemplate>
                     </ListBox>
@@ -1363,6 +1471,17 @@
                                 <Style TargetType="ListBoxItem" BasedOn="{StaticResource {x:Type ListBoxItem}}">
                                     <Setter Property="IsSelected" Value="{Binding IsSelected, Mode=TwoWay}" />
                                     <Setter Property="ToolTip" Value="{Binding ToolTipText}" />
+                                    <!-- Hover preview: image and .vtf rows pop a thumbnail (see code-behind). -->
+                                    <EventSetter Event="MouseEnter" Handler="UnpackRow_MouseEnter" />
+                                    <EventSetter Event="MouseLeave" Handler="UnpackRow_MouseLeave" />
+                                    <Style.Triggers>
+                                        <!-- Previewable rows show the thumbnail popup instead of the text
+                                             tooltip (the popup carries the same path/size info) so the two
+                                             don't stack on top of each other. -->
+                                        <DataTrigger Binding="{Binding CanPreview}" Value="True">
+                                            <Setter Property="ToolTip" Value="{x:Null}" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
                                 </Style>
                             </ListBox.ItemContainerStyle>
                             <ListBox.ItemTemplate>
@@ -1414,6 +1533,57 @@
                                 </DataTemplate>
                             </ListBox.ItemTemplate>
                         </ListBox>
+
+                        <!-- Hover thumbnail for image / .vtf rows. Placed relative to the file list and
+                             offset from the cursor in code-behind; not hit-testable so it never steals
+                             the hover from the row underneath. -->
+                        <Popup x:Name="UnpackPreviewPopup" Grid.Row="3" AllowsTransparency="True"
+                               Placement="Relative" PlacementTarget="{Binding ElementName=UnpackFiles}"
+                               IsHitTestVisible="False" StaysOpen="True">
+                            <Border Background="{StaticResource PanelBrush}" BorderBrush="{StaticResource BorderBrush}"
+                                    BorderThickness="1" CornerRadius="4" Padding="6" Margin="8"
+                                    SnapsToDevicePixels="True">
+                                <Border.Effect>
+                                    <DropShadowEffect BlurRadius="10" ShadowDepth="2" Opacity="0.5" Color="#000000" />
+                                </Border.Effect>
+                                <StackPanel MaxWidth="272">
+                                    <TextBlock x:Name="UnpackPreviewPath" Foreground="{StaticResource TextBrush}"
+                                               FontSize="11" TextTrimming="CharacterEllipsis"
+                                               HorizontalAlignment="Center" Margin="0,0,0,5" />
+                                    <!-- Checkerboard so transparent textures read against the panel. -->
+                                    <Border Width="256" Height="256" HorizontalAlignment="Center"
+                                            CornerRadius="2">
+                                        <Border.Background>
+                                            <DrawingBrush TileMode="Tile" Viewport="0,0,16,16"
+                                                          ViewportUnits="Absolute" Stretch="None">
+                                                <DrawingBrush.Drawing>
+                                                    <DrawingGroup>
+                                                        <GeometryDrawing Brush="#20FFFFFF">
+                                                            <GeometryDrawing.Geometry>
+                                                                <RectangleGeometry Rect="0,0,16,16" />
+                                                            </GeometryDrawing.Geometry>
+                                                        </GeometryDrawing>
+                                                        <GeometryDrawing Brush="#08FFFFFF">
+                                                            <GeometryDrawing.Geometry>
+                                                                <GeometryGroup>
+                                                                    <RectangleGeometry Rect="0,0,8,8" />
+                                                                    <RectangleGeometry Rect="8,8,8,8" />
+                                                                </GeometryGroup>
+                                                            </GeometryDrawing.Geometry>
+                                                        </GeometryDrawing>
+                                                    </DrawingGroup>
+                                                </DrawingBrush.Drawing>
+                                            </DrawingBrush>
+                                        </Border.Background>
+                                        <Image x:Name="UnpackPreviewImage" Stretch="Uniform"
+                                               RenderOptions.BitmapScalingMode="HighQuality"
+                                               MaxWidth="256" MaxHeight="256" />
+                                    </Border>
+                                    <TextBlock x:Name="UnpackPreviewCaption" Style="{StaticResource MutedText}"
+                                               HorizontalAlignment="Center" Margin="0,5,0,0" FontSize="11" />
+                                </StackPanel>
+                            </Border>
+                        </Popup>
                     </Grid>
                   </Grid>
                 </Border>
@@ -1758,26 +1928,11 @@
                                           DisplayMemberPath="DisplayName" />
 
                                 <TextBlock Grid.Row="1" Text="Global" Style="{StaticResource CompileFieldLabel}" />
-                                <!-- Multi-line, user-resizable: drag the handle below to set its height. -->
-                                <StackPanel Grid.Row="1" Grid.Column="1">
-                                    <TextBox x:Name="GlobalCommandBox" Height="50" MinHeight="34"
-                                             Text="{Binding GlobalCommand, UpdateSourceTrigger=PropertyChanged}"
-                                             AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
-                                             VerticalContentAlignment="Top"
-                                             Tag="studiomdl options shared by every entry. You can use line breaks to organize them - they're flattened to spaces when compiling." />
-                                    <Thumb Height="9" Cursor="SizeNS" HorizontalAlignment="Stretch"
-                                           DragDelta="GlobalCommandResize_DragDelta" ToolTip="Drag to resize.">
-                                        <Thumb.Template>
-                                            <ControlTemplate TargetType="Thumb">
-                                                <Border Background="Transparent" Padding="0,3">
-                                                    <Border Height="2" Width="44" CornerRadius="1"
-                                                            HorizontalAlignment="Center"
-                                                            Background="{StaticResource BorderBrush}" />
-                                                </Border>
-                                            </ControlTemplate>
-                                        </Thumb.Template>
-                                    </Thumb>
-                                </StackPanel>
+                                <!-- Single-line: studiomdl options shared by every entry. -->
+                                <TextBox x:Name="GlobalCommandBox" Grid.Row="1" Grid.Column="1"
+                                         Text="{Binding GlobalCommand, UpdateSourceTrigger=PropertyChanged}"
+                                         VerticalContentAlignment="Center"
+                                         Tag="studiomdl options shared by every entry." />
                             </Grid>
 
                             <!-- Two side-by-side option groups (they share the wide row instead of
@@ -1911,6 +2066,7 @@
                                              SelectedItem="{Binding SelectedEntry}" SelectionMode="Extended"
                                              HorizontalContentAlignment="Stretch" Background="Transparent" BorderThickness="0"
                                              PreviewMouseLeftButtonDown="AdvancedEntries_PreviewMouseLeftButtonDown"
+                                             PreviewMouseRightButtonDown="AdvancedEntries_PreviewMouseRightButtonDown"
                                              DragOver="AdvancedEntries_DragOver" Drop="AdvancedEntries_Drop" AllowDrop="True"
                                              ScrollViewer.HorizontalScrollBarVisibility="Disabled">
                                         <!-- Highlighting a row (Ctrl/Shift for several) feeds "Compile selected". -->
@@ -1922,6 +2078,19 @@
                                         <ListBox.ItemTemplate>
                                             <DataTemplate>
                                                 <Grid Margin="2,8">
+                                                    <!-- Per-row context menu: batch ops over every highlighted
+                                                         row (Ctrl/Shift multi-select). Defined in the template
+                                                         with Click handlers, mirroring the Unpack list. -->
+                                                    <Grid.ContextMenu>
+                                                        <ContextMenu Style="{StaticResource DarkContextMenu}">
+                                                            <MenuItem Header="Duplicate selected" Style="{StaticResource DarkMenuItem}"
+                                                                      Click="AdvancedEntriesDuplicateSelected_Click"
+                                                                      ToolTip="Duplicate every highlighted entry." />
+                                                            <MenuItem Header="Delete selected" Style="{StaticResource DarkMenuItem}"
+                                                                      Click="AdvancedEntriesDeleteSelected_Click"
+                                                                      ToolTip="Remove every highlighted entry from the project." />
+                                                        </ContextMenu>
+                                                    </Grid.ContextMenu>
                                                     <Grid.ColumnDefinitions>
                                                         <ColumnDefinition Width="Auto" />
                                                         <ColumnDefinition Width="Auto" />
@@ -2521,6 +2690,7 @@
                                              SelectedItem="{Binding SelectedEntry}" SelectionMode="Extended"
                                              HorizontalContentAlignment="Stretch" Background="Transparent" BorderThickness="0"
                                              PreviewMouseLeftButtonDown="PackageEntries_PreviewMouseLeftButtonDown"
+                                             PreviewMouseRightButtonDown="PackageEntries_PreviewMouseRightButtonDown"
                                              DragOver="PackageEntries_DragOver" Drop="PackageEntries_Drop" AllowDrop="True"
                                              ScrollViewer.HorizontalScrollBarVisibility="Disabled">
                                         <!-- Highlighting a row (Ctrl/Shift for several) feeds "Package selected". -->
@@ -2532,6 +2702,19 @@
                                         <ListBox.ItemTemplate>
                                             <DataTemplate>
                                                 <Grid Margin="2,8">
+                                                    <!-- Per-row context menu: batch ops over every highlighted
+                                                         row (Ctrl/Shift multi-select). Defined in the template
+                                                         with Click handlers, mirroring the Unpack list. -->
+                                                    <Grid.ContextMenu>
+                                                        <ContextMenu Style="{StaticResource DarkContextMenu}">
+                                                            <MenuItem Header="Duplicate selected" Style="{StaticResource DarkMenuItem}"
+                                                                      Click="PackageEntriesDuplicateSelected_Click"
+                                                                      ToolTip="Duplicate every highlighted entry." />
+                                                            <MenuItem Header="Delete selected" Style="{StaticResource DarkMenuItem}"
+                                                                      Click="PackageEntriesDeleteSelected_Click"
+                                                                      ToolTip="Remove every highlighted entry from the project." />
+                                                        </ContextMenu>
+                                                    </Grid.ContextMenu>
                                                     <Grid.ColumnDefinitions>
                                                         <ColumnDefinition Width="Auto" />
                                                         <ColumnDefinition Width="Auto" />
@@ -3130,6 +3313,7 @@
                                        SelectedItem="{Binding SelectedGroup}" SelectionMode="Extended"
                                        HorizontalContentAlignment="Stretch" Background="Transparent" BorderThickness="0"
                                        PreviewMouseLeftButtonDown="TextureGroups_PreviewMouseLeftButtonDown"
+                                       PreviewMouseRightButtonDown="TextureGroups_PreviewMouseRightButtonDown"
                                        DragOver="TextureGroups_DragOver" Drop="TextureGroups_Drop" AllowDrop="True"
                                        ScrollViewer.HorizontalScrollBarVisibility="Disabled">
                                   <ListBox.ItemContainerStyle>
@@ -3140,6 +3324,19 @@
                                   <ListBox.ItemTemplate>
                                       <DataTemplate>
                                           <Grid Margin="2,8">
+                                              <!-- Per-row context menu: batch ops over every highlighted
+                                                   row (Ctrl/Shift multi-select). Defined in the template
+                                                   with Click handlers, mirroring the Unpack list. -->
+                                              <Grid.ContextMenu>
+                                                  <ContextMenu Style="{StaticResource DarkContextMenu}">
+                                                      <MenuItem Header="Duplicate selected" Style="{StaticResource DarkMenuItem}"
+                                                                Click="TextureGroupsDuplicateSelected_Click"
+                                                                ToolTip="Duplicate every highlighted group." />
+                                                      <MenuItem Header="Delete selected" Style="{StaticResource DarkMenuItem}"
+                                                                Click="TextureGroupsDeleteSelected_Click"
+                                                                ToolTip="Remove every highlighted group from the project." />
+                                                  </ContextMenu>
+                                              </Grid.ContextMenu>
                                               <Grid.ColumnDefinitions>
                                                   <ColumnDefinition Width="Auto" />
                                                   <ColumnDefinition Width="Auto" />
@@ -3494,6 +3691,7 @@
                                            FontWeight="SemiBold" HorizontalAlignment="Center"
                                            VerticalAlignment="Center" />
                                 <Image Stretch="UniformToFill"
+                                       RenderOptions.BitmapScalingMode="HighQuality"
                                        Source="{Binding DeveloperAvatarUrl, TargetNullValue={x:Null}}"
                                        Visibility="{Binding DeveloperAvatarUrl, Converter={StaticResource StringToVis}}" />
                             </Grid>
@@ -3527,6 +3725,49 @@
                     <Button Content="KitsuneResource" HorizontalAlignment="Left" Margin="0,10,0,0"
                             Padding="12,4" Click="OpenKitsuneResource_Click"
                             ToolTip="Open the predecessor project, KitsuneResource, on GitHub." />
+
+                    <!-- Divider -->
+                    <Border Height="1" Background="{StaticResource BorderBrush}" Margin="0,22,0,18" />
+
+                    <!-- Inspired by Crowbar: credit paragraph + ZeqMacaw's profile card. -->
+                    <TextBlock Text="Inspired by Crowbar" FontSize="20" FontWeight="SemiBold" />
+                    <TextBlock TextWrapping="Wrap" Foreground="{StaticResource TextBrush}"
+                               Margin="0,14,0,0" LineHeight="20">
+                        <Run Text="{Binding CrowbarCredit, Mode=OneWay}" />
+                        <LineBreak /><LineBreak />
+                        <Hyperlink Click="OpenCrowbar_Click"
+                                   ToolTip="Open Crowbar on GitHub.">https://github.com/ZeqMacaw/Crowbar</Hyperlink>
+                    </TextBlock>
+
+                    <!-- ZeqMacaw's profile card (same layout as the developer card above). -->
+                    <StackPanel Orientation="Horizontal" Margin="0,18,0,0">
+                        <Border Width="72" Height="72" CornerRadius="36"
+                                Background="{StaticResource PanelAltBrush}"
+                                BorderBrush="{StaticResource BorderBrush}" BorderThickness="1">
+                            <Border.Clip>
+                                <EllipseGeometry Center="36,36" RadiusX="36" RadiusY="36" />
+                            </Border.Clip>
+                            <Grid>
+                                <!-- Placeholder initial behind the image (shows until/if the avatar loads). -->
+                                <TextBlock Text="{Binding CrowbarAuthorName, Converter={StaticResource FirstLetter}}"
+                                           Foreground="{StaticResource MutedTextBrush}" FontSize="30"
+                                           FontWeight="SemiBold" HorizontalAlignment="Center"
+                                           VerticalAlignment="Center" />
+                                <Image Stretch="UniformToFill"
+                                       RenderOptions.BitmapScalingMode="HighQuality"
+                                       Source="{Binding CrowbarAuthorAvatarUrl, TargetNullValue={x:Null}}"
+                                       Visibility="{Binding CrowbarAuthorAvatarUrl, Converter={StaticResource StringToVis}}" />
+                            </Grid>
+                        </Border>
+                        <StackPanel Margin="18,0,0,0" VerticalAlignment="Center">
+                            <TextBlock Text="Crowbar author" Style="{StaticResource MutedText}" />
+                            <TextBlock Text="{Binding CrowbarAuthorName}" FontSize="22" FontWeight="SemiBold"
+                                       Margin="0,2,0,0" />
+                            <Button Content="GitHub" HorizontalAlignment="Left" Margin="0,10,0,0"
+                                    Padding="12,4" Click="OpenCrowbarAuthorGitHub_Click"
+                                    ToolTip="Open ZeqMacaw's GitHub." />
+                        </StackPanel>
+                    </StackPanel>
                 </StackPanel>
               </Border>
             </ScrollViewer>

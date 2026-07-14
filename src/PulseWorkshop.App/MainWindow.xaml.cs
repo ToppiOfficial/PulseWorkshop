@@ -4,11 +4,12 @@ using System.IO;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Controls.Primitives;
 using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
+using System.Windows.Media.Imaging;
+using System.Windows.Threading;
 using Microsoft.Win32;
 using PulseWorkshop.App.ViewModels;
 using PulseWorkshop.Core.Models;
@@ -295,13 +296,6 @@ public partial class MainWindow : Window
         return virtualScreen.IntersectsWith(new Rect(left, top, width, height));
     }
 
-    // Let the user drag the Advanced "Global" command box taller/shorter.
-    private void GlobalCommandResize_DragDelta(object sender, DragDeltaEventArgs e)
-    {
-        var height = GlobalCommandBox.ActualHeight + e.VerticalChange;
-        GlobalCommandBox.Height = Math.Clamp(height, 34, 400);
-    }
-
     // --- Advanced entries drag-to-reorder ---------------------------------------------------------
     // A reorder starts only when the press lands on a row's drag handle (Tag="DragHandle"), so the
     // text fields inside each row stay fully editable. The dropped row is moved within the project's
@@ -546,6 +540,53 @@ public partial class MainWindow : Window
         return (source as ListBoxItem)?.DataContext as TextureGroupViewModel;
     }
 
+    // --- Entry/group list context menus (Duplicate/Delete selected) --------------------------------
+    // Right-clicking a row that isn't part of the current highlight selects just it first (Explorer
+    // behaviour), so the menu's batch action always includes the row the user pointed at. When the row
+    // is already in a multi-selection the whole selection is kept. The menu items then run the same
+    // batch operation the list's VM exposes, over every highlighted row.
+
+    /// <summary>If the right-clicked row isn't already selected, select only it (keeps an existing
+    /// multi-selection intact when the row is part of it).</summary>
+    private static void SelectRowOnRightClick(ListBox list, object originalSource)
+    {
+        if (originalSource is not DependencyObject origin
+            || ItemsControl.ContainerFromElement(list, origin) is not ListBoxItem item)
+            return;
+        if (!item.IsSelected)
+        {
+            list.SelectedItems.Clear();
+            item.IsSelected = true;
+        }
+    }
+
+    private void AdvancedEntries_PreviewMouseRightButtonDown(object sender, MouseButtonEventArgs e)
+        => SelectRowOnRightClick(AdvancedEntriesList, e.OriginalSource);
+
+    private void AdvancedEntriesDuplicateSelected_Click(object sender, RoutedEventArgs e)
+        => _vm.CompileAdvanced.CloneSelectedEntries();
+
+    private void AdvancedEntriesDeleteSelected_Click(object sender, RoutedEventArgs e)
+        => _vm.CompileAdvanced.RemoveSelectedEntries();
+
+    private void PackageEntries_PreviewMouseRightButtonDown(object sender, MouseButtonEventArgs e)
+        => SelectRowOnRightClick(PackageEntriesList, e.OriginalSource);
+
+    private void PackageEntriesDuplicateSelected_Click(object sender, RoutedEventArgs e)
+        => _vm.PackageAdvanced.CloneSelectedEntries();
+
+    private void PackageEntriesDeleteSelected_Click(object sender, RoutedEventArgs e)
+        => _vm.PackageAdvanced.RemoveSelectedEntries();
+
+    private void TextureGroups_PreviewMouseRightButtonDown(object sender, MouseButtonEventArgs e)
+        => SelectRowOnRightClick(TextureGroupsList, e.OriginalSource);
+
+    private void TextureGroupsDuplicateSelected_Click(object sender, RoutedEventArgs e)
+        => _vm.Textures.CloneSelectedGroups();
+
+    private void TextureGroupsDeleteSelected_Click(object sender, RoutedEventArgs e)
+        => _vm.Textures.RemoveSelectedGroups();
+
     /// <summary>A translucent ghost of the dragged row, drawn in the adorner layer and moved to
     /// follow the cursor - so it's obvious a reorder is in progress.</summary>
     private sealed class DragAdorner : Adorner
@@ -754,6 +795,139 @@ public partial class MainWindow : Window
     {
         if ((sender as FrameworkElement)?.DataContext is UnpackFileViewModel row)
             _vm.Unpack.GoToFile(row);
+    }
+
+    // --- Unpack hover preview ---------------------------------------------------------------------
+    //
+    // Hovering an image or .vtf row briefly, then popping a small thumbnail beside the cursor. The
+    // file is read into memory and decoded off the UI thread; a generation counter discards a load
+    // whose row was left (or superseded) before it finished, so a quick sweep down the list never
+    // flashes a stale image.
+
+    /// <summary>Largest entry we'll pull into memory for a hover thumbnail.</summary>
+    private const int UnpackPreviewMaxBytes = 64 * 1024 * 1024;
+
+    private DispatcherTimer? _unpackHoverTimer;
+    private UnpackFileViewModel? _unpackHoverRow;
+    private Point _unpackHoverPoint;
+    private int _unpackHoverGeneration;
+
+    private void UnpackRow_MouseEnter(object sender, MouseEventArgs e)
+    {
+        if (sender is not ListBoxItem { DataContext: UnpackFileViewModel row } || !row.CanPreview)
+        {
+            HideUnpackPreview();
+            return;
+        }
+
+        _unpackHoverRow = row;
+        _unpackHoverPoint = e.GetPosition(UnpackFiles);
+
+        _unpackHoverTimer ??= new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(350) };
+        _unpackHoverTimer.Tick -= UnpackHoverTimer_Tick;
+        _unpackHoverTimer.Tick += UnpackHoverTimer_Tick;
+        _unpackHoverTimer.Stop();
+        _unpackHoverTimer.Start();
+    }
+
+    private void UnpackRow_MouseLeave(object sender, MouseEventArgs e)
+    {
+        // Only tear down if we're leaving the row the preview is tracking (MouseLeave also fires as
+        // the cursor crosses between rows, and MouseEnter on the next row runs first).
+        if (sender is ListBoxItem { DataContext: UnpackFileViewModel row } && !ReferenceEquals(row, _unpackHoverRow))
+            return;
+        HideUnpackPreview();
+    }
+
+    private void HideUnpackPreview()
+    {
+        _unpackHoverTimer?.Stop();
+        _unpackHoverRow = null;
+        _unpackHoverGeneration++;
+        if (UnpackPreviewPopup is not null)
+            UnpackPreviewPopup.IsOpen = false;
+    }
+
+    private async void UnpackHoverTimer_Tick(object? sender, EventArgs e)
+    {
+        _unpackHoverTimer?.Stop();
+        if (_unpackHoverRow is not { Entry: { } entry } row)
+            return;
+
+        int gen = ++_unpackHoverGeneration;
+        var bytes = await _vm.Unpack.ReadEntryBytesAsync(entry, UnpackPreviewMaxBytes, CancellationToken.None);
+        if (bytes is null || gen != _unpackHoverGeneration)
+            return; // read failed, or the cursor moved on while we were loading
+
+        BitmapSource? image;
+        string caption;
+        if (row.PreviewKind == UnpackPreviewKind.Vtf)
+        {
+            var vtf = PulseWorkshop.Core.Unpack.VtfImage.Decode(bytes, minSize: 256);
+            if (vtf is null)
+            {
+                caption = $"{entry.Extension.ToUpperInvariant()} - preview unavailable";
+                image = null;
+            }
+            else
+            {
+                image = BitmapSource.Create(vtf.Width, vtf.Height, 96, 96,
+                    PixelFormats.Bgra32, null, vtf.Bgra, vtf.Width * 4);
+                image.Freeze();
+                caption = $"{vtf.SourceWidth} x {vtf.SourceHeight}  -  VTF  -  {UnpackViewModel.FormatSize(entry.Size)}";
+            }
+        }
+        else
+        {
+            image = TryDecodeImage(bytes, out int srcW, out int srcH);
+            caption = image is null
+                ? $"{entry.Extension.ToUpperInvariant()} - preview unavailable"
+                : $"{srcW} x {srcH}  -  {entry.Extension.ToUpperInvariant()}  -  {UnpackViewModel.FormatSize(entry.Size)}";
+        }
+
+        if (gen != _unpackHoverGeneration)
+            return;
+
+        UnpackPreviewImage.Source = image;
+        UnpackPreviewPath.Text = entry.Path;
+        UnpackPreviewCaption.Text = caption;
+        // Offset from the cursor so the popup never lands under the pointer (which would fire the
+        // row's MouseLeave and flicker the popup off again).
+        UnpackPreviewPopup.HorizontalOffset = _unpackHoverPoint.X + 24;
+        UnpackPreviewPopup.VerticalOffset = _unpackHoverPoint.Y + 20;
+        UnpackPreviewPopup.IsOpen = true;
+    }
+
+    /// <summary>Decodes a raster image (png/jpg/...) from bytes to a frozen bitmap for the thumbnail.
+    /// Reports the source's true pixel size via <paramref name="srcW"/>/<paramref name="srcH"/> (read
+    /// from metadata, so a capped decode doesn't misreport it), and caps the decoded bitmap's width so
+    /// a large source doesn't build a giant bitmap. Null if WPF can't decode it.</summary>
+    private static BitmapSource? TryDecodeImage(byte[] bytes, out int srcW, out int srcH)
+    {
+        srcW = srcH = 0;
+        try
+        {
+            // Metadata-only pass for the true dimensions (no full pixel decode).
+            var probe = BitmapFrame.Create(new MemoryStream(bytes),
+                BitmapCreateOptions.DelayCreation, BitmapCacheOption.None);
+            srcW = probe.PixelWidth;
+            srcH = probe.PixelHeight;
+
+            var bmp = new BitmapImage();
+            bmp.BeginInit();
+            bmp.StreamSource = new MemoryStream(bytes);
+            bmp.CacheOption = BitmapCacheOption.OnLoad;
+            bmp.CreateOptions = BitmapCreateOptions.IgnoreImageCache;
+            if (srcW > 512) // only downscale; never upscale a small source
+                bmp.DecodePixelWidth = 512;
+            bmp.EndInit();
+            bmp.Freeze();
+            return bmp;
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     /// <summary>
@@ -1132,6 +1306,14 @@ public partial class MainWindow : Window
     /// <summary>Opens the KitsuneResource predecessor project on GitHub.</summary>
     private void OpenKitsuneResource_Click(object sender, RoutedEventArgs e) =>
         TryOpen(_vm.KitsuneResourceUrl);
+
+    /// <summary>Opens Crowbar (the inspiration for PulseWorkshop) on GitHub.</summary>
+    private void OpenCrowbar_Click(object sender, RoutedEventArgs e) =>
+        TryOpen(_vm.CrowbarUrl);
+
+    /// <summary>Opens the Crowbar author's GitHub profile.</summary>
+    private void OpenCrowbarAuthorGitHub_Click(object sender, RoutedEventArgs e) =>
+        TryOpen(_vm.CrowbarAuthorGitHubUrl);
 
     // --- Content file zone ---------------------------------------------------------------------
 

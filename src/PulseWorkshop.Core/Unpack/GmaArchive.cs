@@ -207,7 +207,6 @@ public sealed class GmaArchive : IPackedArchive
         // Rebuild in the familiar addon.json order, title/author first, then whatever the header held.
         var result = new JsonObject
         {
-            ["_note"] = "Reconstructed by PulseWorkshop from the GMA header - a .gma does not store addon.json itself.",
             ["title"] = AddonName,
         };
         if (AddonAuthor.Length > 0 && !AddonAuthor.Equals("unknown", StringComparison.OrdinalIgnoreCase))

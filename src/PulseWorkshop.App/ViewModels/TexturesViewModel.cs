@@ -497,6 +497,71 @@ public sealed class TexturesViewModel : ObservableObject
         RefreshCommands();
     }
 
+    /// <summary>Context-menu "Duplicate selected": clones every highlighted group, inserting each copy
+    /// after its source, then moves the highlight onto the new copies. One row behaves like its Clone.</summary>
+    public void CloneSelectedGroups()
+    {
+        var selected = Groups.Where(g => g.IsSelected).ToList();
+        if (selected.Count == 0)
+            return;
+
+        var clones = new List<TextureGroupViewModel>();
+        foreach (var group in selected)
+        {
+            var clone = group.Model.Clone();
+            clone.Name = string.IsNullOrWhiteSpace(group.Model.Name)
+                ? "Copy"
+                : group.Model.Name + " (copy)";
+
+            var index = Groups.IndexOf(group);
+            var vm = new TextureGroupViewModel(this, clone);
+            if (index >= 0)
+                Groups.Insert(index + 1, vm);
+            else
+                Groups.Add(vm);
+            clones.Add(vm);
+        }
+
+        // Move the selection onto the new copies (the SelectedItem binding follows to the first).
+        foreach (var group in selected)
+            group.IsSelected = false;
+        foreach (var clone in clones)
+            clone.IsSelected = true;
+        SelectedGroup = clones[^1];
+
+        Save();
+        RefreshCommands();
+    }
+
+    /// <summary>Context-menu "Delete selected": removes every highlighted group after one confirmation.</summary>
+    public void RemoveSelectedGroups()
+    {
+        var selected = Groups.Where(g => g.IsSelected).ToList();
+        if (selected.Count == 0)
+            return;
+
+        var what = selected.Count == 1
+            ? (string.IsNullOrWhiteSpace(selected[0].Name) ? "this group" : $"\"{selected[0].Name}\"")
+            : $"{selected.Count} groups";
+        var owner = Application.Current?.MainWindow;
+        var result = owner is not null
+            ? MessageBox.Show(owner, $"Remove {what} from the project?", "Remove groups",
+                MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No)
+            : MessageBox.Show($"Remove {what} from the project?", "Remove groups",
+                MessageBoxButton.YesNo, MessageBoxImage.Warning, MessageBoxResult.No);
+        if (result != MessageBoxResult.Yes)
+            return;
+
+        var firstIndex = Groups.IndexOf(selected[0]);
+        var selectionAffected = selected.Any(g => ReferenceEquals(SelectedGroup, g));
+        foreach (var group in selected)
+            Groups.Remove(group);
+        if (selectionAffected)
+            SelectedGroup = Groups.Count == 0 ? null : Groups[Math.Min(firstIndex, Groups.Count - 1)];
+        Save();
+        RefreshCommands();
+    }
+
     // --- Convert ------------------------------------------------------------------------------
 
     private void Cancel()

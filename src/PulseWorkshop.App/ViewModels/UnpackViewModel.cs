@@ -14,7 +14,7 @@ namespace PulseWorkshop.App.ViewModels;
 public enum UnpackSortColumn { Name, Type, Source, Size }
 
 /// <summary>Kind of hover preview a file row supports (see <see cref="UnpackFileViewModel.PreviewKind"/>).</summary>
-public enum UnpackPreviewKind { None, Image, Vtf }
+public enum UnpackPreviewKind { None, Image, Vtf, Vtex }
 
 /// <summary>
 /// The Unpack tab: opens a packed Source archive (.vpk or .gma) - or a whole game via its
@@ -85,6 +85,7 @@ public sealed class UnpackViewModel : ObservableObject
         CancelExportCommand = new RelayCommand(CancelExport, () => IsExporting);
         ViewModelCommand = new RelayCommand(ViewSelectedModel, () => CanViewModel);
         BrowseModelCommand = new RelayCommand(BrowseSelectedModel, () => CanViewModel);
+        ToggleDetailsPaneCommand = new RelayCommand(() => IsDetailsPaneOpen = !IsDetailsPaneOpen);
     }
 
     /// <summary>Raised (on the UI thread) when a row should be scrolled into view - after
@@ -95,6 +96,11 @@ public sealed class UnpackViewModel : ObservableObject
     /// to the Model View tab.</summary>
     public event Action<string>? ViewModelRequested;
 
+    /// <summary>Raised (on the UI thread) when the Details pane's subject changes to a different
+    /// item, so the view reloads its thumbnail (decoding a .vtf/.vtex_c preview needs WPF and lives
+    /// in the code-behind).</summary>
+    public event Action? DetailChanged;
+
     // --- Commands -------------------------------------------------------------------------
 
     public AsyncRelayCommand OpenCommand { get; }
@@ -103,6 +109,7 @@ public sealed class UnpackViewModel : ObservableObject
     public RelayCommand CancelExportCommand { get; }
     public RelayCommand ViewModelCommand { get; }
     public RelayCommand BrowseModelCommand { get; }
+    public RelayCommand ToggleDetailsPaneCommand { get; }
 
     // --- Bound state ------------------------------------------------------------------------
 
@@ -299,6 +306,252 @@ public sealed class UnpackViewModel : ObservableObject
         }
     }
 
+    /// <summary>When on, the hover preview honors a texture's alpha (transparent areas show through);
+    /// when off it forces the thumbnail opaque, so masks that store data with alpha 0 (metalness,
+    /// roughness, ...) are still visible. Applies to both .vtf and Source 2 .vtex_c previews and is
+    /// read at hover time - see the preview handler in the window. Persisted in UI settings.</summary>
+    public bool PreviewAlpha
+    {
+        get => _settings.UnpackPreviewAlpha;
+        set
+        {
+            if (_settings.UnpackPreviewAlpha == value)
+                return;
+            _settings.UnpackPreviewAlpha = value;
+            OnPropertyChanged();
+        }
+    }
+
+    // --- Details pane ---------------------------------------------------------------------------
+    //
+    // An Explorer-style pane on the right of the file list: a thumbnail (a decoded .vtf/.vtex_c or
+    // raster preview, or a generic file/folder glyph) over a few info rows for whatever is currently
+    // selected. The pane is width-adjustable (its splitter, persisted in UI settings) and can be
+    // collapsed. The textual fields live here; the view owns the thumbnail image (see DetailChanged).
+
+    private bool _detailHasContent;
+    private bool _detailIsFolder;
+    private string _detailName = string.Empty;
+    private string _detailTypeText = string.Empty;
+    private string _detailSizeText = string.Empty;
+    private string _detailLocationText = string.Empty;
+    private string _detailSourceText = string.Empty;
+    private string _detailExtensionChip = string.Empty;
+    private UnpackPreviewKind _detailPreviewKind = UnpackPreviewKind.None;
+    private PackedEntry? _detailEntry;
+    // The item currently shown; used to skip redundant thumbnail reloads (and its DetailChanged).
+    private string _detailSignature = string.Empty;
+
+    /// <summary>Whether the Details pane is shown (persisted). Toggled by the "Details" button.</summary>
+    public bool IsDetailsPaneOpen
+    {
+        get => _settings.UnpackDetailsPaneOpen;
+        set
+        {
+            if (_settings.UnpackDetailsPaneOpen == value)
+                return;
+            _settings.UnpackDetailsPaneOpen = value;
+            OnPropertyChanged();
+        }
+    }
+
+    /// <summary>True when there is something to describe (an item is selected); false shows the
+    /// pane's placeholder hint instead.</summary>
+    public bool DetailHasContent => _detailHasContent;
+
+    /// <summary>True when the described item is a folder (the view shows a folder glyph, not a file
+    /// thumbnail).</summary>
+    public bool DetailIsFolder => _detailIsFolder;
+
+    public string DetailName => _detailName;
+    public string DetailTypeText => _detailTypeText;
+    public string DetailSizeText => _detailSizeText;
+    public string DetailLocationText => _detailLocationText;
+    public string DetailSourceText => _detailSourceText;
+    public bool DetailHasSource => _detailSourceText.Length > 0;
+
+    /// <summary>Uppercased extension chip shown over a generic file glyph when there is no thumbnail
+    /// (e.g. "VMT"). Empty for folders and extension-less files.</summary>
+    public string DetailExtensionChip => _detailExtensionChip;
+
+    /// <summary>The kind of thumbnail the described file supports (the view decodes it).</summary>
+    public UnpackPreviewKind DetailPreviewKind => _detailPreviewKind;
+
+    /// <summary>The described file's entry (for the view to read bytes and decode a thumbnail); null
+    /// for folders / multi-selection / nothing.</summary>
+    public PackedEntry? DetailEntry => _detailEntry;
+
+    /// <summary>Recomputes the Details pane from the current selection: a single highlighted file
+    /// row wins, then a multi-selection summary, then the folder selected in the tree, else nothing.</summary>
+    private void UpdateDetail()
+    {
+        if (_archive is null)
+        {
+            SetDetailNone();
+            return;
+        }
+
+        UnpackFileViewModel? single = null;
+        int highlighted = 0;
+        foreach (var row in Files)
+        {
+            if (!row.IsSelected)
+                continue;
+            single = row;
+            if (++highlighted > 1)
+                break;
+        }
+
+        if (highlighted == 1)
+            SetDetailRow(single!);
+        else if (highlighted > 1)
+            SetDetailMulti();
+        else if (_selectedFolder is { } folder)
+            SetDetailFolder(folder);
+        else
+            SetDetailNone();
+    }
+
+    private void SetDetailRow(UnpackFileViewModel row)
+    {
+        if (row.Folder is { } folder)
+        {
+            SetDetailFolder(folder);
+            return;
+        }
+        var e = row.Entry!;
+        ApplyDetail(
+            isFolder: false,
+            name: e.FileName,
+            type: FriendlyType(e.Extension),
+            size: FormatSize(e.Size),
+            location: e.Directory.Length == 0 ? "(root)" : e.Directory,
+            source: e.Source,
+            chip: e.Extension.Length > 0 ? e.Extension.ToUpperInvariant() : string.Empty,
+            previewKind: row.PreviewKind,
+            entry: e,
+            signature: $"F:{e.Source}|{e.Path}");
+    }
+
+    private void SetDetailFolder(UnpackFolderViewModel folder)
+    {
+        bool isRoot = folder.FullPath.Length == 0;
+        ApplyDetail(
+            isFolder: true,
+            name: isRoot ? ArchiveName : folder.Name,
+            type: "File folder",
+            size: $"{folder.TotalFileCount:N0} file{(folder.TotalFileCount == 1 ? "" : "s")}",
+            location: isRoot ? "(package)"
+                : folder.Parent is { FullPath.Length: > 0 } p ? p.FullPath : "(root)",
+            source: string.Empty,
+            chip: string.Empty,
+            previewKind: UnpackPreviewKind.None,
+            entry: null,
+            signature: $"D:{folder.FullPath}");
+    }
+
+    private void SetDetailMulti()
+    {
+        long totalBytes = 0;
+        int files = 0, folders = 0;
+        foreach (var row in Files)
+        {
+            if (!row.IsSelected)
+                continue;
+            if (row.Folder is not null)
+                folders++;
+            else { files++; totalBytes += row.Entry!.Size; }
+        }
+        var parts = new List<string>();
+        if (files > 0)
+            parts.Add($"{files:N0} file{(files == 1 ? "" : "s")}");
+        if (folders > 0)
+            parts.Add($"{folders:N0} folder{(folders == 1 ? "" : "s")}");
+        ApplyDetail(
+            isFolder: folders > 0 && files == 0,
+            name: $"{files + folders:N0} items selected",
+            type: string.Join(", ", parts),
+            size: files > 0 ? FormatSize(totalBytes) : string.Empty,
+            location: string.Empty,
+            source: string.Empty,
+            chip: string.Empty,
+            previewKind: UnpackPreviewKind.None,
+            entry: null,
+            signature: $"M:{files}/{folders}/{totalBytes}");
+    }
+
+    private void SetDetailNone()
+    {
+        ApplyDetail(false, string.Empty, string.Empty, string.Empty, string.Empty, string.Empty,
+            string.Empty, UnpackPreviewKind.None, null, "N", hasContent: false);
+    }
+
+    private void ApplyDetail(bool isFolder, string name, string type, string size, string location,
+        string source, string chip, UnpackPreviewKind previewKind, PackedEntry? entry, string signature,
+        bool hasContent = true)
+    {
+        _detailHasContent = hasContent;
+        _detailIsFolder = isFolder;
+        _detailName = name;
+        _detailTypeText = type;
+        _detailSizeText = size;
+        _detailLocationText = location;
+        _detailSourceText = source;
+        _detailExtensionChip = chip;
+        _detailPreviewKind = previewKind;
+        _detailEntry = entry;
+        OnPropertyChanged(nameof(DetailHasContent));
+        OnPropertyChanged(nameof(DetailIsFolder));
+        OnPropertyChanged(nameof(DetailName));
+        OnPropertyChanged(nameof(DetailTypeText));
+        OnPropertyChanged(nameof(DetailSizeText));
+        OnPropertyChanged(nameof(DetailLocationText));
+        OnPropertyChanged(nameof(DetailSourceText));
+        OnPropertyChanged(nameof(DetailHasSource));
+        OnPropertyChanged(nameof(DetailExtensionChip));
+
+        // Only reload the thumbnail when the subject actually changed (selection churn during a
+        // drag-select would otherwise re-decode the same file repeatedly).
+        if (_detailSignature != signature)
+        {
+            _detailSignature = signature;
+            DetailChanged?.Invoke();
+        }
+    }
+
+    /// <summary>A short, friendly type label for the Details pane, Explorer-style ("Valve Texture",
+    /// "Source Model", ...), falling back to "&lt;EXT&gt; File" for anything unmapped.</summary>
+    private static string FriendlyType(string ext) => ext.ToLowerInvariant() switch
+    {
+        "" => "File",
+        "vtf" => "Valve Texture",
+        "vmt" => "Valve Material",
+        "vtex_c" => "Source 2 Texture",
+        "vmat_c" => "Source 2 Material",
+        "mdl" => "Source Model",
+        "vmdl_c" => "Source 2 Model",
+        "phy" => "Model Physics",
+        "vvd" => "Model Vertex Data",
+        "vtx" => "Model Mesh Data",
+        "qc" => "Model Compile Script",
+        "smd" => "Studiomdl Model",
+        "dmx" => "Datamodel",
+        "vpk" => "Valve Pack",
+        "gma" => "GMod Addon",
+        "bsp" => "Source Map",
+        "vmf" => "Hammer Map Source",
+        "wav" => "WAV Sound",
+        "mp3" => "MP3 Sound",
+        "txt" => "Text Document",
+        "cfg" or "vdf" or "kv" or "res" => "KeyValues Text",
+        "png" => "PNG Image",
+        "jpg" or "jpeg" => "JPEG Image",
+        "tga" => "Targa Image",
+        "bmp" => "Bitmap Image",
+        "gif" => "GIF Image",
+        var e => $"{e.ToUpperInvariant()} File",
+    };
+
     /// <summary>One-line preview of where "Beside package" would write, shown next to the picker so
     /// the fixed location is visible before exporting. Empty in "Choose folder" mode or with nothing
     /// open.</summary>
@@ -401,6 +654,7 @@ public sealed class UnpackViewModel : ObservableObject
             folder.IsSelected = false;
         ExportSelectedCommand.RaiseCanExecuteChanged();
         OnPropertyChanged(nameof(ExportButtonLabel));
+        UpdateDetail();
     }
 
     /// <summary>Clears every file-row highlight without letting that bounce back and re-clear the
@@ -413,6 +667,7 @@ public sealed class UnpackViewModel : ObservableObject
         _syncingSelection = false;
         ExportSelectedCommand.RaiseCanExecuteChanged();
         OnPropertyChanged(nameof(ExportButtonLabel));
+        UpdateDetail();
     }
 
     private void RefreshCommands()
@@ -544,6 +799,7 @@ public sealed class UnpackViewModel : ObservableObject
         FileListCaption = string.Empty;
         StatusMessage = "No package open.";
         CleanPreviewDir();
+        UpdateDetail(); // resets the Details pane and clears its thumbnail
         OnPropertyChanged(string.Empty); // refresh every binding
         RefreshCommands();
     }
@@ -770,6 +1026,7 @@ public sealed class UnpackViewModel : ObservableObject
             Files.Add(row);
         // The rebuilt rows start unhighlighted, so the button snaps back to acting on the folder.
         OnPropertyChanged(nameof(ExportButtonLabel));
+        UpdateDetail();
     }
 
     private int CompareRows(UnpackFileViewModel a, UnpackFileViewModel b)
@@ -1341,19 +1598,18 @@ public sealed class UnpackFileViewModel : ObservableObject
 
     public bool IsFolder => Folder is not null;
 
-    /// <summary>What kind of hover preview this row supports, from its extension: a raster image WPF
-    /// can decode, a .vtf texture (decoded by our lite reader), or none.</summary>
+    /// <summary>What kind of thumbnail the Details pane can show for this row, from its extension: a
+    /// raster image WPF can decode, a .vtf texture (decoded by our lite reader), a Source 2 .vtex_c,
+    /// or none.</summary>
     public UnpackPreviewKind PreviewKind => Folder is not null || Entry is null
         ? UnpackPreviewKind.None
         : Entry.Extension.ToLowerInvariant() switch
         {
             "png" or "jpg" or "jpeg" or "bmp" or "gif" or "tif" or "tiff" or "ico" => UnpackPreviewKind.Image,
             "vtf" => UnpackPreviewKind.Vtf,
+            "vtex_c" => UnpackPreviewKind.Vtex,
             _ => UnpackPreviewKind.None,
         };
-
-    /// <summary>True when hovering the row should show a thumbnail popup.</summary>
-    public bool CanPreview => PreviewKind != UnpackPreviewKind.None;
 
     /// <summary>File name in folder view; the scope-relative path in search results.</summary>
     public string DisplayName { get; }

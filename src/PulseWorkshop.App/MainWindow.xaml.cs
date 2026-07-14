@@ -55,6 +55,12 @@ public partial class MainWindow : Window
             Dispatcher.BeginInvoke(() => UnpackFiles.ScrollIntoView(row),
                 System.Windows.Threading.DispatcherPriority.Background);
 
+        // Details pane: reload the thumbnail when its subject changes, and apply the open/width
+        // state (and refresh the thumbnail) when the pane is toggled or the alpha option flips.
+        _vm.Unpack.DetailChanged += () => _ = UpdateDetailThumbnailAsync();
+        _vm.Unpack.PropertyChanged += OnUnpackPropertyChanged;
+        ApplyDetailsPaneState();
+
         // Reopen the console window if it was open last time - deferred to Loaded so the main window
         // is up first.
         Loaded += (_, _) =>
@@ -797,105 +803,19 @@ public partial class MainWindow : Window
             _vm.Unpack.GoToFile(row);
     }
 
-    // --- Unpack hover preview ---------------------------------------------------------------------
-    //
-    // Hovering an image or .vtf row briefly, then popping a small thumbnail beside the cursor. The
-    // file is read into memory and decoded off the UI thread; a generation counter discards a load
-    // whose row was left (or superseded) before it finished, so a quick sweep down the list never
-    // flashes a stale image.
-
-    /// <summary>Largest entry we'll pull into memory for a hover thumbnail.</summary>
-    private const int UnpackPreviewMaxBytes = 64 * 1024 * 1024;
-
-    private DispatcherTimer? _unpackHoverTimer;
-    private UnpackFileViewModel? _unpackHoverRow;
-    private Point _unpackHoverPoint;
-    private int _unpackHoverGeneration;
-
-    private void UnpackRow_MouseEnter(object sender, MouseEventArgs e)
+    /// <summary>Returns a copy of <paramref name="src"/> with every pixel's alpha forced to 255, so a
+    /// texture whose alpha channel is data (not transparency) still previews as a visible image.</summary>
+    private static BitmapSource ForceOpaque(BitmapSource src)
     {
-        if (sender is not ListBoxItem { DataContext: UnpackFileViewModel row } || !row.CanPreview)
-        {
-            HideUnpackPreview();
-            return;
-        }
-
-        _unpackHoverRow = row;
-        _unpackHoverPoint = e.GetPosition(UnpackFiles);
-
-        _unpackHoverTimer ??= new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(350) };
-        _unpackHoverTimer.Tick -= UnpackHoverTimer_Tick;
-        _unpackHoverTimer.Tick += UnpackHoverTimer_Tick;
-        _unpackHoverTimer.Stop();
-        _unpackHoverTimer.Start();
-    }
-
-    private void UnpackRow_MouseLeave(object sender, MouseEventArgs e)
-    {
-        // Only tear down if we're leaving the row the preview is tracking (MouseLeave also fires as
-        // the cursor crosses between rows, and MouseEnter on the next row runs first).
-        if (sender is ListBoxItem { DataContext: UnpackFileViewModel row } && !ReferenceEquals(row, _unpackHoverRow))
-            return;
-        HideUnpackPreview();
-    }
-
-    private void HideUnpackPreview()
-    {
-        _unpackHoverTimer?.Stop();
-        _unpackHoverRow = null;
-        _unpackHoverGeneration++;
-        if (UnpackPreviewPopup is not null)
-            UnpackPreviewPopup.IsOpen = false;
-    }
-
-    private async void UnpackHoverTimer_Tick(object? sender, EventArgs e)
-    {
-        _unpackHoverTimer?.Stop();
-        if (_unpackHoverRow is not { Entry: { } entry } row)
-            return;
-
-        int gen = ++_unpackHoverGeneration;
-        var bytes = await _vm.Unpack.ReadEntryBytesAsync(entry, UnpackPreviewMaxBytes, CancellationToken.None);
-        if (bytes is null || gen != _unpackHoverGeneration)
-            return; // read failed, or the cursor moved on while we were loading
-
-        BitmapSource? image;
-        string caption;
-        if (row.PreviewKind == UnpackPreviewKind.Vtf)
-        {
-            var vtf = PulseWorkshop.Core.Unpack.VtfImage.Decode(bytes, minSize: 256);
-            if (vtf is null)
-            {
-                caption = $"{entry.Extension.ToUpperInvariant()} - preview unavailable";
-                image = null;
-            }
-            else
-            {
-                image = BitmapSource.Create(vtf.Width, vtf.Height, 96, 96,
-                    PixelFormats.Bgra32, null, vtf.Bgra, vtf.Width * 4);
-                image.Freeze();
-                caption = $"{vtf.SourceWidth} x {vtf.SourceHeight}  -  VTF  -  {UnpackViewModel.FormatSize(entry.Size)}";
-            }
-        }
-        else
-        {
-            image = TryDecodeImage(bytes, out int srcW, out int srcH);
-            caption = image is null
-                ? $"{entry.Extension.ToUpperInvariant()} - preview unavailable"
-                : $"{srcW} x {srcH}  -  {entry.Extension.ToUpperInvariant()}  -  {UnpackViewModel.FormatSize(entry.Size)}";
-        }
-
-        if (gen != _unpackHoverGeneration)
-            return;
-
-        UnpackPreviewImage.Source = image;
-        UnpackPreviewPath.Text = entry.Path;
-        UnpackPreviewCaption.Text = caption;
-        // Offset from the cursor so the popup never lands under the pointer (which would fire the
-        // row's MouseLeave and flicker the popup off again).
-        UnpackPreviewPopup.HorizontalOffset = _unpackHoverPoint.X + 24;
-        UnpackPreviewPopup.VerticalOffset = _unpackHoverPoint.Y + 20;
-        UnpackPreviewPopup.IsOpen = true;
+        var bgra = src.Format == PixelFormats.Bgra32 ? src : new FormatConvertedBitmap(src, PixelFormats.Bgra32, null, 0);
+        int w = bgra.PixelWidth, h = bgra.PixelHeight, stride = w * 4;
+        var pixels = new byte[stride * h];
+        bgra.CopyPixels(pixels, stride, 0);
+        for (int i = 3; i < pixels.Length; i += 4)
+            pixels[i] = 255;
+        var opaque = BitmapSource.Create(w, h, 96, 96, PixelFormats.Bgra32, null, pixels, stride);
+        opaque.Freeze();
+        return opaque;
     }
 
     /// <summary>Decodes a raster image (png/jpg/...) from bytes to a frozen bitmap for the thumbnail.
@@ -928,6 +848,147 @@ public partial class MainWindow : Window
         {
             return null;
         }
+    }
+
+    /// <summary>Decodes a previewable Unpack entry to a frozen thumbnail, shared by the hover popup
+    /// and the Details pane: a .vtf or Source 2 .vtex_c texture (via our lite readers) or a raster
+    /// image WPF can decode. Returns the bitmap (null when unavailable) with the source's true
+    /// dimensions and a short format label for the caption.</summary>
+    private static async Task<(BitmapSource? Image, int SrcW, int SrcH, string Fmt)> DecodePreviewAsync(
+        UnpackPreviewKind kind, string ext, byte[] bytes, int minSize)
+    {
+        switch (kind)
+        {
+            case UnpackPreviewKind.Vtf:
+                return await Task.Run(() =>
+                {
+                    var vtf = PulseWorkshop.Core.Unpack.VtfImage.Decode(bytes, minSize);
+                    if (vtf is null)
+                        return ((BitmapSource?)null, 0, 0, "VTF");
+                    var img = BitmapSource.Create(vtf.Width, vtf.Height, 96, 96,
+                        PixelFormats.Bgra32, null, vtf.Bgra, vtf.Width * 4);
+                    img.Freeze();
+                    return ((BitmapSource?)img, vtf.SourceWidth, vtf.SourceHeight, "VTF");
+                });
+            case UnpackPreviewKind.Vtex:
+                // Source 2 textures (BC7 etc.) can be heavier to decode - do it off the UI thread.
+                return await Task.Run(() =>
+                {
+                    var tex = PulseWorkshop.Core.Unpack.Source2Texture.Decode(bytes, minSize);
+                    if (tex is null)
+                        return ((BitmapSource?)null, 0, 0, "VTEX_C");
+                    if (tex.RawImage is not null)
+                        return (TryDecodeImage(tex.RawImage, out _, out _), tex.SourceWidth, tex.SourceHeight, tex.FormatName);
+                    var img = BitmapSource.Create(tex.Width, tex.Height, 96, 96,
+                        PixelFormats.Bgra32, null, tex.Bgra!, tex.Width * 4);
+                    img.Freeze();
+                    return ((BitmapSource?)img, tex.SourceWidth, tex.SourceHeight, tex.FormatName);
+                });
+            default:
+                var image = TryDecodeImage(bytes, out int w, out int h);
+                return (image, w, h, ext.ToUpperInvariant());
+        }
+    }
+
+    // --- Unpack Details pane ---------------------------------------------------------------------
+    //
+    // The Explorer-style pane on the right of the file list: a thumbnail over a few info rows for the
+    // current selection. The textual fields are bound from the view model; the thumbnail is decoded
+    // here (WPF), and the pane's width / collapsed state map to its grid columns.
+
+    private const double DetailsPaneMinWidth = 180;
+
+    /// <summary>Largest entry we'll pull into memory to decode a Details pane thumbnail.</summary>
+    private const int UnpackPreviewMaxBytes = 64 * 1024 * 1024;
+
+    private int _detailThumbGeneration;
+
+    /// <summary>Reacts to Unpack VM changes that affect the Details pane: the pane toggle (apply the
+    /// column/splitter state, then reload) and the alpha option (re-tint the thumbnail).</summary>
+    private void OnUnpackPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(UnpackViewModel.IsDetailsPaneOpen))
+        {
+            ApplyDetailsPaneState();
+            _ = UpdateDetailThumbnailAsync();
+        }
+        else if (e.PropertyName == nameof(UnpackViewModel.PreviewAlpha))
+        {
+            _ = UpdateDetailThumbnailAsync();
+        }
+    }
+
+    /// <summary>Maps the persisted Details pane state onto its grid columns: the saved width (and an
+    /// 8px splitter) when open, or zeroed columns so the file list reclaims the space when collapsed.</summary>
+    private void ApplyDetailsPaneState()
+    {
+        if (UnpackDetailsColumn is null)
+            return; // called before the template is realized
+        if (_vm.Unpack.IsDetailsPaneOpen)
+        {
+            var w = Math.Max(DetailsPaneMinWidth, _settings.UnpackDetailsPaneWidth);
+            UnpackDetailsColumn.Width = new GridLength(w);
+            UnpackDetailsSplitterColumn.Width = new GridLength(8);
+        }
+        else
+        {
+            UnpackDetailsColumn.Width = new GridLength(0);
+            UnpackDetailsSplitterColumn.Width = new GridLength(0);
+        }
+    }
+
+    /// <summary>Persists the Details pane's new width after the user drags its splitter (clamped so it
+    /// can't be shrunk into uselessness).</summary>
+    private void UnpackDetailsSplitter_DragCompleted(object sender,
+        System.Windows.Controls.Primitives.DragCompletedEventArgs e)
+    {
+        var w = UnpackDetailsColumn.ActualWidth;
+        if (w < DetailsPaneMinWidth)
+        {
+            w = DetailsPaneMinWidth;
+            UnpackDetailsColumn.Width = new GridLength(w);
+        }
+        _settings.UnpackDetailsPaneWidth = w;
+        _settings.Save();
+    }
+
+    /// <summary>Loads the Details pane thumbnail for the current subject: a decoded texture/image, or
+    /// a generic file/folder glyph when there is no preview. Own generation counter so a slow decode
+    /// whose subject changed is discarded.</summary>
+    private async Task UpdateDetailThumbnailAsync()
+    {
+        if (UnpackDetailImage is null)
+            return; // template not realized yet
+
+        int gen = ++_detailThumbGeneration;
+        var vm = _vm.Unpack;
+
+        // Start from the generic glyph; a successful decode replaces it below.
+        UnpackDetailImage.Source = null;
+        UnpackDetailImage.Visibility = Visibility.Collapsed;
+        UnpackDetailFallback.Visibility = Visibility.Visible;
+        bool isFolder = vm.DetailIsFolder;
+        UnpackDetailFolderGlyph.Visibility = isFolder ? Visibility.Visible : Visibility.Collapsed;
+        UnpackDetailFileGlyph.Visibility = isFolder ? Visibility.Collapsed : Visibility.Visible;
+        UnpackDetailFallbackExt.Text = vm.DetailExtensionChip;
+
+        if (!vm.IsDetailsPaneOpen || vm.DetailEntry is not { } entry
+            || vm.DetailPreviewKind == UnpackPreviewKind.None)
+            return;
+
+        var bytes = await vm.ReadEntryBytesAsync(entry, UnpackPreviewMaxBytes, CancellationToken.None);
+        if (bytes is null || gen != _detailThumbGeneration)
+            return;
+
+        var (image, _, _, _) = await DecodePreviewAsync(vm.DetailPreviewKind, entry.Extension, bytes, minSize: 256);
+        if (gen != _detailThumbGeneration || image is null)
+            return; // decode failed or subject moved on - keep the generic glyph
+
+        if (!vm.PreviewAlpha)
+            image = ForceOpaque(image);
+        UnpackDetailImage.Source = image;
+        UnpackDetailImage.Visibility = Visibility.Visible;
+        UnpackDetailFallback.Visibility = Visibility.Collapsed;
     }
 
     /// <summary>

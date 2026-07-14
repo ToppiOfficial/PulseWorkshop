@@ -68,6 +68,20 @@ public sealed class UiSettings
     /// destination folder.</summary>
     public bool UnpackExportBesidePackage { get; set; }
 
+    /// <summary>When true, the Unpack hover preview honors a texture's alpha channel (transparent
+    /// areas show the checkerboard). When false it forces the preview opaque - useful because many
+    /// Source 2/VTF masks (metalness, roughness, ...) store data with alpha 0, which would otherwise
+    /// render the thumbnail invisible. Defaults to opaque so every preview is visible out of the box.</summary>
+    public bool UnpackPreviewAlpha { get; set; }
+
+    /// <summary>Whether the Unpack tab's Explorer-style Details pane (thumbnail + file info on the
+    /// right of the file list) is shown. Defaults to on.</summary>
+    public bool UnpackDetailsPaneOpen { get; set; } = true;
+
+    /// <summary>The width in pixels of the Unpack Details pane, so the user's resize (via its
+    /// splitter) is remembered across sessions.</summary>
+    public double UnpackDetailsPaneWidth { get; set; } = 260;
+
     private static readonly JsonSerializerOptions Options = new() { WriteIndented = true };
 
     public static UiSettings Load()

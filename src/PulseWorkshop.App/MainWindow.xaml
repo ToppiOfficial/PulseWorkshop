@@ -1338,7 +1338,9 @@
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="320" MinWidth="200" />
                         <ColumnDefinition Width="8" />
-                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="*" MinWidth="240" />
+                        <ColumnDefinition x:Name="UnpackDetailsSplitterColumn" Width="8" />
+                        <ColumnDefinition x:Name="UnpackDetailsColumn" Width="260" />
                     </Grid.ColumnDefinitions>
 
                     <!-- LEFT: folder tree. -->
@@ -1412,8 +1414,25 @@
                                       ToolTip="Search scope - Current: only the selected folder's own files. Recursive: the selected folder and all its subfolders. Global: every file in the package." />
                         </Grid>
 
-                        <TextBlock Grid.Row="1" Text="{Binding FileListCaption}" Style="{StaticResource MutedText}"
-                                   Margin="2,6,2,4" TextTrimming="CharacterEllipsis" />
+                        <Grid Grid.Row="1" Margin="2,6,2,4">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="{Binding FileListCaption}" Style="{StaticResource MutedText}"
+                                       VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                            <!-- Preview alpha: off forces hover thumbnails opaque, so masks that store
+                                 data with alpha 0 (metalness/roughness, some .vtex_c/.vtf) stay visible. -->
+                            <CheckBox Grid.Column="1" Content="Preview alpha" IsChecked="{Binding PreviewAlpha}"
+                                      Margin="10,0,0,0" VerticalAlignment="Center" FontSize="11"
+                                      Foreground="{StaticResource MutedTextBrush}"
+                                      ToolTip="Show a texture's transparency in the hover preview (checkerboard behind transparent areas). Turn off to force previews opaque - many Source 2/VTF masks (metalness, roughness, ...) store data with alpha 0, which would otherwise render the thumbnail invisible." />
+                            <!-- Show/hide the Explorer-style Details pane on the right. -->
+                            <ToggleButton Grid.Column="2" Content="Details" IsChecked="{Binding IsDetailsPaneOpen}"
+                                          Margin="10,0,0,0" Padding="8,3" VerticalAlignment="Center" FontSize="11"
+                                          ToolTip="Show or hide the Details pane (thumbnail and file info) on the right." />
+                        </Grid>
 
                         <!-- Clickable column-header ribbon (Explorer-style): click to sort, click again
                              to reverse. Column widths match the row template below. The right margin
@@ -1471,17 +1490,6 @@
                                 <Style TargetType="ListBoxItem" BasedOn="{StaticResource {x:Type ListBoxItem}}">
                                     <Setter Property="IsSelected" Value="{Binding IsSelected, Mode=TwoWay}" />
                                     <Setter Property="ToolTip" Value="{Binding ToolTipText}" />
-                                    <!-- Hover preview: image and .vtf rows pop a thumbnail (see code-behind). -->
-                                    <EventSetter Event="MouseEnter" Handler="UnpackRow_MouseEnter" />
-                                    <EventSetter Event="MouseLeave" Handler="UnpackRow_MouseLeave" />
-                                    <Style.Triggers>
-                                        <!-- Previewable rows show the thumbnail popup instead of the text
-                                             tooltip (the popup carries the same path/size info) so the two
-                                             don't stack on top of each other. -->
-                                        <DataTrigger Binding="{Binding CanPreview}" Value="True">
-                                            <Setter Property="ToolTip" Value="{x:Null}" />
-                                        </DataTrigger>
-                                    </Style.Triggers>
                                 </Style>
                             </ListBox.ItemContainerStyle>
                             <ListBox.ItemTemplate>
@@ -1533,58 +1541,110 @@
                                 </DataTemplate>
                             </ListBox.ItemTemplate>
                         </ListBox>
-
-                        <!-- Hover thumbnail for image / .vtf rows. Placed relative to the file list and
-                             offset from the cursor in code-behind; not hit-testable so it never steals
-                             the hover from the row underneath. -->
-                        <Popup x:Name="UnpackPreviewPopup" Grid.Row="3" AllowsTransparency="True"
-                               Placement="Relative" PlacementTarget="{Binding ElementName=UnpackFiles}"
-                               IsHitTestVisible="False" StaysOpen="True">
-                            <Border Background="{StaticResource PanelBrush}" BorderBrush="{StaticResource BorderBrush}"
-                                    BorderThickness="1" CornerRadius="4" Padding="6" Margin="8"
-                                    SnapsToDevicePixels="True">
-                                <Border.Effect>
-                                    <DropShadowEffect BlurRadius="10" ShadowDepth="2" Opacity="0.5" Color="#000000" />
-                                </Border.Effect>
-                                <StackPanel MaxWidth="272">
-                                    <TextBlock x:Name="UnpackPreviewPath" Foreground="{StaticResource TextBrush}"
-                                               FontSize="11" TextTrimming="CharacterEllipsis"
-                                               HorizontalAlignment="Center" Margin="0,0,0,5" />
-                                    <!-- Checkerboard so transparent textures read against the panel. -->
-                                    <Border Width="256" Height="256" HorizontalAlignment="Center"
-                                            CornerRadius="2">
-                                        <Border.Background>
-                                            <DrawingBrush TileMode="Tile" Viewport="0,0,16,16"
-                                                          ViewportUnits="Absolute" Stretch="None">
-                                                <DrawingBrush.Drawing>
-                                                    <DrawingGroup>
-                                                        <GeometryDrawing Brush="#20FFFFFF">
-                                                            <GeometryDrawing.Geometry>
-                                                                <RectangleGeometry Rect="0,0,16,16" />
-                                                            </GeometryDrawing.Geometry>
-                                                        </GeometryDrawing>
-                                                        <GeometryDrawing Brush="#08FFFFFF">
-                                                            <GeometryDrawing.Geometry>
-                                                                <GeometryGroup>
-                                                                    <RectangleGeometry Rect="0,0,8,8" />
-                                                                    <RectangleGeometry Rect="8,8,8,8" />
-                                                                </GeometryGroup>
-                                                            </GeometryDrawing.Geometry>
-                                                        </GeometryDrawing>
-                                                    </DrawingGroup>
-                                                </DrawingBrush.Drawing>
-                                            </DrawingBrush>
-                                        </Border.Background>
-                                        <Image x:Name="UnpackPreviewImage" Stretch="Uniform"
-                                               RenderOptions.BitmapScalingMode="HighQuality"
-                                               MaxWidth="256" MaxHeight="256" />
-                                    </Border>
-                                    <TextBlock x:Name="UnpackPreviewCaption" Style="{StaticResource MutedText}"
-                                               HorizontalAlignment="Center" Margin="0,5,0,0" FontSize="11" />
-                                </StackPanel>
-                            </Border>
-                        </Popup>
                     </Grid>
+
+                    <!-- Splitter + Details pane (Explorer-style). The splitter and its column are
+                         zeroed/collapsed in code-behind when the Details toggle is off; the pane
+                         width is persisted across the splitter's drags. -->
+                    <GridSplitter x:Name="UnpackDetailsSplitter" Grid.Column="3" Width="8"
+                                  HorizontalAlignment="Stretch" Background="Transparent"
+                                  DragCompleted="UnpackDetailsSplitter_DragCompleted"
+                                  Visibility="{Binding IsDetailsPaneOpen, Converter={StaticResource BoolToVis}}" />
+
+                    <Border Grid.Column="4" Background="{StaticResource PanelAltBrush}"
+                            BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="3"
+                            Visibility="{Binding IsDetailsPaneOpen, Converter={StaticResource BoolToVis}}">
+                      <Grid>
+                        <!-- Nothing selected: a centered hint. -->
+                        <TextBlock Text="Select a file or folder to see its details."
+                                   Style="{StaticResource MutedText}" TextWrapping="Wrap" TextAlignment="Center"
+                                   Margin="16" VerticalAlignment="Center" HorizontalAlignment="Center"
+                                   Visibility="{Binding DetailHasContent, Converter={StaticResource BoolToVis}, ConverterParameter=invert}" />
+
+                        <ScrollViewer VerticalScrollBarVisibility="Auto"
+                                      Visibility="{Binding DetailHasContent, Converter={StaticResource BoolToVis}}">
+                          <StackPanel Margin="12">
+                            <!-- Thumbnail: a decoded texture/image, or a generic file/folder glyph.
+                                 The image and fallback glyphs are toggled in code-behind. -->
+                            <Border Height="180" CornerRadius="3" Margin="0,0,0,12"
+                                    Background="{StaticResource PanelBrush}" BorderBrush="{StaticResource BorderBrush}"
+                                    BorderThickness="1" SnapsToDevicePixels="True">
+                              <Grid>
+                                <Image x:Name="UnpackDetailImage" Stretch="Uniform" Margin="6"
+                                       RenderOptions.BitmapScalingMode="HighQuality" Visibility="Collapsed" />
+                                <Grid x:Name="UnpackDetailFallback">
+                                    <!-- Folder glyph (folder rows). -->
+                                    <Path x:Name="UnpackDetailFolderGlyph"
+                                          Data="M10,4H4C2.89,4 2,4.89 2,6V18A2,2 0 0,0 4,20H20A2,2 0 0,0 22,18V8C22,6.89 21.1,6 20,6H12L10,4Z"
+                                          Fill="{StaticResource MutedTextBrush}" Stretch="Uniform"
+                                          Width="72" Height="72" Visibility="Collapsed"
+                                          HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                    <!-- Generic document glyph + extension chip (non-previewable files). -->
+                                    <StackPanel x:Name="UnpackDetailFileGlyph" HorizontalAlignment="Center"
+                                                VerticalAlignment="Center">
+                                        <Path Data="M6,2C4.89,2 4,2.89 4,4V20A2,2 0 0,0 6,22H18A2,2 0 0,0 20,20V8L14,2H6M13,3.5L18.5,9H13V3.5Z"
+                                              Fill="{StaticResource MutedTextBrush}" Stretch="Uniform"
+                                              Width="60" Height="60" HorizontalAlignment="Center" />
+                                        <TextBlock x:Name="UnpackDetailFallbackExt" HorizontalAlignment="Center"
+                                                   Margin="0,6,0,0" FontSize="12" FontWeight="SemiBold"
+                                                   Foreground="{StaticResource MutedTextBrush}" />
+                                    </StackPanel>
+                                </Grid>
+                              </Grid>
+                            </Border>
+
+                            <!-- File / folder name. -->
+                            <TextBlock Text="{Binding DetailName}" FontWeight="SemiBold" TextWrapping="Wrap"
+                                       HorizontalAlignment="Center" TextAlignment="Center" Margin="0,0,0,10" />
+
+                            <Border BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,0,1"
+                                    Margin="0,0,0,8" Padding="0,0,0,4">
+                                <TextBlock Text="Details" FontWeight="SemiBold" FontSize="12" />
+                            </Border>
+
+                            <!-- Info rows (label / value). Optional rows collapse when empty. -->
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" MinWidth="60" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+
+                                <TextBlock Grid.Row="0" Grid.Column="0" Text="Type"
+                                           Style="{StaticResource MutedText}" Margin="0,2,10,2" />
+                                <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding DetailTypeText}"
+                                           TextWrapping="Wrap" Margin="0,2" />
+
+                                <TextBlock Grid.Row="1" Grid.Column="0" Text="Size"
+                                           Style="{StaticResource MutedText}" Margin="0,2,10,2"
+                                           Visibility="{Binding DetailSizeText, Converter={StaticResource StringToVis}}" />
+                                <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding DetailSizeText}"
+                                           TextWrapping="Wrap" Margin="0,2"
+                                           Visibility="{Binding DetailSizeText, Converter={StaticResource StringToVis}}" />
+
+                                <TextBlock Grid.Row="2" Grid.Column="0" Text="Location"
+                                           Style="{StaticResource MutedText}" Margin="0,2,10,2"
+                                           Visibility="{Binding DetailLocationText, Converter={StaticResource StringToVis}}" />
+                                <TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding DetailLocationText}"
+                                           TextWrapping="Wrap" ToolTip="{Binding DetailLocationText}" Margin="0,2"
+                                           Visibility="{Binding DetailLocationText, Converter={StaticResource StringToVis}}" />
+
+                                <TextBlock Grid.Row="3" Grid.Column="0" Text="Pack"
+                                           Style="{StaticResource MutedText}" Margin="0,2,10,2"
+                                           Visibility="{Binding DetailHasSource, Converter={StaticResource BoolToVis}}" />
+                                <TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding DetailSourceText}"
+                                           TextWrapping="Wrap" ToolTip="{Binding DetailSourceText}" Margin="0,2"
+                                           Visibility="{Binding DetailHasSource, Converter={StaticResource BoolToVis}}" />
+                            </Grid>
+                          </StackPanel>
+                        </ScrollViewer>
+                      </Grid>
+                    </Border>
                   </Grid>
                 </Border>
 

@@ -1,8 +1,10 @@
+using System.Collections.ObjectModel;
 using System.IO;
 using System.Text.RegularExpressions;
 using Microsoft.Win32;
 using PulseWorkshop.App.Mvvm;
 using PulseWorkshop.Core.Models;
+using PulseWorkshop.Core.Services;
 
 namespace PulseWorkshop.App.ViewModels;
 
@@ -60,6 +62,7 @@ public sealed class TextureGroupViewModel : ObservableObject
                 OnPropertyChanged(nameof(PatternSummary));
                 RefreshValidation();
                 _parent.Save();
+                _parent.RequestMatchRefresh(this);
             }
         }
     }
@@ -76,6 +79,7 @@ public sealed class TextureGroupViewModel : ObservableObject
                 OnPropertyChanged(nameof(PatternSummary));
                 RefreshValidation();
                 _parent.Save();
+                _parent.RequestMatchRefresh(this);
             }
         }
     }
@@ -90,6 +94,7 @@ public sealed class TextureGroupViewModel : ObservableObject
                 Model.Recursive = value;
                 OnPropertyChanged();
                 _parent.Save();
+                _parent.RequestMatchRefresh(this);
             }
         }
     }
@@ -184,6 +189,118 @@ public sealed class TextureGroupViewModel : ObservableObject
             {
                 return $"Invalid regex: {ex.Message}";
             }
+        }
+    }
+
+    // --- Match preview ----------------------------------------------------------------------------
+
+    /// <summary>Cap on previewed tiles - a broad pattern over a big tree can match thousands of files,
+    /// and nobody scrolls that far. The count line still reports the true total.</summary>
+    private const int MaxPreviewed = 300;
+
+    private CancellationTokenSource? _scanSource;
+    private bool _isScanning;
+    private int _totalMatched;
+    private int _claimedEarlier;
+
+    /// <summary>The source files this group's pattern currently matches (capped at
+    /// <see cref="MaxPreviewed"/>), shown as a thumbnail grid under the editor.</summary>
+    public ObservableCollection<TextureMatchViewModel> Matches { get; } = new();
+
+    /// <summary>True while a scan is running (the preview header shows a spinner-ish "Scanning...").</summary>
+    public bool IsScanning
+    {
+        get => _isScanning;
+        private set => SetField(ref _isScanning, value);
+    }
+
+    /// <summary>The count/size line above the grid.</summary>
+    public string MatchSummary
+    {
+        get
+        {
+            if (IsScanning)
+                return "Scanning...";
+
+            var claimed = _claimedEarlier > 0 ? $" ({_claimedEarlier} claimed by an earlier group)" : string.Empty;
+            if (_totalMatched == 0)
+                return "No files match this pattern." + claimed;
+
+            var bytes = Matches.Where(m => m.Bytes > 0).Sum(m => m.Bytes);
+            var shown = _totalMatched > Matches.Count
+                ? $"{_totalMatched} files (showing first {Matches.Count})"
+                : $"{_totalMatched} file{(_totalMatched == 1 ? "" : "s")}";
+            var outdated = Matches.Count(m => m.IsOutOfDate);
+            var pending = outdated > 0 ? $" - {outdated} need converting" : " - all up to date";
+            return $"{shown} - {TextureMatchViewModel.FormatSize(bytes)}{pending}{claimed}";
+        }
+    }
+
+    /// <summary>True when the grid has nothing to show (drives the empty-state line).</summary>
+    public bool HasMatches => Matches.Count > 0;
+
+    /// <summary>
+    /// Rescans the source folder for this group's matches and reloads their thumbnails. Cancels any scan
+    /// already in flight, so rapid pattern edits only ever leave the newest result standing.
+    /// </summary>
+    public async Task RefreshMatchesAsync()
+    {
+        _scanSource?.Cancel();
+        var source = _scanSource = new CancellationTokenSource();
+        var ct = source.Token;
+
+        var root = _parent.ResolvedSourceFolder;
+        var earlier = _parent.GroupsBefore(this);
+        IsScanning = true;
+        OnPropertyChanged(nameof(MatchSummary));
+        try
+        {
+            // Enumerate + stat off the UI thread: a recursive scan of a big materials tree isn't instant.
+            var found = await Task.Run(() =>
+            {
+                var paths = TextureConversionService.FindGroupMatches(root, Model);
+                var mine = TextureConversionService.RemoveClaimed(root, paths, earlier);
+                var tiles = mine.Take(MaxPreviewed)
+                    .Select(p => new TextureMatchViewModel(
+                        p, root, TextureConversionService.IsOutOfDate(root, p, Model)))
+                    .ToList();
+                return (Total: mine.Count, Claimed: paths.Count - mine.Count, Tiles: tiles);
+            }, ct);
+
+            if (ct.IsCancellationRequested)
+                return;
+
+            _totalMatched = found.Total;
+            _claimedEarlier = found.Claimed;
+            Matches.Clear();
+            foreach (var tile in found.Tiles)
+                Matches.Add(tile);
+
+            IsScanning = false;
+            OnPropertyChanged(nameof(MatchSummary));
+            OnPropertyChanged(nameof(HasMatches));
+
+            // Decode thumbnails one at a time so the grid paints immediately and stays responsive.
+            foreach (var tile in found.Tiles)
+            {
+                if (ct.IsCancellationRequested)
+                    return;
+                await tile.LoadThumbnailAsync();
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // A newer scan superseded this one.
+        }
+        finally
+        {
+            if (ReferenceEquals(_scanSource, source))
+            {
+                IsScanning = false;
+                OnPropertyChanged(nameof(MatchSummary));
+                _scanSource = null;
+            }
+            source.Dispose();
         }
     }
 

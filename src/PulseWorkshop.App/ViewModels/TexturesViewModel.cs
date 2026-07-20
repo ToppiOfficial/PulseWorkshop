@@ -1,6 +1,7 @@
 using System.Collections.ObjectModel;
 using System.IO;
 using System.Windows;
+using System.Windows.Threading;
 using Microsoft.Win32;
 using PulseWorkshop.App.Mvvm;
 using PulseWorkshop.Core.Models;
@@ -46,6 +47,13 @@ public sealed class TexturesViewModel : ObservableObject
         ConvertAllCommand = new AsyncRelayCommand(ConvertAllAsync, () => CanConvertAll);
         ConvertSelectedCommand = new AsyncRelayCommand(ConvertSelectedAsync, () => CanConvertSelected);
         CancelCommand = new RelayCommand(Cancel, () => IsConverting);
+        RefreshMatchesCommand = new RelayCommand(RefreshMatchesNow, () => HasSelectedGroup);
+
+        _matchRefreshTimer.Tick += (_, _) =>
+        {
+            _matchRefreshTimer.Stop();
+            _ = _selectedGroup?.RefreshMatchesAsync();
+        };
 
         // Reopen the last project if it still exists.
         if (!string.IsNullOrEmpty(_config.LastProjectPath) && File.Exists(_config.LastProjectPath)
@@ -92,6 +100,9 @@ public sealed class TexturesViewModel : ObservableObject
     public AsyncRelayCommand ConvertSelectedCommand { get; }
     public RelayCommand CancelCommand { get; }
 
+    /// <summary>Rescans the selected group's matched files right now (the preview's Refresh button).</summary>
+    public RelayCommand RefreshMatchesCommand { get; }
+
     /// <summary>The shared Game Setup roster used for the game dropdown.</summary>
     public ObservableCollection<GameSetupEntryViewModel> Games => _gameSetup.Games;
 
@@ -105,11 +116,47 @@ public sealed class TexturesViewModel : ObservableObject
         set
         {
             if (SetField(ref _selectedGroup, value))
+            {
                 OnPropertyChanged(nameof(HasSelectedGroup));
+                RequestMatchRefresh();
+            }
         }
     }
 
     public bool HasSelectedGroup => _selectedGroup is not null;
+
+    // --- Match preview ------------------------------------------------------------------------
+
+    /// <summary>Coalesces the match rescans triggered while the user types a pattern - only the pause
+    /// after the last keystroke actually hits the disk.</summary>
+    private readonly DispatcherTimer _matchRefreshTimer = new() { Interval = TimeSpan.FromMilliseconds(300) };
+
+    /// <summary>Queues a rescan of the selected group's matched files. Passing a group makes it a no-op
+    /// unless that group is the one on screen (only the visible grid is ever refreshed).</summary>
+    public void RequestMatchRefresh(TextureGroupViewModel? group = null)
+    {
+        if (group is not null && !ReferenceEquals(group, _selectedGroup))
+            return;
+        _matchRefreshTimer.Stop();
+        _matchRefreshTimer.Start();
+    }
+
+    /// <summary>The groups that run before <paramref name="group"/>, whose matches it therefore never
+    /// gets to convert (the match preview hides those files).</summary>
+    public IReadOnlyList<TextureGroup> GroupsBefore(TextureGroupViewModel group)
+    {
+        var index = Groups.IndexOf(group);
+        if (index <= 0)
+            return [];
+        return Groups.Take(index).Select(g => g.Model).ToList();
+    }
+
+    /// <summary>Rescans now, skipping the debounce (the preview's Refresh button).</summary>
+    public void RefreshMatchesNow()
+    {
+        _matchRefreshTimer.Stop();
+        _ = _selectedGroup?.RefreshMatchesAsync();
+    }
 
     // --- Project lifecycle --------------------------------------------------------------------
 
@@ -250,6 +297,7 @@ public sealed class TexturesViewModel : ObservableObject
         ConvertAllCommand.RaiseCanExecuteChanged();
         ConvertSelectedCommand.RaiseCanExecuteChanged();
         CancelCommand.RaiseCanExecuteChanged();
+        RefreshMatchesCommand.RaiseCanExecuteChanged();
     }
 
     /// <summary>Re-checks the source folder on disk (used to refresh readiness when the window regains
@@ -258,6 +306,7 @@ public sealed class TexturesViewModel : ObservableObject
     {
         OnPropertyChanged(nameof(SourceFolderMissing));
         RefreshCommands();
+        RequestMatchRefresh();
     }
 
     /// <summary>Called by a group when its list selection toggles, so "Convert selected" re-evaluates.</summary>
@@ -295,6 +344,7 @@ public sealed class TexturesViewModel : ObservableObject
                 OnPropertyChanged(nameof(SourceFolderMissing));
                 Save();
                 RefreshCommands();
+                RequestMatchRefresh();
             }
         }
     }
@@ -680,6 +730,8 @@ public sealed class TexturesViewModel : ObservableObject
             IsConverting = false;
             _cancelSource.Dispose();
             _cancelSource = null;
+            // Converted files are up-to-date now - clear their "needs converting" marks.
+            RequestMatchRefresh();
         }
     }
 

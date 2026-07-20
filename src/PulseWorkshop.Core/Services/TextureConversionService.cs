@@ -148,6 +148,86 @@ public sealed class TextureConversionService
 
     // --- File matching --------------------------------------------------------------------------
 
+    /// <summary>
+    /// The files a group would convert, without converting anything - the exact same matching rule the
+    /// run uses, exposed for the UI's match preview. A missing folder or an invalid regex yields an
+    /// empty list rather than throwing (the user is mid-edit).
+    /// </summary>
+    public static IReadOnlyList<string> FindGroupMatches(string sourceFolder, TextureGroup group)
+    {
+        if (string.IsNullOrWhiteSpace(sourceFolder) || !Directory.Exists(sourceFolder))
+            return [];
+
+        Regex? regex = null;
+        if (group.IsRegex)
+        {
+            try
+            {
+                regex = new Regex(group.InputPattern, RegexOptions.IgnoreCase);
+            }
+            catch
+            {
+                return [];
+            }
+        }
+
+        try
+        {
+            return FindMatches(Path.GetFullPath(sourceFolder), group, regex);
+        }
+        catch
+        {
+            // A folder that vanished or an unreadable sub-tree mid-scan: report nothing.
+            return [];
+        }
+    }
+
+    /// <summary>
+    /// Drops the files an <b>earlier</b> group in the project already claims. Groups run top-to-bottom
+    /// and the first one to convert a file stamps its <c>.vtf</c> as up-to-date, so a later group's
+    /// pattern re-matching that file is a no-op - the preview shouldn't pretend otherwise.
+    /// </summary>
+    public static List<string> RemoveClaimed(string sourceFolder, IEnumerable<string> paths,
+        IReadOnlyList<TextureGroup> earlierGroups)
+    {
+        var claimers = earlierGroups
+            .Select(g => (Group: g, Match: BuildMatcher(g)))
+            .Where(c => c.Match is not null)
+            .ToList();
+        if (claimers.Count == 0)
+            return paths.ToList();
+
+        var root = Path.GetFullPath(sourceFolder);
+        var kept = new List<string>();
+        foreach (var path in paths)
+        {
+            var name = Path.GetFileName(path);
+            var topLevel = string.Equals(Path.GetDirectoryName(path), root, StringComparison.OrdinalIgnoreCase);
+            // A non-recursive claimer only reaches files sitting directly in the source root.
+            var claimed = claimers.Any(c => (c.Group.Recursive || topLevel) && c.Match!(name));
+            if (!claimed)
+                kept.Add(path);
+        }
+        return kept;
+    }
+
+    /// <summary>The group's name test as a predicate, or null when the group can never match anything
+    /// (an invalid regex). Keeps "bad regex" from silently degrading into a substring search.</summary>
+    private static Func<string, bool>? BuildMatcher(TextureGroup group)
+    {
+        if (!group.IsRegex)
+            return name => name.Contains(group.InputPattern, StringComparison.OrdinalIgnoreCase);
+        try
+        {
+            var regex = new Regex(group.InputPattern, RegexOptions.IgnoreCase);
+            return regex.IsMatch;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     /// <summary>Every file under <paramref name="root"/> whose <b>name</b> matches the group's pattern
     /// (regex or case-insensitive substring), respecting the group's recursive flag.</summary>
     private static List<string> FindMatches(string root, TextureGroup group, Regex? regex)
@@ -165,6 +245,23 @@ public sealed class TextureConversionService
         }
         result.Sort(StringComparer.OrdinalIgnoreCase);
         return result;
+    }
+
+    /// <summary>
+    /// Whether a run would actually convert <paramref name="src"/> - i.e. its <c>.vtf</c> is missing or
+    /// older than the source. Mirrors the run's own skip test, for the UI's "needs converting" flag.
+    /// (A forced run converts regardless; this answers the normal, skip-up-to-date case.)
+    /// </summary>
+    public static bool IsOutOfDate(string sourceFolder, string src, TextureGroup group)
+    {
+        try
+        {
+            return !IsUpToDate(src, ResolveOutput(Path.GetFullPath(sourceFolder), src, group));
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     /// <summary>The output <c>.vtf</c> path for <paramref name="src"/>: beside the source when the group's

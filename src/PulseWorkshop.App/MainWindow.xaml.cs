@@ -537,6 +537,8 @@ public partial class MainWindow : Window
 
         list.Move(oldIndex, newIndex);
         vm.Textures.Save();
+        // Run order decides which group claims a file, so the match preview changes with the order.
+        vm.Textures.RequestMatchRefresh();
     }
 
     private static TextureGroupViewModel? FindTextureGroupUnder(DependencyObject? source)
@@ -658,6 +660,14 @@ public partial class MainWindow : Window
             ImagePreviewWindow.ShowPreview(this, path);
         else if (asset.HasTextPreview)
             TextPreviewWindow.ShowPreview(this, path);
+    }
+
+    /// <summary>Opens the full-size image for a clicked tile in the Textures match preview. Formats
+    /// WPF can't decode (the tile shows a shell icon) have nothing to show, so they no-op.</summary>
+    private void TextureMatch_Click(object sender, MouseButtonEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is TextureMatchViewModel match && match.HasImagePreview)
+            ImagePreviewWindow.ShowPreview(this, match.FullPath);
     }
 
     // --- Unpack tab -------------------------------------------------------------------------------
@@ -1112,11 +1122,40 @@ public partial class MainWindow : Window
     {
         if (_vm.IsBusy)
             return;
-        if (((ListBox)sender).SelectedItem is WorkshopItem item)
+        // Multi-select exists only for the context menu - a multi-row selection has no single item
+        // to open, so leave the editor on whatever it was showing.
+        var list = (ListBox)sender;
+        if (list.SelectedItems.Count == 1 && list.SelectedItem is WorkshopItem item)
         {
             ClearOtherSelections(PublishedList);
             _vm.EditPublished(item);
         }
+    }
+
+    /// <summary>Right-clicking outside the highlighted rows moves the selection to the clicked row;
+    /// right-clicking inside it keeps the whole multi-selection for the context menu.</summary>
+    private void PublishedList_PreviewMouseRightButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (e.OriginalSource is not DependencyObject origin
+            || ItemsControl.ContainerFromElement(PublishedList, origin) is not ListBoxItem item)
+            return;
+        if (!item.IsSelected)
+        {
+            PublishedList.SelectedItems.Clear();
+            item.IsSelected = true;
+        }
+    }
+
+    /// <summary>Copies "title link" for every highlighted published item, one per line.</summary>
+    private void CopyPublishedLinks_Click(object sender, RoutedEventArgs e)
+    {
+        var lines = PublishedList.SelectedItems.OfType<WorkshopItem>()
+            .Select(i => $"{i.Title} {i.WorkshopUrl}")
+            .ToList();
+        if (lines.Count == 0)
+            return;
+
+        Clipboard.SetText(string.Join(Environment.NewLine, lines));
     }
 
     private void DraftsList_SelectionChanged(object sender, SelectionChangedEventArgs e)

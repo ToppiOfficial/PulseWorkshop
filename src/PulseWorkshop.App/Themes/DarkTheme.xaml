@@ -42,6 +42,11 @@
     <SolidColorBrush x:Key="LightDangerBrush" Color="{StaticResource LightDangerColor}" />
     <SolidColorBrush x:Key="LightDangerHoverBrush" Color="{StaticResource LightDangerHoverColor}" />
 
+    <!-- Warning amber: flags work that is pending rather than wrong (e.g. a texture whose .vtf is
+         missing or older than its source - the next run will convert it). -->
+    <Color x:Key="WarningColor">#D9A441</Color>
+    <SolidColorBrush x:Key="WarningBrush" Color="{StaticResource WarningColor}" />
+
     <!-- Semi-opaque panel gradient (faint top light -> darker bottom), Steam-web style. -->
     <LinearGradientBrush x:Key="PanelGradientBrush" StartPoint="0,0" EndPoint="0,1">
         <GradientStop Color="{StaticResource PanelTopColor}" Offset="0" />

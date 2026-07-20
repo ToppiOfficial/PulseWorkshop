@@ -9,10 +9,6 @@ compile models and package addons.  The tool is a successor to my previous tool 
 > the game list is config-driven, so more games can be added. *(More Steam workshop compatible games will be
 > added)*
 
-> [!NOTE]
-> *Currently supported for Windows only but a full migration to [Avaloniaui](https://avaloniaui.net/) is planned
-> for Linux native support*
-
 ## How it works
 
 PulseWorkshop hooks into your **already-running Steam client** and reuses that session, so it

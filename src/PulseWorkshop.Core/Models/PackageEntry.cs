@@ -46,11 +46,13 @@ public sealed class PackageEntry
     };
 }
 
-/// <summary>Whether a <see cref="PackageAsset"/> is processed as text or as an image.</summary>
+/// <summary>How a <see cref="PackageAsset"/> is processed: text (regex passes), image (format
+/// conversion), or audio (a verbatim copy - the source format is kept, never converted).</summary>
 public enum AssetKind
 {
     Text,
     Image,
+    Audio,
 }
 
 /// <summary>The output format an image asset is converted to. <see cref="Vtf"/> is produced by the

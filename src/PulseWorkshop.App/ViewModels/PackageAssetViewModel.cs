@@ -22,6 +22,9 @@ public sealed class PackageAssetViewModel : ObservableObject
     private static readonly HashSet<string> ImageExtensions = new(StringComparer.OrdinalIgnoreCase)
         { ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".tif", ".tiff", ".tga", ".dds", ".vtf", ".psd" };
 
+    private static readonly HashSet<string> AudioExtensions = new(StringComparer.OrdinalIgnoreCase)
+        { ".wav", ".mp3", ".ogg", ".flac", ".aac", ".m4a", ".wma", ".aiff", ".aif" };
+
     private readonly PackageEntryViewModel _entry;
     private AssetKindChoice _selectedKind;
     private ImageFormatChoice _selectedImageFormat;
@@ -89,6 +92,7 @@ public sealed class PackageAssetViewModel : ObservableObject
                 Model.Kind = _selectedKind.Kind;
                 OnPropertyChanged(nameof(IsText));
                 OnPropertyChanged(nameof(IsImage));
+                OnPropertyChanged(nameof(IsAudio));
                 OnPropertyChanged(nameof(IsVtf));
                 OnPropertyChanged(nameof(ShowVmtTemplate));
                 RefreshThumbnail();
@@ -100,6 +104,10 @@ public sealed class PackageAssetViewModel : ObservableObject
 
     public bool IsText => Model.Kind == AssetKind.Text;
     public bool IsImage => Model.Kind == AssetKind.Image;
+
+    /// <summary>True for an audio asset - a verbatim copy with no conversion options (the source
+    /// format is always kept). Drives the "copied verbatim" hint row.</summary>
+    public bool IsAudio => Model.Kind == AssetKind.Audio;
 
     /// <summary>Preview for the input file: the image itself when Kind=Image and the file decodes,
     /// the file's shell icon otherwise (text assets, or image formats WPF can't decode); null when
@@ -372,7 +380,10 @@ public sealed class PackageAssetViewModel : ObservableObject
             Title = "Choose asset file",
             Filter = "Image (*.png;*.jpg;*.jpeg;*.gif;*.bmp;*.tif;*.tiff;*.tga;*.dds;*.vtf;*.psd)"
                    + "|*.png;*.jpg;*.jpeg;*.gif;*.bmp;*.tif;*.tiff;*.tga;*.dds;*.vtf;*.psd"
-                   + "|Text (*.txt;*.vmt;*.vdf;*.qc;*.smd;*.cfg;*.lua)|*.txt;*.vmt;*.vdf;*.qc;*.smd;*.cfg;*.lua"
+                   + "|Text (*.txt;*.vmt;*.vdf;*.qc;*.pulseqc;*.smd;*.cfg;*.lua)"
+                   + "|*.txt;*.vmt;*.vdf;*.qc;*.pulseqc;*.smd;*.cfg;*.lua"
+                   + "|Audio (*.wav;*.mp3;*.ogg;*.flac;*.aac;*.m4a;*.wma;*.aiff;*.aif)"
+                   + "|*.wav;*.mp3;*.ogg;*.flac;*.aac;*.m4a;*.wma;*.aiff;*.aif"
                    + "|All files (*.*)|*.*",
             CheckFileExists = true,
         };
@@ -396,6 +407,8 @@ public sealed class PackageAssetViewModel : ObservableObject
         var ext = Path.GetExtension(dlg.FileName);
         if (ImageExtensions.Contains(ext) && AssetKinds.FirstOrDefault(k => k.Kind == AssetKind.Image) is { } imgKind)
             SelectedKind = imgKind;
+        else if (AudioExtensions.Contains(ext) && AssetKinds.FirstOrDefault(k => k.Kind == AssetKind.Audio) is { } audioKind)
+            SelectedKind = audioKind;
         if (string.IsNullOrWhiteSpace(OutputFileName))
             OutputFileName = Path.GetFileName(dlg.FileName);
     }

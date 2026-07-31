@@ -73,7 +73,12 @@ if ($LASTEXITCODE -ne 0) { Fail "Restore failed ($LASTEXITCODE)." }
 if ($LASTEXITCODE -ne 0) { Fail "Solution build failed ($LASTEXITCODE)." }
 
 # 2) Publish the host as its own self-extracting single exe into the staging folder.
+#    Restore again with the profile applied: the solution restore in step 1 does not see
+#    PublishSingleFile/RuntimeIdentifier from the profile, so the win-x64 runtime pack would be
+#    missing at publish time (NETSDK1112).
 Write-Host "`n=== Publishing SteamHost (single-file) ===" -ForegroundColor Yellow
+& $msbuild $hostProj /t:Restore /p:PublishProfile=SingleFileProfile @common
+if ($LASTEXITCODE -ne 0) { Fail "SteamHost restore failed ($LASTEXITCODE)." }
 & $msbuild $hostProj /t:Publish /p:PublishProfile=SingleFileProfile "/p:PublishDir=$stageDir\" @common
 if ($LASTEXITCODE -ne 0) { Fail "SteamHost publish failed ($LASTEXITCODE)." }
 
@@ -87,6 +92,8 @@ Write-Host "ModelTool: $modelToolExe" -ForegroundColor Cyan
 
 # 4) Publish the App as a single exe, embedding both the host and the model tool.
 Write-Host "`n=== Publishing App (single-file, host + ModelTool embedded) ===" -ForegroundColor Yellow
+& $msbuild $appProj /t:Restore /p:PublishProfile=SingleFileProfile @common
+if ($LASTEXITCODE -ne 0) { Fail "App restore failed ($LASTEXITCODE)." }
 & $msbuild $appProj /t:Publish /p:PublishProfile=SingleFileProfile "/p:PublishDir=$OutDir\" "/p:EmbeddedHostExe=$stagedHost" "/p:EmbeddedModelToolExe=$modelToolExe" @common
 if ($LASTEXITCODE -ne 0) { Fail "App publish failed ($LASTEXITCODE)." }
 

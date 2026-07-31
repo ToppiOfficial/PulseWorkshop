@@ -81,6 +81,7 @@ public sealed class PackageAdvancedViewModel : ObservableObject
     {
         new AssetKindChoice(AssetKind.Text, "Text"),
         new AssetKindChoice(AssetKind.Image, "Image"),
+        new AssetKindChoice(AssetKind.Audio, "Audio"),
     };
 
     /// <summary>The image-format choices shared with every image asset row.</summary>

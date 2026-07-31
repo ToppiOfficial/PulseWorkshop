@@ -325,7 +325,16 @@ public sealed class WorkshopDownloadService
         }
 
         if (details is null)
-            return Fail(id.Value, null, $"Item {id.Value} was not found (it may be private, removed, or the id is wrong).");
+        {
+            // Neither keyless source can see the item - the usual cause is that it is private/friends-only,
+            // which hides it from the web API and its public page alike. The Steam client of the account
+            // that owns it still can, so route there rather than failing outright (an id that truly does
+            // not exist just fails again there, with the client's own message).
+            Log("Steam's public data does not list this item (it may be private) - trying the Steam client.");
+            return new WorkshopDownloadResult(false, null,
+                $"Item {id.Value} was not found (it may be private, removed, or the id is wrong).",
+                id.Value, null, NeedsSteamClient: true, ConsumerAppId: 0);
+        }
 
         Log($"Found \"{details.Title}\" (app {details.ConsumerAppId}"
             + (details.FileSize > 0 ? $", {FormatSize(details.FileSize)}" : "") + ").");
@@ -455,13 +464,24 @@ public sealed class WorkshopDownloadService
     public static WorkshopDownloadResult CopyFromInstallFolder(
         string? installFolder, string destinationFolder, ulong id, string? title)
     {
-        if (string.IsNullOrWhiteSpace(installFolder) || !Directory.Exists(installFolder))
+        if (string.IsNullOrWhiteSpace(installFolder) || !(Directory.Exists(installFolder) || File.Exists(installFolder)))
             return new WorkshopDownloadResult(false, null,
                 $"Steam's cache folder for the item is missing: {installFolder}", id, title);
 
         try
         {
             Directory.CreateDirectory(destinationFolder);
+
+            // Legacy (RemoteStorage) items - L4D2's - install as a single "<ugcid>_legacy.bin" file, not a
+            // folder, so GetItemInstallInfo hands back the file itself.
+            if (File.Exists(installFolder))
+            {
+                var legacyOut = Path.Combine(destinationFolder,
+                    BuildDownloadFileName(title, id, SniffExtension(installFolder)));
+                File.Copy(installFolder, legacyOut, overwrite: true);
+                return new WorkshopDownloadResult(true, legacyOut, null, id, title);
+            }
+
             var files = Directory.GetFiles(installFolder, "*", SearchOption.AllDirectories);
             if (files.Length == 0)
                 return new WorkshopDownloadResult(false, null, "Steam's cache folder for the item is empty.", id, title);
@@ -470,7 +490,7 @@ public sealed class WorkshopDownloadService
             {
                 var src = files[0];
                 var outputPath = Path.Combine(destinationFolder,
-                    BuildDownloadFileName(title, id, Path.GetExtension(src)));
+                    BuildDownloadFileName(title, id, SniffExtension(src)));
                 File.Copy(src, outputPath, overwrite: true);
                 return new WorkshopDownloadResult(true, outputPath, null, id, title);
             }
@@ -490,6 +510,25 @@ public sealed class WorkshopDownloadService
         {
             return new WorkshopDownloadResult(false, null, $"Copying from Steam's cache failed: {ex.Message}", id, title);
         }
+    }
+
+    /// <summary>Returns the real extension for a downloaded content file: Steam's legacy cache names
+    /// everything "&lt;ugcid&gt;_legacy.bin", so the magic bytes decide between a VPK and a GMA; anything
+    /// else keeps its own extension.</summary>
+    private static string? SniffExtension(string path)
+    {
+        try
+        {
+            using var f = File.OpenRead(path);
+            Span<byte> magic = stackalloc byte[4];
+            if (f.ReadAtLeast(magic, 4, throwOnEndOfStream: false) == 4)
+            {
+                if (magic is [0x34, 0x12, 0xAA, 0x55]) return ".vpk";
+                if (magic is [(byte)'G', (byte)'M', (byte)'A', (byte)'D']) return ".gma";
+            }
+        }
+        catch { /* unreadable - fall back to the name */ }
+        return Path.GetExtension(path);
     }
 
     /// <summary>Builds a safe output file name for a web-API download: the extension comes from the

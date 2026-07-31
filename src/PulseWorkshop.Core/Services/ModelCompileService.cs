@@ -51,6 +51,18 @@ public sealed record CompileResult(
 /// </summary>
 public sealed class ModelCompileService
 {
+    /// <summary>studiomdl's own compile-script extension.</summary>
+    public const string QcExtension = ".qc";
+
+    /// <summary>PulseWorkshop's alias for a <see cref="QcExtension"/> script - identical content, just
+    /// a distinct extension so QC files can be associated with this app. studiomdl accepts it directly,
+    /// same as <c>.qc</c>.</summary>
+    public const string PulseQcExtension = ".pulseqc";
+
+    /// <summary>True when <paramref name="path"/> uses the <see cref="PulseQcExtension"/> alias.</summary>
+    public static bool IsPulseQc(string path) =>
+        path.EndsWith(PulseQcExtension, StringComparison.OrdinalIgnoreCase);
+
     /// <summary>The file group studiomdl emits for one model, keyed off the .mdl's base name.</summary>
     private static readonly string[] ModelPartExtensions =
         { ".mdl", ".vvd", ".dx90.vtx", ".dx80.vtx", ".sw.vtx", ".vtx", ".phy", ".ani" };

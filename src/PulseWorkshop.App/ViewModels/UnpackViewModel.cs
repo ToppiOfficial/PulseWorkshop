@@ -533,7 +533,7 @@ public sealed class UnpackViewModel : ObservableObject
         "phy" => "Model Physics",
         "vvd" => "Model Vertex Data",
         "vtx" => "Model Mesh Data",
-        "qc" => "Model Compile Script",
+        "qc" or "pulseqc" => "Model Compile Script",
         "smd" => "Studiomdl Model",
         "dmx" => "Datamodel",
         "vpk" => "Valve Pack",

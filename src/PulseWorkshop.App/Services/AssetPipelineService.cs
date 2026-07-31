@@ -85,9 +85,12 @@ public sealed class AssetPipelineService
             try
             {
                 Directory.CreateDirectory(destDir);
-                var ok = asset.Kind == AssetKind.Text
-                    ? ApplyText(asset, input, dest)
-                    : await ApplyImageAsync(asset, input, dest, destDir, root, resolveInput, vtf, ct);
+                var ok = asset.Kind switch
+                {
+                    AssetKind.Text => ApplyText(asset, input, dest),
+                    AssetKind.Audio => ApplyAudio(input, dest),
+                    _ => await ApplyImageAsync(asset, input, dest, destDir, root, resolveInput, vtf, ct),
+                };
                 allOk &= ok;
             }
             catch (OperationCanceledException)
@@ -127,6 +130,19 @@ public sealed class AssetPipelineService
         }
         File.WriteAllText(dest, text);
         Output?.Invoke($"[asset] text -> {dest}");
+        return true;
+    }
+
+    // --- Audio ----------------------------------------------------------------------------------
+
+    /// <summary>Copies an audio asset verbatim - no conversion. The source format is always kept, so
+    /// the output's extension is forced to the input's (a rename can change the name but never the
+    /// format). Sources are never mutated.</summary>
+    private bool ApplyAudio(string input, string dest)
+    {
+        dest = Path.ChangeExtension(dest, Path.GetExtension(input));
+        File.Copy(input, dest, overwrite: true);
+        Output?.Invoke($"[asset] audio copy -> {dest}");
         return true;
     }
 

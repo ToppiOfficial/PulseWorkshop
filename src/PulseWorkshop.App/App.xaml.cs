@@ -80,6 +80,9 @@ public partial class App : Application
 
     protected override void OnExit(ExitEventArgs e)
     {
+        // Belt to MainViewModel.DisposeAsync's braces: the fake game folder a model was staged into
+        // never outlives the session, even if the main window never opened or was already gone.
+        HlmvGameStage.CleanupAll();
         _signal?.Dispose();
         _instanceLock?.Dispose();
         base.OnExit(e);

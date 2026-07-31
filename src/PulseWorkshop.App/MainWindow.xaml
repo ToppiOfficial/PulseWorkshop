@@ -1251,7 +1251,10 @@
               <Border Background="{StaticResource PanelGradientBrush}" BorderBrush="{StaticResource BorderBrush}"
                       BorderThickness="1" CornerRadius="3"
                       Visibility="{Binding IsArchiveOpen, Converter={StaticResource BoolToVis}, ConverterParameter=invert}">
-                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                <!-- DockPanel, not a StackPanel: the intro block sits on top and the recent list
+                     fills whatever height and width is left, so it grows with the window. -->
+                <DockPanel Margin="20,24,20,20">
+                  <StackPanel DockPanel.Dock="Top">
                     <!-- Looping chibi mascot on the empty state (just for fun). -->
                     <Image Height="120" Stretch="Uniform" HorizontalAlignment="Center" Margin="0,0,0,16"
                            RenderOptions.BitmapScalingMode="HighQuality"
@@ -1270,18 +1273,19 @@
                     <ProgressBar Width="220" IsIndeterminate="True" Margin="0,8,0,0"
                                  HorizontalAlignment="Center"
                                  Visibility="{Binding IsLoading, Converter={StaticResource BoolToVis}}" />
+                  </StackPanel>
 
-                    <!-- Open recent: the last few archives opened here. -->
-                    <StackPanel Margin="0,22,0,0" MaxWidth="440" HorizontalAlignment="Center"
-                                Visibility="{Binding RecentArchives.Count, Converter={StaticResource CountToVis}}">
-                        <TextBlock Text="Open recent" FontWeight="SemiBold"
-                                   HorizontalAlignment="Center" Margin="0,0,0,4" />
-                        <ScrollViewer MaxHeight="220" VerticalScrollBarVisibility="Auto">
-                            <ItemsControl ItemsSource="{Binding RecentArchives}"
-                                          ItemTemplate="{StaticResource RecentItemTemplate}" />
-                        </ScrollViewer>
-                    </StackPanel>
-                </StackPanel>
+                  <!-- Open recent: the archives opened here, filling the remaining space. -->
+                  <DockPanel Margin="0,22,0,0"
+                             Visibility="{Binding RecentArchives.Count, Converter={StaticResource CountToVis}}">
+                      <TextBlock DockPanel.Dock="Top" Text="Open recent" FontWeight="SemiBold"
+                                 HorizontalAlignment="Center" Margin="0,0,0,4" />
+                      <ScrollViewer VerticalScrollBarVisibility="Auto">
+                          <ItemsControl ItemsSource="{Binding RecentArchives}"
+                                        ItemTemplate="{StaticResource RecentItemTemplate}" />
+                      </ScrollViewer>
+                  </DockPanel>
+                </DockPanel>
               </Border>
 
               <!-- Archive open: header bar + browser + export bar. -->
@@ -1784,7 +1788,7 @@
                                 <ColumnDefinition Width="Auto" />
                             </Grid.ColumnDefinitions>
                             <TextBox Text="{Binding QcPath, UpdateSourceTrigger=PropertyChanged}"
-                                     Tag="Type or paste a .qc path" VerticalContentAlignment="Center" />
+                                     Tag="Type or paste a .qc / .pulseqc path" VerticalContentAlignment="Center" />
                             <Button Grid.Column="1" Content="Open file" Margin="6,0,0,0"
                                     Command="{Binding OpenQcCommand}"
                                     ToolTip="Open the .qc in the OS default editor." />
@@ -1919,7 +1923,10 @@
                     <Border Background="{StaticResource PanelGradientBrush}" BorderBrush="{StaticResource BorderBrush}"
                             BorderThickness="1" CornerRadius="3"
                             Visibility="{Binding IsProjectOpen, Converter={StaticResource BoolToVis}, ConverterParameter=invert}">
-                      <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                      <!-- DockPanel, not a StackPanel: the intro block sits on top and the recent
+                           list fills the leftover height and width, so it grows with the window. -->
+                      <DockPanel Margin="20,24,20,20">
+                        <StackPanel DockPanel.Dock="Top">
                           <!-- Looping chibi mascot on the empty state (just for fun). -->
                           <Image Height="120" Stretch="Uniform" HorizontalAlignment="Center" Margin="0,0,0,16"
                                  RenderOptions.BitmapScalingMode="HighQuality"
@@ -1935,18 +1942,20 @@
                               <Button Content="Open project..." Margin="8,0,0,0" Padding="16,8"
                                       Command="{Binding OpenProjectCommand}" />
                           </StackPanel>
+                        </StackPanel>
 
-                          <!-- Open recent: the last few projects (shared with the Package tab). -->
-                          <StackPanel Margin="0,22,0,0" MaxWidth="420" HorizontalAlignment="Center"
-                                      Visibility="{Binding RecentProjects.Count, Converter={StaticResource CountToVis}}">
-                              <TextBlock Text="Open recent" FontWeight="SemiBold"
-                                         HorizontalAlignment="Center" Margin="0,0,0,4" />
-                              <ScrollViewer MaxHeight="220" VerticalScrollBarVisibility="Auto">
-                                  <ItemsControl ItemsSource="{Binding RecentProjects}"
-                                                ItemTemplate="{StaticResource RecentItemTemplate}" />
-                              </ScrollViewer>
-                          </StackPanel>
-                      </StackPanel>
+                        <!-- Open recent: the projects (shared with the Package tab), filling the
+                             remaining space. -->
+                        <DockPanel Margin="0,22,0,0"
+                                   Visibility="{Binding RecentProjects.Count, Converter={StaticResource CountToVis}}">
+                            <TextBlock DockPanel.Dock="Top" Text="Open recent" FontWeight="SemiBold"
+                                       HorizontalAlignment="Center" Margin="0,0,0,4" />
+                            <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                <ItemsControl ItemsSource="{Binding RecentProjects}"
+                                              ItemTemplate="{StaticResource RecentItemTemplate}" />
+                            </ScrollViewer>
+                        </DockPanel>
+                      </DockPanel>
                     </Border>
 
                     <!-- Project open: bar + settings (top), the entries list (with its compile-all
@@ -2326,7 +2335,7 @@
                                                       </Grid.ColumnDefinitions>
                                                       <TextBlock Grid.Column="0" Text="QC" Style="{StaticResource EntryLabel}" />
                                                       <TextBox Grid.Column="1" Text="{Binding QcPath, UpdateSourceTrigger=PropertyChanged}"
-                                                               Tag="Path to .qc (relative to the project, or absolute)"
+                                                               Tag="Path to .qc / .pulseqc (relative to the project, or absolute)"
                                                                VerticalContentAlignment="Center" ToolTip="{Binding ResolvedQcPath}" />
                                                       <Button Grid.Column="2" Content="Open file" Margin="6,0,0,0"
                                                               Command="{Binding OpenQcCommand}"
@@ -2647,7 +2656,10 @@
                     <Border Background="{StaticResource PanelGradientBrush}" BorderBrush="{StaticResource BorderBrush}"
                             BorderThickness="1" CornerRadius="3"
                             Visibility="{Binding IsProjectOpen, Converter={StaticResource BoolToVis}, ConverterParameter=invert}">
-                      <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                      <!-- DockPanel, not a StackPanel: the intro block sits on top and the recent
+                           list fills the leftover height and width, so it grows with the window. -->
+                      <DockPanel Margin="20,24,20,20">
+                        <StackPanel DockPanel.Dock="Top">
                           <!-- Looping chibi mascot on the empty state (just for fun). -->
                           <Image Height="120" Stretch="Uniform" HorizontalAlignment="Center" Margin="0,0,0,16"
                                  RenderOptions.BitmapScalingMode="HighQuality"
@@ -2663,18 +2675,20 @@
                               <Button Content="Open project..." Margin="8,0,0,0" Padding="16,8"
                                       Command="{Binding OpenProjectCommand}" />
                           </StackPanel>
+                        </StackPanel>
 
-                          <!-- Open recent: the last few projects (shared with the Compile tab). -->
-                          <StackPanel Margin="0,22,0,0" MaxWidth="420" HorizontalAlignment="Center"
-                                      Visibility="{Binding RecentProjects.Count, Converter={StaticResource CountToVis}}">
-                              <TextBlock Text="Open recent" FontWeight="SemiBold"
-                                         HorizontalAlignment="Center" Margin="0,0,0,4" />
-                              <ScrollViewer MaxHeight="220" VerticalScrollBarVisibility="Auto">
-                                  <ItemsControl ItemsSource="{Binding RecentProjects}"
-                                                ItemTemplate="{StaticResource RecentItemTemplate}" />
-                              </ScrollViewer>
-                          </StackPanel>
-                      </StackPanel>
+                        <!-- Open recent: the projects (shared with the Compile tab), filling the
+                             remaining space. -->
+                        <DockPanel Margin="0,22,0,0"
+                                   Visibility="{Binding RecentProjects.Count, Converter={StaticResource CountToVis}}">
+                            <TextBlock DockPanel.Dock="Top" Text="Open recent" FontWeight="SemiBold"
+                                       HorizontalAlignment="Center" Margin="0,0,0,4" />
+                            <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                <ItemsControl ItemsSource="{Binding RecentProjects}"
+                                              ItemTemplate="{StaticResource RecentItemTemplate}" />
+                            </ScrollViewer>
+                        </DockPanel>
+                      </DockPanel>
                     </Border>
 
                     <!-- Project open: bar + settings (top), the entries list fills the rest.
@@ -3128,6 +3142,12 @@
                                                                             Visibility="{Binding ShowVmtTemplate, Converter={StaticResource BoolToVis}}" />
                                                                 </Grid>
 
+                                                                <!-- Audio: verbatim copy, no conversion -->
+                                                                <TextBlock Margin="0,6,0,0" Style="{StaticResource MutedText}"
+                                                                           TextWrapping="Wrap"
+                                                                           Text="Copied verbatim - the source format is kept (no conversion). You can rename the output file, but its extension always follows the input."
+                                                                           Visibility="{Binding IsAudio, Converter={StaticResource BoolToVis}}" />
+
                                                                 <!-- Text: regex replaces -->
                                                                 <StackPanel Margin="0,6,0,0"
                                                                             Visibility="{Binding IsText, Converter={StaticResource BoolToVis}}">
@@ -3235,7 +3255,10 @@
               <Border Background="{StaticResource PanelGradientBrush}" BorderBrush="{StaticResource BorderBrush}"
                       BorderThickness="1" CornerRadius="3"
                       Visibility="{Binding IsProjectOpen, Converter={StaticResource BoolToVis}, ConverterParameter=invert}">
-                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                <!-- DockPanel, not a StackPanel: the intro block sits on top and the recent list
+                     fills whatever height and width is left, so it grows with the window. -->
+                <DockPanel Margin="20,24,20,20">
+                  <StackPanel DockPanel.Dock="Top">
                     <!-- Looping chibi mascot on the empty state (just for fun). -->
                     <Image Height="120" Stretch="Uniform" HorizontalAlignment="Center" Margin="0,0,0,16"
                            RenderOptions.BitmapScalingMode="HighQuality"
@@ -3250,18 +3273,19 @@
                         <Button Content="Open project..." Margin="8,0,0,0" Padding="16,8"
                                 Command="{Binding OpenProjectCommand}" />
                     </StackPanel>
+                  </StackPanel>
 
-                    <!-- Open recent: the last few texture projects. -->
-                    <StackPanel Margin="0,22,0,0" MaxWidth="440" HorizontalAlignment="Center"
-                                Visibility="{Binding RecentProjects.Count, Converter={StaticResource CountToVis}}">
-                        <TextBlock Text="Open recent" FontWeight="SemiBold"
-                                   HorizontalAlignment="Center" Margin="0,0,0,4" />
-                        <ScrollViewer MaxHeight="220" VerticalScrollBarVisibility="Auto">
-                            <ItemsControl ItemsSource="{Binding RecentProjects}"
-                                          ItemTemplate="{StaticResource RecentItemTemplate}" />
-                        </ScrollViewer>
-                    </StackPanel>
-                </StackPanel>
+                  <!-- Open recent: the texture projects, filling the remaining space. -->
+                  <DockPanel Margin="0,22,0,0"
+                             Visibility="{Binding RecentProjects.Count, Converter={StaticResource CountToVis}}">
+                      <TextBlock DockPanel.Dock="Top" Text="Open recent" FontWeight="SemiBold"
+                                 HorizontalAlignment="Center" Margin="0,0,0,4" />
+                      <ScrollViewer VerticalScrollBarVisibility="Auto">
+                          <ItemsControl ItemsSource="{Binding RecentProjects}"
+                                        ItemTemplate="{StaticResource RecentItemTemplate}" />
+                      </ScrollViewer>
+                  </DockPanel>
+                </DockPanel>
               </Border>
 
               <!-- Project open: bar + settings (top), the groups list fills the rest. -->
@@ -3798,7 +3822,7 @@
                         <StackPanel Orientation="Horizontal">
                             <Button Content="Open in viewer" Style="{StaticResource AccentButton}" MinWidth="120"
                                     Padding="16,8" Command="{Binding OpenInViewerCommand}"
-                                    ToolTip="Load the .mdl in the viewer. A model inside the game folder is first copied (with its .vvd/.vtx/.phy siblings, not materials) to a temp folder so it opens via HLMV's crash-free direct load; textures come from the viewer's own game mount." />
+                                    ToolTip="Load the .mdl in the viewer. HLMV can only load models the game filesystem can see, so a model outside the game is copied (with its .vvd/.vtx/.phy siblings, not materials) into a temporary game folder next to the real one and opened from there - materials still come from the real game. That folder is removed when PulseWorkshop closes." />
                             <Button Content="Go to file" Command="{Binding GoToMdlCommand}"
                                     Margin="8,0,0,0" Padding="12,8"
                                     Visibility="{Binding MdlPath, Converter={StaticResource StringToVis}}"

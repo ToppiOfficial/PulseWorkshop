@@ -662,6 +662,10 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable, IUgcClie
         {
             row.Template.Name = existing.Name;
             row.Template.Description = existing.Description;
+            row.Template.ChangeNote = existing.ChangeNote;
+            row.Template.Tags = existing.Tags;
+            row.Template.DefaultVisibility = existing.DefaultVisibility;
+            row.Template.ContentFile = existing.ContentFile;
             row.Template.PreviewImagePath = existing.PreviewImagePath;
             row.Template.Modified = existing.Modified;
             row.RaiseDisplayChanged();
@@ -1360,9 +1364,11 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable, IUgcClie
         ulong id, uint consumerAppId, string? title, string destinationFolder,
         IProgress<double>? progress, CancellationToken ct)
     {
+        // A private item exposes no app id anywhere public, so fall back to the game we are already
+        // connected to (else the one selected in the Workshop tab) - for the user's own hidden items
+        // that is the game that owns them.
         if (consumerAppId == 0)
-            return new WorkshopDownloadResult(false, null,
-                "Could not determine which game this item belongs to.", id, title);
+            consumerAppId = _service.ActiveAppId ?? SelectedGame.AppId;
 
         // The client download path is game-agnostic: any app id works as long as the logged-in account
         // owns the game (free titles such as CS2 included), so we don't require it to be in the tool's
@@ -1940,6 +1946,9 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable, IUgcClie
 
     public ValueTask DisposeAsync()
     {
+        // Closes any model viewer this session launched and removes the fake game folder it staged
+        // models into - nothing of it is meant to outlive the session.
+        ModelView.Shutdown();
         _service.HostOutput -= OnHostOutput;
         return _service.DisposeAsync();
     }

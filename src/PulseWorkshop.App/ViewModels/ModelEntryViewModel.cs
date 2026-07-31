@@ -4,6 +4,7 @@ using System.IO;
 using System.Windows.Input;
 using Microsoft.Win32;
 using PulseWorkshop.App.Mvvm;
+using PulseWorkshop.App.Services;
 using PulseWorkshop.Core.Models;
 using PulseWorkshop.Core.Services;
 
@@ -310,7 +311,7 @@ public sealed class ModelEntryViewModel : ObservableObject
         var dlg = new OpenFileDialog
         {
             Title = "Choose QC file",
-            Filter = "QC file (*.qc)|*.qc|All files (*.*)|*.*",
+            Filter = QcFile.DialogFilter,
             CheckFileExists = true,
         };
         try

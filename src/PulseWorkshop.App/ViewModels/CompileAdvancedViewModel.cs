@@ -396,7 +396,7 @@ public sealed class CompileAdvancedViewModel : ObservableObject
         var dlg = new OpenFileDialog
         {
             Title = "Choose QC file",
-            Filter = "QC file (*.qc)|*.qc|All files (*.*)|*.*",
+            Filter = QcFile.DialogFilter,
             CheckFileExists = true,
         };
         if (ProjectDir is { Length: > 0 } pdir && Directory.Exists(pdir))

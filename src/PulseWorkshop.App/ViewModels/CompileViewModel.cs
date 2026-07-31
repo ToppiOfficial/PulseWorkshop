@@ -415,7 +415,7 @@ public sealed class CompileViewModel : ObservableObject
         var dlg = new OpenFileDialog
         {
             Title = "Choose QC file",
-            Filter = "QC file (*.qc)|*.qc|All files (*.*)|*.*",
+            Filter = QcFile.DialogFilter,
             CheckFileExists = true,
         };
         try

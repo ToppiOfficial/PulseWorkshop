@@ -6,6 +6,7 @@ using PulseWorkshop.App.Mvvm;
 using PulseWorkshop.App.Services;
 using PulseWorkshop.Core.Models;
 using PulseWorkshop.Core.Services;
+using PulseWorkshop.Core.Storage;
 
 namespace PulseWorkshop.App.ViewModels;
 
@@ -20,16 +21,21 @@ public sealed class PackageAdvancedViewModel : ObservableObject
 {
     private readonly AdvancedProjectSession _session;
     private readonly ConsoleViewModel _console;
+    private readonly UiSettings _settings;
     private PackageEntryViewModel? _selectedEntry;
     private bool _isPackaging;
     private string _statusMessage = "No project open.";
     private CancellationTokenSource? _cancelSource;
+    private IReadOnlyList<FileTreeNodeViewModel> _contentTree = Array.Empty<FileTreeNodeViewModel>();
 
-    public PackageAdvancedViewModel(AdvancedProjectSession session, ConsoleViewModel console)
+    public PackageAdvancedViewModel(AdvancedProjectSession session, ConsoleViewModel console, UiSettings settings)
     {
         _session = session;
         _console = console;
+        _settings = settings;
 
+        RefreshTreeCommand = new RelayCommand(RefreshTree);
+        ToggleTreeCommand = new RelayCommand(() => IsTreeOpen = !IsTreeOpen);
         AddEntryCommand = new RelayCommand(AddEntry, () => IsProjectOpen);
         PackageAllCommand = new AsyncRelayCommand(PackageAllAsync, () => CanPackageAll);
         PackageSelectedCommand = new AsyncRelayCommand(PackageSelectedAsync, () => CanPackageSelected);
@@ -70,11 +76,81 @@ public sealed class PackageAdvancedViewModel : ObservableObject
         set
         {
             if (SetField(ref _selectedEntry, value))
+            {
                 OnPropertyChanged(nameof(HasSelectedEntry));
+                RefreshTree();
+            }
         }
     }
 
     public bool HasSelectedEntry => _selectedEntry is not null;
+
+    // --- Content preview tree (right pane) ------------------------------------------------------
+
+    /// <summary>Rebuilds the read-only folder tree (also the Refresh button - it's a snapshot,
+    /// nothing watches the disk).</summary>
+    public RelayCommand RefreshTreeCommand { get; }
+
+    /// <summary>Shows/hides the tree pane; the state is remembered across sessions.</summary>
+    public RelayCommand ToggleTreeCommand { get; }
+
+    /// <summary>The selected entry's folder as a single-root tree, empty when it isn't on disk yet.</summary>
+    public IReadOnlyList<FileTreeNodeViewModel> ContentTree
+    {
+        get => _contentTree;
+        private set
+        {
+            if (SetField(ref _contentTree, value))
+                OnPropertyChanged(nameof(TreeIsEmpty));
+        }
+    }
+
+    public bool TreeIsEmpty => ContentTree.Count == 0;
+
+    public bool IsTreeOpen
+    {
+        get => _settings.PackageTreePaneOpen;
+        set
+        {
+            if (_settings.PackageTreePaneOpen == value)
+                return;
+            _settings.PackageTreePaneOpen = value;
+            _settings.Save();
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(TreePaneWidth));
+            OnPropertyChanged(nameof(TreeSplitterWidth));
+        }
+    }
+
+    /// <summary>The tree column's width - zero when closed, so the editor reclaims the space. The
+    /// setter is how the splitter drag comes back to us (the column's Width binds two-way).</summary>
+    public GridLength TreePaneWidth
+    {
+        get => IsTreeOpen ? new GridLength(_settings.PackageTreePaneWidth) : new GridLength(0);
+        set
+        {
+            if (!IsTreeOpen || value.Value < 1)
+                return; // a closed pane's zero width isn't a user resize - don't persist it
+            _settings.PackageTreePaneWidth = Math.Max(220, value.Value);
+            _settings.Save();
+            if (value.Value < 220)
+                OnPropertyChanged(); // drag squashed the pane - push the clamped width back to the column
+        }
+    }
+
+    public GridLength TreeSplitterWidth => IsTreeOpen ? new GridLength(8) : new GridLength(0);
+
+    /// <summary>Called by an entry when its folder path changes, so the tree follows it.</summary>
+    public void OnEntryFolderChanged(PackageEntryViewModel entry)
+    {
+        if (ReferenceEquals(entry, _selectedEntry))
+            RefreshTree();
+    }
+
+    private void RefreshTree() =>
+        ContentTree = FileTreeNodeViewModel.ForFolder(_selectedEntry?.ResolvedFolderPath) is { } root
+            ? new[] { root }
+            : Array.Empty<FileTreeNodeViewModel>();
 
     /// <summary>The asset-kind choices shared with every asset row.</summary>
     public IReadOnlyList<AssetKindChoice> AssetKinds { get; } = new[]

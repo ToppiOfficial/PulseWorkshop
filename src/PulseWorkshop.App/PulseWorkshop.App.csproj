@@ -14,11 +14,26 @@
     <Platform>x64</Platform>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <!-- App version. Shown in the window title at runtime (see MainWindow ctor). -->
-    <Version>0.7.0</Version>
+    <Version>0.8.0</Version>
+    <!-- Vulkan interop (Rendering/) is pointer work throughout. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\PulseWorkshop.Core\PulseWorkshop.Core.csproj" />
+  </ItemGroup>
+
+  <!-- Vulkan bindings for the Unpack tab's model preview. Bindings only - vulkan-1.dll itself comes
+       from the GPU driver, so there is nothing extra to redistribute. -->
+  <ItemGroup>
+    <PackageReference Include="Silk.NET.Vulkan" Version="2.23.0" />
+  </ItemGroup>
+
+  <!-- Precompiled SPIR-V for the preview renderer. Committed rather than compiled at build time so
+       building PulseWorkshop never needs the Vulkan SDK - see Rendering/Shaders/README.md. -->
+  <ItemGroup>
+    <EmbeddedResource Include="Rendering\Shaders\mesh.vert.spv" LogicalName="mesh.vert.spv" />
+    <EmbeddedResource Include="Rendering\Shaders\mesh.frag.spv" LogicalName="mesh.frag.spv" />
   </ItemGroup>
 
   <!-- Bundled UI assets (embedded as WPF resources, loaded via pack:// URIs). -->

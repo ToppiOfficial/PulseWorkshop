@@ -4,6 +4,7 @@ using System.Windows;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media.Imaging;
+using PulseWorkshop.App.Services;
 
 namespace PulseWorkshop.App;
 
@@ -18,7 +19,7 @@ public partial class ImagePreviewWindow : Window
     // closes the previous one instead of stacking windows.
     private static ImagePreviewWindow? _current;
 
-    private ImagePreviewWindow(string path, BitmapImage bmp)
+    private ImagePreviewWindow(string path, BitmapSource bmp)
     {
         InitializeComponent();
         PreviewImage.Source = bmp;
@@ -60,22 +61,10 @@ public partial class ImagePreviewWindow : Window
     /// can't be decoded (it may have changed on disk since the thumbnail loaded).</summary>
     public static void ShowPreview(Window owner, string path)
     {
-        BitmapImage bmp;
-        try
-        {
-            bmp = new BitmapImage();
-            bmp.BeginInit();
-            bmp.UriSource = new Uri(path, UriKind.Absolute);
-            bmp.CacheOption = BitmapCacheOption.OnLoad;
-            // Bypass WPF's URI-keyed bitmap cache so the preview shows the file's current contents.
-            bmp.CreateOptions = BitmapCreateOptions.IgnoreImageCache;
-            bmp.EndInit();
-            bmp.Freeze();
-        }
-        catch
-        {
+        // Full resolution (maxPixels 0) - this window is where the user goes to inspect the pixels,
+        // opaque for the same reason the tiles are: a mask alpha would show an empty window.
+        if (TexturePreview.Load(path, 0, showAlpha: false) is not BitmapSource bmp)
             return;
-        }
 
         // Close any preview that's already up so clicking a different thumbnail replaces it.
         _current?.Close();

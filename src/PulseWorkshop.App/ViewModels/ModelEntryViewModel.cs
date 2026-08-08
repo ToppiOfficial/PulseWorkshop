@@ -69,11 +69,7 @@ public sealed class ModelEntryViewModel : ObservableObject
     private void OpenQc()
     {
         if (!CanOpenQc()) return;
-        var qc = ResolvedQcPath;
-        if (Keyboard.Modifiers.HasFlag(ModifierKeys.Alt))
-            Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{qc}\"") { UseShellExecute = true });
-        else
-            Process.Start(new ProcessStartInfo(qc) { UseShellExecute = true });
+        ShellOpen.Open(ResolvedQcPath);
     }
 
     /// <summary>The .mdl from this entry's last successful compile (drives its own "Go to file").</summary>
@@ -94,8 +90,7 @@ public sealed class ModelEntryViewModel : ObservableObject
     {
         if (string.IsNullOrEmpty(LastMdlPath))
             return;
-        Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{LastMdlPath}\"")
-            { UseShellExecute = true });
+        ShellOpen.Reveal(LastMdlPath);
     }
 
     /// <summary>The .mdl summary (bones, hitboxes, poly count, dependencies) from this entry's last
@@ -146,8 +141,7 @@ public sealed class ModelEntryViewModel : ObservableObject
         var target = SelectedMaterialDir ?? MaterialDirs.FirstOrDefault();
         if (target is null || !Directory.Exists(target.FullPath))
             return;
-        Process.Start(new ProcessStartInfo("explorer.exe", $"\"{target.FullPath}\"")
-            { UseShellExecute = true });
+        ShellOpen.Reveal(target.FullPath);
     }
 
     public string Name
@@ -178,6 +172,7 @@ public sealed class ModelEntryViewModel : ObservableObject
                 OpenQcCommand.RaiseCanExecuteChanged();
                 _parent.Save();
                 _parent.RefreshCommands();
+                _parent.OnEntryQcChanged(this);
             }
         }
     }

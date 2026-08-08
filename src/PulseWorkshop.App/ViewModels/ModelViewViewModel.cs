@@ -372,8 +372,7 @@ public sealed class ModelViewViewModel : ObservableObject
     {
         if (!HasMdl)
             return;
-        Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{MdlPath}\"")
-            { UseShellExecute = true });
+        ShellOpen.Reveal(MdlPath);
     }
 
     /// <summary>Reads the current .mdl's stats into <see cref="ModelInfo"/> via ModelTool. Best-effort.</summary>

@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.IO;
 using Microsoft.Win32;
 using PulseWorkshop.App.Mvvm;
+using PulseWorkshop.App.Services;
 using PulseWorkshop.Core.Models;
 
 namespace PulseWorkshop.App.ViewModels;
@@ -119,6 +120,7 @@ public sealed class PackageEntryViewModel : ObservableObject
                     asset.RefreshValidation();
                 _parent.Save();
                 _parent.RefreshCommands();
+                _parent.OnEntryFolderChanged(this);
             }
         }
     }
@@ -209,8 +211,7 @@ public sealed class PackageEntryViewModel : ObservableObject
     {
         if (string.IsNullOrEmpty(LastPackagePath))
             return;
-        Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{LastPackagePath}\"")
-            { UseShellExecute = true });
+        ShellOpen.Reveal(LastPackagePath);
     }
 
     private void ViewPackage()

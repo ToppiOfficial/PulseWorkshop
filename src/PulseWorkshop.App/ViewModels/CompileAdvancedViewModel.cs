@@ -32,6 +32,7 @@ public sealed class CompileAdvancedViewModel : ObservableObject
     private string _statusMessage = "No project open.";
     private CancellationTokenSource? _cancelSource;
     private string? _selectedMaterialGameRoot;
+    private string _qcText = string.Empty;
 
     public CompileAdvancedViewModel(AdvancedProjectSession session, ConsoleViewModel console, UiSettings settings)
     {
@@ -40,6 +41,8 @@ public sealed class CompileAdvancedViewModel : ObservableObject
         _settings = settings;
         _modelToolPath = ToolLocator.ResolveModelToolPath();
 
+        RefreshQcCommand = new RelayCommand(RefreshQc);
+        ToggleQcCommand = new RelayCommand(() => IsQcOpen = !IsQcOpen);
         AddEntryCommand = new RelayCommand(AddEntry, () => IsProjectOpen);
         CompileAllCommand = new AsyncRelayCommand(CompileAllAsync, () => CanCompileAll);
         CompileSelectedCommand = new AsyncRelayCommand(CompileSelectedAsync, () => CanCompileSelected);
@@ -80,11 +83,98 @@ public sealed class CompileAdvancedViewModel : ObservableObject
         set
         {
             if (SetField(ref _selectedEntry, value))
+            {
                 OnPropertyChanged(nameof(HasSelectedEntry));
+                RefreshQc();
+            }
         }
     }
 
     public bool HasSelectedEntry => _selectedEntry is not null;
+
+    // --- QC preview (right pane) ----------------------------------------------------------------
+    // The Package - Advanced tab shows the selected entry's folder tree here; a compile entry points
+    // at a single text file, so this shows its contents instead. Read-only - edit the .qc in an editor
+    // ("Open file") and hit Refresh.
+
+    /// <summary>Re-reads the selected entry's .qc from disk (it's a snapshot, nothing watches the file).</summary>
+    public RelayCommand RefreshQcCommand { get; }
+
+    /// <summary>Shows/hides the QC pane; the state is remembered across sessions.</summary>
+    public RelayCommand ToggleQcCommand { get; }
+
+    /// <summary>The selected entry's .qc/.pulseqc text, or a note when there's nothing to show.</summary>
+    public string QcText
+    {
+        get => _qcText;
+        private set
+        {
+            if (SetField(ref _qcText, value))
+                OnPropertyChanged(nameof(QcIsEmpty));
+        }
+    }
+
+    public bool QcIsEmpty => _qcText.Length == 0;
+
+    /// <summary>The previewed file's full path, shown as the pane's tooltip.</summary>
+    public string QcPreviewPath => _selectedEntry?.ResolvedQcPath ?? string.Empty;
+
+    public bool IsQcOpen
+    {
+        get => _settings.CompileQcPaneOpen;
+        set
+        {
+            if (_settings.CompileQcPaneOpen == value)
+                return;
+            _settings.CompileQcPaneOpen = value;
+            _settings.Save();
+            OnPropertyChanged();
+            OnPropertyChanged(nameof(QcPaneWidth));
+            OnPropertyChanged(nameof(QcSplitterWidth));
+        }
+    }
+
+    /// <summary>The QC column's width - zero when closed, so the editor reclaims the space. The setter
+    /// is how the splitter drag comes back to us (the column's Width binds two-way).</summary>
+    public GridLength QcPaneWidth
+    {
+        get => IsQcOpen ? new GridLength(_settings.CompileQcPaneWidth) : new GridLength(0);
+        set
+        {
+            if (!IsQcOpen || value.Value < 1)
+                return; // a closed pane's zero width isn't a user resize - don't persist it
+            _settings.CompileQcPaneWidth = Math.Max(220, value.Value);
+            _settings.Save();
+            if (value.Value < 220)
+                OnPropertyChanged(); // drag squashed the pane - push the clamped width back to the column
+        }
+    }
+
+    public GridLength QcSplitterWidth => IsQcOpen ? new GridLength(8) : new GridLength(0);
+
+    /// <summary>Called by an entry when its QC path changes, so the preview follows it.</summary>
+    public void OnEntryQcChanged(ModelEntryViewModel entry)
+    {
+        if (ReferenceEquals(entry, _selectedEntry))
+            RefreshQc();
+    }
+
+    private void RefreshQc()
+    {
+        var path = _selectedEntry?.ResolvedQcPath;
+        try
+        {
+            QcText = string.IsNullOrWhiteSpace(path) || !File.Exists(path)
+                ? string.Empty
+                : File.ReadAllText(path);
+        }
+        catch (Exception ex)
+        {
+            // Locked / unreadable file: show why rather than an empty pane.
+            QcText = $"Could not read {path}: {ex.Message}";
+        }
+        OnPropertyChanged(nameof(QcPreviewPath));
+    }
 
     /// <summary>Output-destination choices, shared with every entry so ComboBox selection matches.
     /// A Subfolder name may itself be a nested path (e.g. <c>test/bill</c>), so a separate work-folder

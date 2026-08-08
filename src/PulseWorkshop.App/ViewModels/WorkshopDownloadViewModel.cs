@@ -372,7 +372,7 @@ public sealed class WorkshopDownloadViewModel : ObservableObject
         try
         {
             Directory.CreateDirectory(DownloadFolder);
-            Process.Start(new ProcessStartInfo(DownloadFolder) { UseShellExecute = true });
+            ShellOpen.Open(DownloadFolder);
         }
         catch (Exception ex)
         {
@@ -722,12 +722,8 @@ public sealed class DownloadedItemViewModel : ObservableObject
         try
         {
             // A folder download opens in place; a single file is selected within its parent folder.
-            if (Directory.Exists(FilePath))
-                Process.Start(new ProcessStartInfo("explorer.exe", $"\"{FilePath}\"")
-                    { UseShellExecute = true });
-            else if (File.Exists(FilePath))
-                Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{FilePath}\"")
-                    { UseShellExecute = true });
+            if (Directory.Exists(FilePath) || File.Exists(FilePath))
+                ShellOpen.Reveal(FilePath);
         }
         catch
         {

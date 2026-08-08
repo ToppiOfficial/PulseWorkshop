@@ -37,6 +37,7 @@ public sealed class PackageViewModel : ObservableObject
     private string? _lastPackagePath;
     private CancellationTokenSource? _cancelSource;
     private System.Text.StringBuilder? _logBuffer;
+    private IReadOnlyList<FileTreeNodeViewModel> _contentTree = Array.Empty<FileTreeNodeViewModel>();
     private readonly object _logLock = new();
 
     public PackageViewModel(GameSetupViewModel gameSetup, ConsoleViewModel console)
@@ -66,6 +67,8 @@ public sealed class PackageViewModel : ObservableObject
         CancelCommand = new RelayCommand(Cancel, () => IsPackaging);
         GoToPackageCommand = new RelayCommand(GoToPackage, () => !string.IsNullOrEmpty(LastPackagePath));
         ViewPackageCommand = new RelayCommand(ViewPackage, () => !string.IsNullOrEmpty(LastPackagePath));
+        RefreshTreeCommand = new RelayCommand(RefreshTree);
+        RefreshTree();
 
         // The game dropdown is shared with Compile - Simple and Model View: react when either of them
         // (or Game Setup) changes the active game so this tab's selection and command preview follow.
@@ -131,6 +134,7 @@ public sealed class PackageViewModel : ObservableObject
                 Save();
                 OnInputsChanged();
                 OpenFolderCommand.RaiseCanExecuteChanged();
+                RefreshTree();
             }
         }
     }
@@ -303,6 +307,31 @@ public sealed class PackageViewModel : ObservableObject
         }
     }
 
+    // --- Content preview tree -------------------------------------------------------------------
+
+    /// <summary>Rebuilds the read-only folder tree (also the Refresh button - the tree is a snapshot,
+    /// nothing watches the disk).</summary>
+    public RelayCommand RefreshTreeCommand { get; }
+
+    /// <summary>The folder to pack as a single-root tree, or empty when the path isn't a folder.
+    /// A one-element list because TreeView wants a collection, not a node.</summary>
+    public IReadOnlyList<FileTreeNodeViewModel> ContentTree
+    {
+        get => _contentTree;
+        private set
+        {
+            if (SetField(ref _contentTree, value))
+                OnPropertyChanged(nameof(TreeIsEmpty));
+        }
+    }
+
+    public bool TreeIsEmpty => ContentTree.Count == 0;
+
+    private void RefreshTree() =>
+        ContentTree = FileTreeNodeViewModel.ForFolder(FolderPath) is { } root
+            ? new[] { root }
+            : Array.Empty<FileTreeNodeViewModel>();
+
     /// <summary>A read-only Crowbar-style preview of the exact packer command line that will run.</summary>
     public string CommandPreview
     {
@@ -384,14 +413,13 @@ public sealed class PackageViewModel : ObservableObject
     private void OpenFolder()
     {
         if (!CanOpenFolder) return;
-        Process.Start(new ProcessStartInfo(FolderPath.TrimEnd('\\', '/')) { UseShellExecute = true });
+        ShellOpen.Open(FolderPath);
     }
 
     private void GoToPackage()
     {
         if (string.IsNullOrEmpty(LastPackagePath)) return;
-        Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{LastPackagePath}\"")
-            { UseShellExecute = true });
+        ShellOpen.Reveal(LastPackagePath);
     }
 
     private void Cancel()

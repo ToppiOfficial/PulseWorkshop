@@ -27,22 +27,12 @@ static std::vector<Token> tokenize(const std::string& src) {
 
         if (src[i] == '"') {
             ++i;
+            // No escape processing: Valve's KeyValues only does that when a caller asks for it, and
+            // neither VMTs nor gameinfo.txt do. Translating would corrupt every Windows path whose
+            // segment starts with n or t ("models\namvet", "materials\test").
             std::string val;
-            while (i < n && src[i] != '"') {
-                if (src[i] == '\\' && i + 1 < n) {
-                    char next = src[i + 1];
-                    switch (next) {
-                        case 'n':  val += '\n'; break;
-                        case 't':  val += '\t'; break;
-                        // For all other escapes (e.g. backslashes in VMT texture paths like
-                        // "models\survivors\survivor_it"), keep both the backslash and the char.
-                        default:   val += '\\'; val += next; break;
-                    }
-                    i += 2;
-                } else {
-                    val += src[i++];
-                }
-            }
+            while (i < n && src[i] != '"')
+                val += src[i++];
             if (i < n) ++i; // skip closing "
             tokens.push_back({TokType::String, std::move(val)});
             continue;

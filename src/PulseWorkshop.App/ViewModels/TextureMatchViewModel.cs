@@ -1,6 +1,5 @@
 using System.IO;
 using System.Windows.Media;
-using System.Windows.Media.Imaging;
 using PulseWorkshop.App.Mvvm;
 using PulseWorkshop.App.Services;
 
@@ -9,7 +8,8 @@ namespace PulseWorkshop.App.ViewModels;
 /// <summary>
 /// One tile in the Textures tab's match preview: a source file the selected group's pattern matches,
 /// shown with its name, size and a low-res thumbnail. Read-only - it never converts or writes anything.
-/// Formats WPF can't decode (.tga/.psd/.dds/...) fall back to the file's shell icon.
+/// Decoding (including .tga/.dds/.psd) is <see cref="TexturePreview"/>'s job; files it can't read at
+/// all fall back to the shell icon.
 /// </summary>
 public sealed class TextureMatchViewModel : ObservableObject
 {
@@ -17,15 +17,23 @@ public sealed class TextureMatchViewModel : ObservableObject
     /// enough that a folder of hundreds of 4K source images doesn't blow up memory.</summary>
     private const int ThumbnailPixels = 256;
 
+    private readonly bool _showAlpha;
     private ImageSource? _thumbnail;
     private bool _thumbnailIsFileIcon;
     private bool _loadStarted;
 
-    public TextureMatchViewModel(string fullPath, string root, bool isOutOfDate)
+    public TextureMatchViewModel(string fullPath, string root, bool isOutOfDate, bool showAlpha)
     {
         IsOutOfDate = isOutOfDate;
         FullPath = fullPath;
         FileName = Path.GetFileName(fullPath);
+        _showAlpha = showAlpha;
+
+        // A rescan (the window regaining focus is enough) throws these view models away and builds new
+        // ones. Taking the cached bitmap here means the rebuilt tile paints immediately instead of
+        // blanking for as long as the async decode takes, which read as the whole grid flickering.
+        _thumbnail = TexturePreview.TryGetCached(fullPath, ThumbnailPixels, showAlpha);
+        _loadStarted = _thumbnail is not null;
 
         string relative;
         try
@@ -94,7 +102,7 @@ public sealed class TextureMatchViewModel : ObservableObject
             return;
         _loadStarted = true;
 
-        var (image, isIcon) = await Task.Run(() => Load(FullPath)).ConfigureAwait(true);
+        var (image, isIcon) = await Task.Run(() => Load(FullPath, _showAlpha)).ConfigureAwait(true);
         _thumbnail = image;
         _thumbnailIsFileIcon = isIcon;
         OnPropertyChanged(nameof(Thumbnail));
@@ -102,29 +110,14 @@ public sealed class TextureMatchViewModel : ObservableObject
         OnPropertyChanged(nameof(HasImagePreview));
     }
 
-    private static (ImageSource? Image, bool IsIcon) Load(string path)
+    private static (ImageSource? Image, bool IsIcon) Load(string path, bool showAlpha)
     {
-        try
-        {
-            var bmp = new BitmapImage();
-            bmp.BeginInit();
-            bmp.UriSource = new Uri(path, UriKind.Absolute);
-            bmp.CacheOption = BitmapCacheOption.OnLoad;
-            bmp.CreateOptions = BitmapCreateOptions.IgnoreImageCache;
-            bmp.DecodePixelWidth = ThumbnailPixels;
-            bmp.EndInit();
-            bmp.Freeze();
-            return (bmp, false);
-        }
-        catch
-        {
-            // Not decodable by WPF (e.g. .tga/.psd/.dds) - ask the shell for Explorer's thumbnail.
-        }
+        if (TexturePreview.Load(path, ThumbnailPixels, showAlpha) is { } image)
+            return (image, false);
 
         try
         {
-            if (ShellThumbnail.GetThumbnail(path, ThumbnailPixels) is { } shell)
-                return (shell, false);
+            // Nothing could decode it - show the file type rather than an empty tile.
             return (ShellIcon.GetFileIcon(path), true);
         }
         catch

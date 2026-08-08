@@ -110,8 +110,8 @@ public sealed class PackageAssetViewModel : ObservableObject
     public bool IsAudio => Model.Kind == AssetKind.Audio;
 
     /// <summary>Preview for the input file: the image itself when Kind=Image and the file decodes,
-    /// the file's shell icon otherwise (text assets, or image formats WPF can't decode); null when
-    /// the file is missing or the path is blank.</summary>
+    /// the file's shell icon otherwise (text assets, or an image format nothing can decode); null
+    /// when the file is missing or the path is blank.</summary>
     public ImageSource? ThumbnailSource => _thumbnailSource;
 
     /// <summary>True when <see cref="ThumbnailSource"/> is the file-type shell icon rather than the
@@ -167,24 +167,11 @@ public sealed class PackageAssetViewModel : ObservableObject
         var resolved = _entry.ResolveAgainst(Model.InputPath);
         if (string.IsNullOrEmpty(resolved) || !File.Exists(resolved)) return null;
 
-        if (IsImage)
-        {
-            try
-            {
-                var bmp = new BitmapImage();
-                bmp.BeginInit();
-                bmp.UriSource = new Uri(resolved, UriKind.Absolute);
-                bmp.CacheOption = BitmapCacheOption.OnLoad;
-                bmp.DecodePixelWidth = 64;
-                bmp.EndInit();
-                bmp.Freeze();
-                return bmp;
-            }
-            catch
-            {
-                // Not decodable by WPF (e.g. .tga/.dds/.vtf) - fall through to the shell icon.
-            }
-        }
+        // TexturePreview covers .tga/.dds/.psd/.vtf as well as the formats WPF has codecs for;
+        // anything it still can't read falls through to the shell icon. Always opaque - this
+        // thumbnail is a "which file is this" marker, and a mask alpha would render it blank.
+        if (IsImage && TexturePreview.Load(resolved, 64, showAlpha: false) is { } image)
+            return image;
 
         var icon = ShellIcon.GetFileIcon(resolved);
         _thumbnailIsFileIcon = icon is not null;
@@ -367,10 +354,7 @@ public sealed class PackageAssetViewModel : ObservableObject
     private void OpenInput()
     {
         if (ResolvedInputPath() is not { } path) return;
-        if (Keyboard.Modifiers.HasFlag(ModifierKeys.Alt))
-            Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{path}\"") { UseShellExecute = true });
-        else
-            Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
+        ShellOpen.Open(path);
     }
 
     private void BrowseInput()

@@ -266,8 +266,14 @@
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="ComboBox">
+                    <!-- Two columns: the selection text is confined to column 0 so a long value is
+                         clipped at the arrow instead of running underneath it. -->
                     <Grid>
-                        <ToggleButton Style="{StaticResource ComboToggle}"
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="22" />
+                        </Grid.ColumnDefinitions>
+                        <ToggleButton Grid.ColumnSpan="2" Style="{StaticResource ComboToggle}"
                                       IsChecked="{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}"
                                       Focusable="False" ClickMode="Press" />
                         <ContentPresenter Margin="{TemplateBinding Padding}" VerticalAlignment="Center"
@@ -275,7 +281,7 @@
                                           Content="{TemplateBinding SelectionBoxItem}"
                                           ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}"
                                           IsHitTestVisible="False" />
-                        <Popup IsOpen="{TemplateBinding IsDropDownOpen}" Placement="Bottom"
+                        <Popup Grid.ColumnSpan="2" IsOpen="{TemplateBinding IsDropDownOpen}" Placement="Bottom"
                                AllowsTransparency="True" Focusable="False" PopupAnimation="Slide">
                             <Border Background="{StaticResource PanelAltBrush}"
                                     BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
@@ -294,12 +300,24 @@
     <!-- Drop-up variant: identical to the default ComboBox, but its popup opens above the
          control. Use for comboboxes pinned near the bottom of the window where a downward
          popup would be clipped by the window edge or taskbar. -->
+    <!-- Denser combo for list-like panels (the model preview's bodygroup pickers), where a stack of
+         full-height ones would eat the pane. -->
+    <Style x:Key="CompactComboBox" TargetType="ComboBox" BasedOn="{StaticResource {x:Type ComboBox}}">
+        <Setter Property="Height" Value="22" />
+        <Setter Property="Padding" Value="6,1" />
+        <Setter Property="FontSize" Value="11" />
+    </Style>
+
     <Style x:Key="DropUpComboBox" TargetType="ComboBox" BasedOn="{StaticResource {x:Type ComboBox}}">
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="ComboBox">
                     <Grid>
-                        <ToggleButton Style="{StaticResource ComboToggle}"
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="22" />
+                        </Grid.ColumnDefinitions>
+                        <ToggleButton Grid.ColumnSpan="2" Style="{StaticResource ComboToggle}"
                                       IsChecked="{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}"
                                       Focusable="False" ClickMode="Press" />
                         <ContentPresenter Margin="{TemplateBinding Padding}" VerticalAlignment="Center"
@@ -307,7 +325,7 @@
                                           Content="{TemplateBinding SelectionBoxItem}"
                                           ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}"
                                           IsHitTestVisible="False" />
-                        <Popup IsOpen="{TemplateBinding IsDropDownOpen}" Placement="Top"
+                        <Popup Grid.ColumnSpan="2" IsOpen="{TemplateBinding IsDropDownOpen}" Placement="Top"
                                AllowsTransparency="True" Focusable="False" PopupAnimation="Slide">
                             <Border Background="{StaticResource PanelAltBrush}"
                                     BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
@@ -483,7 +501,11 @@
             <Setter.Value>
                 <ControlTemplate TargetType="TreeViewItem">
                     <StackPanel>
-                        <Border x:Name="Bd" Background="Transparent" CornerRadius="3">
+                        <!-- Border comes from the item so a tree can opt into faint row lines
+                             (Package - Simple does); unset it stays 0-thickness as before. -->
+                        <Border x:Name="Bd" Background="Transparent" CornerRadius="3"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}">
                             <Grid>
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="16" />

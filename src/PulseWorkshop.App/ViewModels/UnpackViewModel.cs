@@ -5,6 +5,9 @@ using System.Windows;
 using System.Windows.Threading;
 using Microsoft.Win32;
 using PulseWorkshop.App.Mvvm;
+using PulseWorkshop.App.Services;
+using PulseWorkshop.Core.Materials;
+using PulseWorkshop.Core.Mdl;
 using PulseWorkshop.Core.Storage;
 using PulseWorkshop.Core.Unpack;
 
@@ -13,8 +16,37 @@ namespace PulseWorkshop.App.ViewModels;
 /// <summary>Which column the Unpack file list is sorted by (the clickable header ribbon).</summary>
 public enum UnpackSortColumn { Name, Type, Source, Size }
 
-/// <summary>Kind of hover preview a file row supports (see <see cref="UnpackFileViewModel.PreviewKind"/>).</summary>
-public enum UnpackPreviewKind { None, Image, Vtf, Vtex }
+/// <summary>Kind of hover preview a file row supports (see <see cref="UnpackFileViewModel.PreviewKind"/>).
+/// <see cref="Model"/> is the odd one out - it is not a decoded image but a live 3D render, and it
+/// needs the file's .vvd/.vtx siblings as well as the .mdl itself.</summary>
+public enum UnpackPreviewKind { None, Image, Vtf, Vtex, Model }
+
+/// Everything the 3D preview needs for one model: the render mesh and its resolved materials,
+/// indexed by <see cref="MeshPart.MaterialIndex"/>.
+public sealed record ModelPreviewData(StudioMesh Mesh, ModelMaterial[] Materials);
+
+/// <summary>
+/// One bodygroup picker under the model preview. Only bodygroups with something to choose between
+/// get one; changing <see cref="SelectedIndex"/> raises <see cref="PropertyChanged"/>, which the
+/// window uses to swap the sub-model and redraw.
+/// </summary>
+public sealed class BodyGroupViewModel(int index, string name, IReadOnlyList<string> options)
+    : ObservableObject
+{
+    /// Which bodygroup this is, as the renderer indexes them.
+    public int Index { get; } = index;
+
+    public string Name { get; } = name;
+
+    public IReadOnlyList<string> Options { get; } = options;
+
+    private int _selectedIndex;
+    public int SelectedIndex
+    {
+        get => _selectedIndex;
+        set => SetField(ref _selectedIndex, value);
+    }
+}
 
 /// <summary>
 /// The Unpack tab: opens a packed Source archive (.vpk or .gma) - or a whole game via its
@@ -86,6 +118,9 @@ public sealed class UnpackViewModel : ObservableObject
         ViewModelCommand = new RelayCommand(ViewSelectedModel, () => CanViewModel);
         BrowseModelCommand = new RelayCommand(BrowseSelectedModel, () => CanViewModel);
         ToggleDetailsPaneCommand = new RelayCommand(() => IsDetailsPaneOpen = !IsDetailsPaneOpen);
+        GoUpCommand = new RelayCommand(
+            () => { if (_selectedFolder?.Parent is { } p) NavigateToFolder(p); },
+            () => _selectedFolder?.Parent is not null);
     }
 
     /// <summary>Raised (on the UI thread) when a row should be scrolled into view - after
@@ -110,6 +145,8 @@ public sealed class UnpackViewModel : ObservableObject
     public RelayCommand ViewModelCommand { get; }
     public RelayCommand BrowseModelCommand { get; }
     public RelayCommand ToggleDetailsPaneCommand { get; }
+    /// <summary>Navigate to the parent of the selected folder ("up one level").</summary>
+    public RelayCommand GoUpCommand { get; }
 
     // --- Bound state ------------------------------------------------------------------------
 
@@ -202,7 +239,9 @@ public sealed class UnpackViewModel : ObservableObject
         get => _selectedFolder;
         set
         {
-            if (!SetField(ref _selectedFolder, value))
+            var changed = SetField(ref _selectedFolder, value);
+            GoUpCommand.RaiseCanExecuteChanged();
+            if (!changed)
             {
                 // Re-clicking the current folder still makes the tree the active pane.
                 if (value is not null)
@@ -338,6 +377,7 @@ public sealed class UnpackViewModel : ObservableObject
     private string _detailSourceText = string.Empty;
     private string _detailExtensionChip = string.Empty;
     private UnpackPreviewKind _detailPreviewKind = UnpackPreviewKind.None;
+    private string _detailMeshText = string.Empty;
     private PackedEntry? _detailEntry;
     // The item currently shown; used to skip redundant thumbnail reloads (and its DetailChanged).
     private string _detailSignature = string.Empty;
@@ -377,6 +417,102 @@ public sealed class UnpackViewModel : ObservableObject
     /// <summary>The kind of thumbnail the described file supports (the view decodes it).</summary>
     public UnpackPreviewKind DetailPreviewKind => _detailPreviewKind;
 
+    /// <summary>Vertex/triangle counts for a model that previewed successfully, shown under the file
+    /// name. Empty for everything else (and cleared whenever the subject changes).</summary>
+    public string DetailMeshText => _detailMeshText;
+
+    /// <summary>Pickers for the previewed model's bodygroups - only the ones that have more than one
+    /// sub-model to choose between. Empty (and the panel hidden) for everything else.</summary>
+    public ObservableCollection<BodyGroupViewModel> BodyGroups { get; } = [];
+
+    public bool HasBodyGroups => BodyGroups.Count > 0;
+
+    /// <summary>$texturegroup skins, as "Skin 0", "Skin 1"... - the .mdl stores no names for them.
+    /// Empty unless the model has more than one.</summary>
+    public ObservableCollection<string> Skins { get; } = [];
+
+    public bool HasSkins => Skins.Count > 1;
+
+    private bool _hasSkeleton;
+
+    /// <summary>True when the previewed model has a skeleton to draw, which is what shows the
+    /// "Show skeleton" toggle.</summary>
+    public bool HasSkeleton => _hasSkeleton;
+
+    /// <summary>When on, the 3D preview draws the model's bind-pose skeleton over the mesh as an
+    /// x-ray. No animation - the bones are shown where the compiler left them. Persisted.</summary>
+    public bool ShowSkeleton
+    {
+        get => _settings.UnpackShowSkeleton;
+        set
+        {
+            if (_settings.UnpackShowSkeleton == value)
+                return;
+            _settings.UnpackShowSkeleton = value;
+            OnPropertyChanged();
+            ShowSkeletonChanged?.Invoke(value);
+        }
+    }
+
+    /// <summary>Raised when the skeleton toggle flips; the window owns the renderer that draws it.</summary>
+    public event Action<bool>? ShowSkeletonChanged;
+
+    /// <summary>Shows or hides the skeleton toggle for a newly previewed model.</summary>
+    public void SetSkeleton(bool hasSkeleton)
+    {
+        _hasSkeleton = hasSkeleton;
+        OnPropertyChanged(nameof(HasSkeleton));
+        OnPropertyChanged(nameof(HasModelOptions));
+    }
+
+    /// <summary>True when the model has anything to configure, which is what shows the panel.</summary>
+    public bool HasModelOptions => HasBodyGroups || HasSkins || HasSkeleton;
+
+    /// <summary>Side by side only when there is something in both halves; with one kind of picker it
+    /// takes the full width rather than sitting in a half-empty column.</summary>
+    public int ModelOptionColumns => HasBodyGroups && HasSkins ? 2 : 1;
+
+    private int _selectedSkin;
+    public int SelectedSkin
+    {
+        get => _selectedSkin;
+        set
+        {
+            if (SetField(ref _selectedSkin, value) && value >= 0)
+                SkinChanged?.Invoke(value);
+        }
+    }
+
+    /// <summary>Raised when the user picks a skin; the window owns the renderer that draws it.</summary>
+    public event Action<int>? SkinChanged;
+
+    /// <summary>Rebuilds the skin picker for a newly previewed model.</summary>
+    public void SetSkins(int count)
+    {
+        Skins.Clear();
+        if (count > 1)
+            for (int i = 0; i < count; i++)
+                Skins.Add($"Skin {i}");
+        _selectedSkin = 0;
+        OnPropertyChanged(nameof(SelectedSkin));
+        OnPropertyChanged(nameof(HasSkins));
+        OnPropertyChanged(nameof(HasModelOptions));
+        OnPropertyChanged(nameof(ModelOptionColumns));
+    }
+
+    /// <summary>Rebuilds the bodygroup pickers for a newly previewed model. Called by the window,
+    /// which owns the renderer the selections drive.</summary>
+    public void SetBodyGroups(IReadOnlyList<StudioBodyPart> bodyParts)
+    {
+        BodyGroups.Clear();
+        for (int i = 0; i < bodyParts.Count; i++)
+            if (bodyParts[i].IsSelectable)
+                BodyGroups.Add(new BodyGroupViewModel(i, bodyParts[i].Name, bodyParts[i].Models));
+        OnPropertyChanged(nameof(HasBodyGroups));
+        OnPropertyChanged(nameof(HasModelOptions));
+        OnPropertyChanged(nameof(ModelOptionColumns));
+    }
+
     /// <summary>The described file's entry (for the view to read bytes and decode a thumbnail); null
     /// for folders / multi-selection / nothing.</summary>
     public PackedEntry? DetailEntry => _detailEntry;
@@ -405,7 +541,13 @@ public sealed class UnpackViewModel : ObservableObject
         if (highlighted == 1)
             SetDetailRow(single!);
         else if (highlighted > 1)
-            SetDetailMulti();
+        {
+            // A live model preview survives a multi-selection. Picking a set of files to export is
+            // usually done *while* studying the model, and tearing the render down (and reloading it
+            // on the next single click) makes that unusable. Every other preview kind still yields.
+            if (_detailPreviewKind != UnpackPreviewKind.Model)
+                SetDetailMulti();
+        }
         else if (_selectedFolder is { } folder)
             SetDetailFolder(folder);
         else
@@ -500,6 +642,21 @@ public sealed class UnpackViewModel : ObservableObject
         _detailExtensionChip = chip;
         _detailPreviewKind = previewKind;
         _detailEntry = entry;
+        // Cleared here and refilled by ReadModelMeshAsync, which the view calls off DetailChanged
+        // below - so a new subject never keeps the previous model's counts.
+        _detailMeshText = string.Empty;
+        if (BodyGroups.Count > 0 || Skins.Count > 0 || _hasSkeleton)
+        {
+            BodyGroups.Clear();
+            Skins.Clear();
+            _hasSkeleton = false;
+            OnPropertyChanged(nameof(HasBodyGroups));
+            OnPropertyChanged(nameof(HasSkins));
+            OnPropertyChanged(nameof(HasSkeleton));
+            OnPropertyChanged(nameof(HasModelOptions));
+            OnPropertyChanged(nameof(ModelOptionColumns));
+        }
+        OnPropertyChanged(nameof(DetailMeshText));
         OnPropertyChanged(nameof(DetailHasContent));
         OnPropertyChanged(nameof(DetailIsFolder));
         OnPropertyChanged(nameof(DetailName));
@@ -741,8 +898,16 @@ public sealed class UnpackViewModel : ObservableObject
             _treeRoot = root;
             TreeRoots.Add(root);
             root.IsExpanded = true;
-            root.IsSelected = true;
-            SelectedFolder = root;
+
+            // Restoring instead of selecting the root, not after it: the TreeView applies IsSelected
+            // when it realizes the node and raises its own selection event, which lands after this
+            // method and would put the view straight back on the root. Called before
+            // RememberUnpackArchive below, which overwrites the pointer it compares against.
+            if (!TryRestoreLastLocation(archive.SourcePath))
+            {
+                root.IsSelected = true;
+                SelectedFolder = root;
+            }
 
             // Remember it for the empty state's "Open recent" list (also updates the last-open pointer).
             _settings.RememberUnpackArchive(archive.SourcePath);
@@ -914,6 +1079,45 @@ public sealed class UnpackViewModel : ObservableObject
             + (folder.TotalFileCount != folder.FileList.Count
                 ? $" ({folder.TotalFileCount:N0} incl. subfolders)" : "");
         ExportSelectedCommand.RaiseCanExecuteChanged();
+    }
+
+    /// <summary>
+    /// Puts the tab back where it was the last time this same archive was open - same folder, same
+    /// highlighted file. Returns false (leaving the caller to select the root as usual) when a
+    /// different archive is opened, or when the remembered paths are no longer in this one - a
+    /// repacked .vpk, a different build of the game.
+    /// </summary>
+    private bool TryRestoreLastLocation(string archivePath)
+    {
+        if (!string.Equals(_settings.UnpackLastArchive, archivePath, StringComparison.OrdinalIgnoreCase))
+            return false;
+        if (_settings.UnpackLastFolder is not { } folderPath || FindFolder(folderPath) is not { } folder)
+            return false;
+
+        NavigateToFolder(folder);
+
+        if (_settings.UnpackLastFile is { Length: > 0 } filePath)
+        {
+            foreach (var row in Files)
+            {
+                if (row.Entry is null
+                    || !string.Equals(row.Entry.Path, filePath, StringComparison.OrdinalIgnoreCase))
+                    continue;
+                // Selecting the row is what brings the Details pane (and any preview) back with it.
+                row.IsSelected = true;
+                UpdateDetail();
+                // Must scroll too, and not only so the user can see it: the list virtualizes, and
+                // until the row has a container the ListBox does not know it is selected - clicking
+                // another row would then clear a selection set this row isn't in, leaving it stuck
+                // highlighted. Same reason GoToFile scrolls.
+                ScrollFileIntoView?.Invoke(row);
+                break;
+            }
+        }
+
+        Log($"Unpack: restored the last view - {(folderPath.Length == 0 ? "(root)" : folderPath)}"
+            + $"{(_settings.UnpackLastFile is { Length: > 0 } f ? $", {f}" : string.Empty)}");
+        return true;
     }
 
     /// <summary>Double-click on a folder row: select it in the tree (which repopulates the list).</summary>
@@ -1368,6 +1572,138 @@ public sealed class UnpackViewModel : ObservableObject
         }
     }
 
+    /// <summary>Largest a .mdl and each of its siblings may be before the 3D preview gives up. A
+    /// render mesh that big would take longer to parse than anyone wants a preview pane to take.</summary>
+    private const int ModelPreviewMaxBytes = 128 * 1024 * 1024;
+
+    /// <summary>
+    /// Reads a selected .mdl plus its .vvd and .vtx siblings out of the open archive and parses the
+    /// LOD-0 render mesh for the Details pane's 3D preview. Returns null when anything is missing or
+    /// unsupported (GoldSrc models, Source 2, a model shipped without its mesh files) - the caller
+    /// falls back to the generic file glyph. Every step narrates itself into the shared console, so a
+    /// model that won't preview says why.
+    /// </summary>
+    public async Task<ModelPreviewData?> ReadModelMeshAsync(PackedEntry entry, CancellationToken ct)
+    {
+        if (_archive is null)
+            return null;
+
+        Log($"Unpack: previewing {entry.Path}");
+        // "models/foo/bar.mdl" -> "models/foo/bar", the stem its siblings share.
+        var stem = entry.Path[..^entry.Extension.Length].TrimEnd('.');
+
+        var mdlBytes = await ReadEntryBytesAsync(entry, ModelPreviewMaxBytes, ct);
+        if (mdlBytes is null)
+        {
+            Log($"Unpack: could not read {entry.Path} ({FormatSize(entry.Size)})");
+            return null;
+        }
+
+        var vvdEntry = FindEntry(stem + ".vvd");
+        if (vvdEntry is null)
+        {
+            Log($"Unpack: no preview - {stem}.vvd is not in this package (the .mdl holds no geometry on its own)");
+            return null;
+        }
+        var vvdBytes = await ReadEntryBytesAsync(vvdEntry, ModelPreviewMaxBytes, ct);
+        if (vvdBytes is null)
+        {
+            Log($"Unpack: could not read {vvdEntry.Path}");
+            return null;
+        }
+
+        byte[]? vtxBytes = null;
+        foreach (var suffix in StudioMeshReader.VtxSuffixes)
+        {
+            if (FindEntry(stem + suffix) is not { } candidate)
+                continue;
+            vtxBytes = await ReadEntryBytesAsync(candidate, ModelPreviewMaxBytes, ct);
+            if (vtxBytes is not null)
+            {
+                Log($"Unpack: using {candidate.Path} for indices");
+                break;
+            }
+        }
+        if (vtxBytes is null)
+        {
+            Log($"Unpack: no preview - no readable .vtx beside {stem}.mdl");
+            return null;
+        }
+
+        try
+        {
+            // Parsing walks every vertex and index, and material resolution decodes textures, so both
+            // stay off the UI thread; the Vulkan side (one thread only) sees the finished arrays.
+            var (mesh, materials) = await Task.Run(() =>
+            {
+                var parsed = StudioMeshReader.Read(mdlBytes, vvdBytes, vtxBytes, Log);
+                return (parsed, ModelMaterialLoader.Resolve(parsed, ReadArchiveFile, Log));
+            }, ct);
+
+            _detailMeshText = $"{mesh.Positions.Length:N0} verts - {mesh.TriangleCount:N0} tris - v{mesh.Version}";
+            OnPropertyChanged(nameof(DetailMeshText));
+            return new ModelPreviewData(mesh, materials);
+        }
+        catch (OperationCanceledException)
+        {
+            return null;
+        }
+        catch (Exception ex)
+        {
+            Log($"Unpack: no preview - {ex.Message}");
+            return null;
+        }
+    }
+
+    /// <summary>Largest .vmt or .vtf the material resolver will pull in for a preview.</summary>
+    private const int MaterialMaxBytes = 64 * 1024 * 1024;
+
+    // Path -> entry, built on first lookup and rebuilt when the archive changes. Resolving one
+    // model's materials does dozens of lookups, and a gameinfo mount lists six figures of entries.
+    private IPackedArchive? _indexedArchive;
+    private Dictionary<string, PackedEntry>? _entryIndex;
+
+    /// <summary>The open archive's entry at this exact path (case-insensitive), or null.</summary>
+    private PackedEntry? FindEntry(string path)
+    {
+        if (_archive is null)
+            return null;
+        if (_entryIndex is null || !ReferenceEquals(_indexedArchive, _archive))
+        {
+            // Populated fully before it is published, so a background material load can never see a
+            // half-built index.
+            var index = new Dictionary<string, PackedEntry>(
+                _archive.Entries.Count, StringComparer.OrdinalIgnoreCase);
+            foreach (var candidate in _archive.Entries)
+                index[candidate.Path] = candidate;
+            _entryIndex = index;
+            _indexedArchive = _archive;
+        }
+        return _entryIndex.GetValueOrDefault(path);
+    }
+
+    /// <summary>Reads a game-relative file ("materials/foo/bar.vmt") out of the open archive, or null
+    /// if it isn't there. Synchronous - it runs on the task that resolves a model's materials.</summary>
+    private byte[]? ReadArchiveFile(string path)
+    {
+        if (_archive is not { } archive || FindEntry(path) is not { } entry || entry.Size > MaterialMaxBytes)
+            return null;
+        try
+        {
+            using var stream = new MemoryStream(entry.Size > 0 ? (int)entry.Size : 0);
+            archive.Extract(entry, stream);
+            return stream.ToArray();
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>Writes a line to the shared console on behalf of the view - the 3D preview lives in
+    /// the code-behind (it needs WPF and Vulkan) but its progress belongs in the same log.</summary>
+    public void LogPreview(string line) => Log(line);
+
     /// <summary>Reports that the shell could not open a previewed file (no handler, launch error).</summary>
     public void ReportPreviewOpenFailed(PackedEntry entry, Exception ex)
     {
@@ -1468,8 +1804,7 @@ public sealed class UnpackViewModel : ObservableObject
         }
         try
         {
-            Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{model.FilePath}\"")
-                { UseShellExecute = true });
+            ShellOpen.Reveal(model.FilePath);
         }
         catch (Exception ex)
         {
@@ -1608,6 +1943,7 @@ public sealed class UnpackFileViewModel : ObservableObject
             "png" or "jpg" or "jpeg" or "bmp" or "gif" or "tif" or "tiff" or "ico" => UnpackPreviewKind.Image,
             "vtf" => UnpackPreviewKind.Vtf,
             "vtex_c" => UnpackPreviewKind.Vtex,
+            "mdl" => UnpackPreviewKind.Model,
             _ => UnpackPreviewKind.None,
         };
 

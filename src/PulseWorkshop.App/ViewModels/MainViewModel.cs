@@ -76,11 +76,11 @@ public sealed class MainViewModel : ObservableObject, IAsyncDisposable, IUgcClie
         // both edit the same project (different lists) without clobbering each other.
         AdvancedProject = new AdvancedProjectSession(GameSetup);
         CompileAdvanced = new CompileAdvancedViewModel(AdvancedProject, Console, _settings);
-        PackageAdvanced = new PackageAdvancedViewModel(AdvancedProject, Console);
+        PackageAdvanced = new PackageAdvancedViewModel(AdvancedProject, Console, _settings);
 
         // The Textures tab is a standalone project workflow (its own .pw_textureproject); it reuses
         // Game Setup's VTF tool + command and writes to the same shared console.
-        Textures = new TexturesViewModel(GameSetup, Console);
+        Textures = new TexturesViewModel(GameSetup, Console, _settings);
 
         // The Model View tab launches Game Setup's configured model viewer (HLMV) on a chosen .mdl
         // and shows the ModelTool info summary for it. Reuses Game Setup's viewer + gameinfo paths.

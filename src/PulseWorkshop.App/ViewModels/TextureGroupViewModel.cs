@@ -262,7 +262,7 @@ public sealed class TextureGroupViewModel : ObservableObject
                 var mine = TextureConversionService.RemoveClaimed(root, paths, earlier);
                 var tiles = mine.Take(MaxPreviewed)
                     .Select(p => new TextureMatchViewModel(
-                        p, root, TextureConversionService.IsOutOfDate(root, p, Model)))
+                        p, root, TextureConversionService.IsOutOfDate(root, p, Model), _parent.PreviewAlpha))
                     .ToList();
                 return (Total: mine.Count, Claimed: paths.Count - mine.Count, Tiles: tiles);
             }, ct);

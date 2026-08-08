@@ -45,6 +45,9 @@ public partial class App : Application
         // Register the .pw_mdlproject association so Explorer double-clicks launch us (best-effort).
         FileAssociation.EnsureRegistered();
 
+        // Browser-style middle-click autoscroll on every ScrollViewer in the app.
+        AutoScroll.Install();
+
         var window = new MainWindow();
 
         // Later launches forward their file here (marshalled to the UI thread) instead of opening a

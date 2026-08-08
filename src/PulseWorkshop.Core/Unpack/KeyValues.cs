@@ -53,28 +53,14 @@ public static class KeyValues
             if (src[i] == '"')
             {
                 i++;
-                var val = new System.Text.StringBuilder();
+                int from = i;
+                // No escape processing: Valve's KeyValues only does that when a caller asks for it,
+                // and neither VMTs nor gameinfo.txt do. Translating would corrupt every Windows path
+                // that happens to start a segment with n or t ("models\namvet", "materials\test").
                 while (i < n && src[i] != '"')
-                {
-                    if (src[i] == '\\' && i + 1 < n)
-                    {
-                        char next = src[i + 1];
-                        switch (next)
-                        {
-                            case 'n': val.Append('\n'); break;
-                            case 't': val.Append('\t'); break;
-                            // Keep unknown escapes verbatim (e.g. backslashes in paths).
-                            default: val.Append('\\').Append(next); break;
-                        }
-                        i += 2;
-                    }
-                    else
-                    {
-                        val.Append(src[i++]);
-                    }
-                }
+                    i++;
+                tokens.Add(new(TokType.String, src[from..i]));
                 if (i < n) i++; // skip closing "
-                tokens.Add(new(TokType.String, val.ToString()));
                 continue;
             }
 

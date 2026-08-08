@@ -4,6 +4,7 @@ using System.Windows;
 using System.Windows.Threading;
 using Microsoft.Win32;
 using PulseWorkshop.App.Mvvm;
+using PulseWorkshop.App.Services;
 using PulseWorkshop.Core.Models;
 using PulseWorkshop.Core.Services;
 using PulseWorkshop.Core.Storage;
@@ -27,16 +28,18 @@ public sealed class TexturesViewModel : ObservableObject
     private TextureProject _project = new();
     private string? _projectPath;
     private GameSetupEntryViewModel? _selectedGame;
+    private readonly UiSettings _settings;
     private TextureGroupViewModel? _selectedGroup;
     private bool _isConverting;
     private bool _force;
     private string _statusMessage = "No project open.";
     private CancellationTokenSource? _cancelSource;
 
-    public TexturesViewModel(GameSetupViewModel gameSetup, ConsoleViewModel console)
+    public TexturesViewModel(GameSetupViewModel gameSetup, ConsoleViewModel console, UiSettings settings)
     {
         _gameSetup = gameSetup;
         _console = console;
+        _settings = settings;
         _config = AdvancedTextureConfig.Load();
 
         NewProjectCommand = new RelayCommand(NewProject);
@@ -102,6 +105,23 @@ public sealed class TexturesViewModel : ObservableObject
 
     /// <summary>Rescans the selected group's matched files right now (the preview's Refresh button).</summary>
     public RelayCommand RefreshMatchesCommand { get; }
+
+    /// <summary>When on, match tiles composite the source image's alpha; when off they render opaque,
+    /// so a texture whose alpha is a mask rather than transparency still shows as a visible image.
+    /// Mirrors the Unpack tab's toggle and is persisted the same way. Flipping it rescans, which
+    /// re-decodes through the preview cache's other half.</summary>
+    public bool PreviewAlpha
+    {
+        get => _settings.TexturePreviewAlpha;
+        set
+        {
+            if (_settings.TexturePreviewAlpha == value)
+                return;
+            _settings.TexturePreviewAlpha = value;
+            OnPropertyChanged();
+            RefreshMatchesNow();
+        }
+    }
 
     /// <summary>The shared Game Setup roster used for the game dropdown.</summary>
     public ObservableCollection<GameSetupEntryViewModel> Games => _gameSetup.Games;

@@ -96,6 +96,15 @@ public sealed class GameSetupViewModel : ObservableObject
         var vm = new SteamLibraryViewModel(lib, Save, RemoveLibrary);
         Libraries.Add(vm);
         LibraryChoices.Add(new LibraryChoice(vm));
+        Renumber();
+    }
+
+    /// <summary>Re-assigns the 1-based "Lib1, Lib2, ..." labels after the list changes. Path field
+    /// dropdowns show that short label instead of the full path (which never fits the combobox).</summary>
+    private void Renumber()
+    {
+        for (var i = 0; i < Libraries.Count; i++)
+            Libraries[i].Index = i + 1;
     }
 
     private void Save() => _config.Save();
@@ -165,7 +174,22 @@ public sealed class GameSetupViewModel : ObservableObject
         foreach (var game in Games)
             game.OnLibraryRemoved(vm.Model.Id);
 
+        Renumber();
         OnPropertyChanged(nameof(HasLibraries));
+        Save();
+    }
+
+    /// <summary>Drag-to-reorder from the games list: moves the entry in both the view model
+    /// collection and the persisted config, then saves.</summary>
+    public void MoveGame(int oldIndex, int newIndex)
+    {
+        if (oldIndex == newIndex || (uint)oldIndex >= (uint)Games.Count || (uint)newIndex >= (uint)Games.Count)
+            return;
+
+        var model = Games[oldIndex].Model;
+        Games.Move(oldIndex, newIndex);
+        _config.Games.Remove(model);
+        _config.Games.Insert(newIndex, model);
         Save();
     }
 }
@@ -451,6 +475,7 @@ public sealed class PathFieldViewModel : ObservableObject
 public sealed class SteamLibraryViewModel : ObservableObject
 {
     private readonly Action _onChanged;
+    private int _index;
 
     public SteamLibraryViewModel(SteamLibrary model, Action onChanged, Action<SteamLibraryViewModel> remove)
     {
@@ -463,6 +488,20 @@ public sealed class SteamLibraryViewModel : ObservableObject
     public SteamLibrary Model { get; }
     public RelayCommand BrowseCommand { get; }
     public RelayCommand RemoveCommand { get; }
+
+    /// <summary>1-based position in the library list, assigned by the owner.</summary>
+    public int Index
+    {
+        get => _index;
+        set
+        {
+            if (SetField(ref _index, value))
+                OnPropertyChanged(nameof(Label));
+        }
+    }
+
+    /// <summary>The short handle ("Lib1") shown in the row and in every path field's base dropdown.</summary>
+    public string Label => $"Lib{_index}";
 
     public string PathText
     {
@@ -497,8 +536,8 @@ public sealed class SteamLibraryViewModel : ObservableObject
 
 /// <summary>
 /// A base option in a path field's dropdown: either the "(Absolute path)" sentinel
-/// (<see cref="Library"/> is null) or a Steam library. <see cref="Display"/> tracks the library's
-/// path so the dropdown text stays current.
+/// (<see cref="Library"/> is null) or a Steam library. Shows the short "Lib1" handle - the full path
+/// never fits the combobox - with the path itself in <see cref="Detail"/> for the tooltip.
 /// </summary>
 public sealed class LibraryChoice : ObservableObject
 {
@@ -508,16 +547,23 @@ public sealed class LibraryChoice : ObservableObject
         if (library is not null)
             library.PropertyChanged += (_, e) =>
             {
-                if (e.PropertyName == nameof(SteamLibraryViewModel.PathText))
+                if (e.PropertyName is nameof(SteamLibraryViewModel.PathText)
+                    or nameof(SteamLibraryViewModel.Label))
+                {
                     OnPropertyChanged(nameof(Display));
+                    OnPropertyChanged(nameof(Detail));
+                }
             };
     }
 
     public SteamLibraryViewModel? Library { get; }
 
-    public string Display =>
-        Library is null ? "(Absolute path)"
-        : string.IsNullOrWhiteSpace(Library.PathText) ? "(unnamed library)"
+    public string Display => Library is null ? "(Absolute path)" : Library.Label;
+
+    /// <summary>The full library path, for the tooltip (null for the absolute-path sentinel).</summary>
+    public string? Detail =>
+        Library is null ? null
+        : string.IsNullOrWhiteSpace(Library.PathText) ? "(no path set)"
         : Library.PathText;
 
     // The themed ComboBox selection box renders via ToString (DisplayMemberPath is ignored there).

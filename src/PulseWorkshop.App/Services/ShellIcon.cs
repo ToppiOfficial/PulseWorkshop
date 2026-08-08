@@ -9,7 +9,7 @@ namespace PulseWorkshop.App.Services;
 /// <summary>
 /// Resolves the shell icon Windows associates with a file (the same icon Explorer shows) as a
 /// frozen WPF <see cref="ImageSource"/>. Used for asset thumbnails when there is no image to
-/// preview (text assets, or image formats WPF can't decode).
+/// preview (text assets, or an image format <see cref="TexturePreview"/> can't decode).
 /// </summary>
 public static class ShellIcon
 {

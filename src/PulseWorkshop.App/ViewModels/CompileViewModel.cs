@@ -97,7 +97,8 @@ public sealed class CompileViewModel : ObservableObject
             ViewModelRequested?.Invoke(LastMdlPath);
     }
 
-    /// <summary>Opens the .qc in the OS default editor (whatever is associated with .qc).</summary>
+    /// <summary>Opens the .qc in the OS default editor (whatever is associated with .qc).
+    /// Holding Alt instead reveals the .qc in Explorer.</summary>
     public RelayCommand OpenQcCommand { get; }
 
     private bool CanOpenQc => !string.IsNullOrWhiteSpace(QcPath) && File.Exists(QcPath);
@@ -105,7 +106,7 @@ public sealed class CompileViewModel : ObservableObject
     private void OpenQc()
     {
         if (!CanOpenQc) return;
-        Process.Start(new ProcessStartInfo(QcPath) { UseShellExecute = true });
+        ShellOpen.Open(QcPath);
     }
 
     /// <summary>The .mdl produced by the last successful compile - used to show the "Go to file" button.</summary>
@@ -125,8 +126,7 @@ public sealed class CompileViewModel : ObservableObject
     private void GoToMdl()
     {
         if (string.IsNullOrEmpty(LastMdlPath)) return;
-        Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{LastMdlPath}\"")
-            { UseShellExecute = true });
+        ShellOpen.Reveal(LastMdlPath);
     }
 
     /// <summary>The compiled .mdl summary (bones, hitboxes, poly count, dependencies) from the last

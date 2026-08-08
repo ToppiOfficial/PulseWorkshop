@@ -1,4 +1,4 @@
-using System.ComponentModel;
+﻿using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
@@ -11,6 +11,8 @@ using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using Microsoft.Win32;
+using PulseWorkshop.App.Rendering;
+using PulseWorkshop.App.Services;
 using PulseWorkshop.App.ViewModels;
 using PulseWorkshop.Core.Models;
 using PulseWorkshop.Core.Storage;
@@ -32,6 +34,9 @@ public partial class MainWindow : Window
 
     public MainWindow()
     {
+        // Before InitializeComponent: the PaneSize attached property restores each tagged splitter
+        // pane while the XAML is parsed, so it needs the settings first.
+        PaneSize.Attach(_settings);
         InitializeComponent();
         DataContext = _vm;
         Title = $"PulseWorkshop v{AppVersion}";
@@ -45,6 +50,9 @@ public partial class MainWindow : Window
         _vm.NavigateToTemplates += () => TemplatesTab.IsSelected = true;
         _vm.NavigateToModelView += () => ModelViewTab.IsSelected = true;
         _vm.NavigateToUnpack += () => UnpackTab.IsSelected = true;
+        // One picker for the whole window, so this subscribes once rather than per previewed model.
+        _vm.Unpack.SkinChanged += OnSkinChanged;
+        _vm.Unpack.ShowSkeletonChanged += OnShowSkeletonChanged;
         _vm.SelectDraftRequested += id => SelectRow(DraftsList, _vm.Drafts.FirstOrDefault(d => d.Draft.Id == id));
         _vm.SelectTemplateRequested += id => SelectRow(TemplatesList, _vm.Templates.FirstOrDefault(t => t.Template.Id == id));
         _vm.PropertyChanged += OnViewModelPropertyChanged;
@@ -93,6 +101,9 @@ public partial class MainWindow : Window
         Closed += async (_, _) =>
         {
             SaveUiSettings();
+            StopModelLoop();
+            _modelPreview?.Dispose();
+            _modelPreview = null;
             if (_consoleWindow is not null)
             {
                 _consoleWindow.AllowClose();
@@ -217,6 +228,10 @@ public partial class MainWindow : Window
         _settings.PackageSubTabIndex = PackageTabs.SelectedIndex;
         // Remember the open Unpack archive so it can be reopened next session (lazily, on tab entry).
         _settings.UnpackLastArchive = _vm.Unpack.IsArchiveOpen ? _vm.Unpack.ArchivePath : null;
+        // ... and where in it the user was, so reopening lands on the same folder and file.
+        _settings.UnpackLastFolder = _vm.Unpack.IsArchiveOpen ? _vm.Unpack.SelectedFolder?.FullPath : null;
+        _settings.UnpackLastFile = _vm.Unpack.IsArchiveOpen ? _vm.Unpack.DetailEntry?.Path : null;
+        PaneSize.Save(_settings);
         if (_consoleWindow is not null)
         {
             // RestoreBounds gives the normal (non-maximized/minimized) placement.
@@ -302,250 +317,159 @@ public partial class MainWindow : Window
         return virtualScreen.IntersectsWith(new Rect(left, top, width, height));
     }
 
-    // --- Advanced entries drag-to-reorder ---------------------------------------------------------
-    // A reorder starts only when the press lands on a row's drag handle (Tag="DragHandle"), so the
-    // text fields inside each row stay fully editable. The dropped row is moved within the project's
-    // entries collection and the project is re-saved (order is persisted on save).
+    // --- Drag-to-reorder lists --------------------------------------------------------------------
+    // Shared by the Compile/Package advanced entry lists, the texture groups and the Game Setup games
+    // list. A reorder starts only when the press lands on a row's drag handle (Tag="DragHandle"), so
+    // the controls inside each row stay fully usable. A semi-transparent ghost of the row follows the
+    // cursor; on drop the row is moved within its collection and the owner persists the new order.
 
-    private DragAdorner? _advDragAdorner;
-    private AdornerLayer? _advDragLayer;
+    private DragAdorner? _dragAdorner;
+    private AdornerLayer? _dragLayer;
 
-    private void AdvancedEntries_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    /// <summary>Starts a reorder drag of the pressed row (no-op unless the press hit a drag handle).</summary>
+    private void BeginReorderDrag<T>(ListBox list, MouseButtonEventArgs e) where T : class
     {
         if (e.OriginalSource is not FrameworkElement { Tag: "DragHandle" } handle
-            || handle.DataContext is not ModelEntryViewModel item)
+            || handle.DataContext is not T item)
             return;
 
-        // Show a semi-transparent ghost of the row that follows the cursor while dragging.
-        if (AdvancedEntriesList.ItemContainerGenerator.ContainerFromItem(item) is UIElement container)
+        if (list.ItemContainerGenerator.ContainerFromItem(item) is UIElement container)
         {
-            _advDragLayer = AdornerLayer.GetAdornerLayer(AdvancedEntriesList);
-            if (_advDragLayer is not null)
+            _dragLayer = AdornerLayer.GetAdornerLayer(list);
+            if (_dragLayer is not null)
             {
-                _advDragAdorner = new DragAdorner(AdvancedEntriesList, container);
-                _advDragLayer.Add(_advDragAdorner);
+                _dragAdorner = new DragAdorner(list, container);
+                _dragLayer.Add(_dragAdorner);
             }
         }
 
         try
         {
-            DragDrop.DoDragDrop(AdvancedEntriesList, item, DragDropEffects.Move);
+            DragDrop.DoDragDrop(list, item, DragDropEffects.Move);
         }
         finally
         {
-            if (_advDragAdorner is not null)
+            if (_dragAdorner is not null)
             {
-                _advDragLayer?.Remove(_advDragAdorner);
-                _advDragAdorner = null;
-                _advDragLayer = null;
+                _dragLayer?.Remove(_dragAdorner);
+                _dragAdorner = null;
+                _dragLayer = null;
             }
         }
     }
 
-    private void AdvancedEntries_DragOver(object sender, DragEventArgs e)
+    /// <summary>Moves the drag ghost. Only claims reorder drags - a genuine file drop over the list
+    /// falls through to the window-level handler.</summary>
+    private void ReorderDragOver<T>(ListBox list, DragEventArgs e) where T : class
     {
-        // Only claim reorder drags; a genuine file drop over the list falls through to Window_DragOver.
-        if (e.Data.GetData(typeof(ModelEntryViewModel)) is not ModelEntryViewModel)
+        if (e.Data.GetData(typeof(T)) is not T)
             return;
-        if (_advDragAdorner is not null)
+        if (_dragAdorner is not null)
         {
-            var pos = e.GetPosition(AdvancedEntriesList);
-            _advDragAdorner.SetPosition(pos.X, pos.Y);
+            var pos = e.GetPosition(list);
+            _dragAdorner.SetPosition(pos.X, pos.Y);
         }
         e.Effects = DragDropEffects.Move;
         // Stop the bubble here so the window-level file-drop handler doesn't override the effect.
         e.Handled = true;
     }
+
+    /// <summary>Resolves the dragged row and the row it was dropped on, then calls
+    /// <paramref name="move"/> with (oldIndex, newIndex). Dropping past the last row moves to the end.</summary>
+    private static void ReorderDrop<T>(IList<T> list, DragEventArgs e, Action<int, int> move) where T : class
+    {
+        if (e.Data.GetData(typeof(T)) is not T dragged)
+            return;
+        e.Handled = true;
+
+        var oldIndex = list.IndexOf(dragged);
+        if (oldIndex < 0)
+            return;
+
+        var target = FindRowItem<T>(e.OriginalSource as DependencyObject);
+        var newIndex = target is null ? list.Count - 1 : list.IndexOf(target);
+        if (newIndex < 0 || newIndex == oldIndex)
+            return;
+
+        move(oldIndex, newIndex);
+    }
+
+    /// <summary>The item behind the dropped-on visual, or null when the drop missed every row.</summary>
+    private static T? FindRowItem<T>(DependencyObject? source) where T : class
+    {
+        while (source is not null and not ListBoxItem)
+            source = VisualTreeHelper.GetParent(source);
+        return (source as ListBoxItem)?.DataContext as T;
+    }
+
+    private void AdvancedEntries_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e) =>
+        BeginReorderDrag<ModelEntryViewModel>(AdvancedEntriesList, e);
+
+    private void AdvancedEntries_DragOver(object sender, DragEventArgs e) =>
+        ReorderDragOver<ModelEntryViewModel>(AdvancedEntriesList, e);
 
     private void AdvancedEntries_Drop(object sender, DragEventArgs e)
     {
-        if (e.Data.GetData(typeof(ModelEntryViewModel)) is not ModelEntryViewModel dragged)
-            return;
-        e.Handled = true;
         if (DataContext is not MainViewModel vm)
             return;
-
         var list = vm.CompileAdvanced.Entries;
-        var oldIndex = list.IndexOf(dragged);
-        if (oldIndex < 0)
-            return;
-
-        var target = FindEntryUnder(e.OriginalSource as DependencyObject);
-        var newIndex = target is null ? list.Count - 1 : list.IndexOf(target);
-        if (newIndex < 0 || newIndex == oldIndex)
-            return;
-
-        list.Move(oldIndex, newIndex);
-        vm.CompileAdvanced.Save();
+        ReorderDrop(list, e, (from, to) =>
+        {
+            list.Move(from, to);
+            vm.CompileAdvanced.Save();
+        });
     }
 
-    private static ModelEntryViewModel? FindEntryUnder(DependencyObject? source)
-    {
-        while (source is not null and not ListBoxItem)
-            source = VisualTreeHelper.GetParent(source);
-        return (source as ListBoxItem)?.DataContext as ModelEntryViewModel;
-    }
+    private void PackageEntries_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e) =>
+        BeginReorderDrag<PackageEntryViewModel>(PackageEntriesList, e);
 
-    // --- Package entries drag-to-reorder (mirrors the Advanced compile reorder) -------------------
-
-    private DragAdorner? _pkgDragAdorner;
-    private AdornerLayer? _pkgDragLayer;
-
-    private void PackageEntries_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
-    {
-        if (e.OriginalSource is not FrameworkElement { Tag: "DragHandle" } handle
-            || handle.DataContext is not PackageEntryViewModel item)
-            return;
-
-        if (PackageEntriesList.ItemContainerGenerator.ContainerFromItem(item) is UIElement container)
-        {
-            _pkgDragLayer = AdornerLayer.GetAdornerLayer(PackageEntriesList);
-            if (_pkgDragLayer is not null)
-            {
-                _pkgDragAdorner = new DragAdorner(PackageEntriesList, container);
-                _pkgDragLayer.Add(_pkgDragAdorner);
-            }
-        }
-
-        try
-        {
-            DragDrop.DoDragDrop(PackageEntriesList, item, DragDropEffects.Move);
-        }
-        finally
-        {
-            if (_pkgDragAdorner is not null)
-            {
-                _pkgDragLayer?.Remove(_pkgDragAdorner);
-                _pkgDragAdorner = null;
-                _pkgDragLayer = null;
-            }
-        }
-    }
-
-    private void PackageEntries_DragOver(object sender, DragEventArgs e)
-    {
-        // Only claim reorder drags; a genuine file drop over the list falls through to Window_DragOver.
-        if (e.Data.GetData(typeof(PackageEntryViewModel)) is not PackageEntryViewModel)
-            return;
-        if (_pkgDragAdorner is not null)
-        {
-            var pos = e.GetPosition(PackageEntriesList);
-            _pkgDragAdorner.SetPosition(pos.X, pos.Y);
-        }
-        e.Effects = DragDropEffects.Move;
-        // Stop the bubble here so the window-level file-drop handler doesn't override the effect.
-        e.Handled = true;
-    }
+    private void PackageEntries_DragOver(object sender, DragEventArgs e) =>
+        ReorderDragOver<PackageEntryViewModel>(PackageEntriesList, e);
 
     private void PackageEntries_Drop(object sender, DragEventArgs e)
     {
-        if (e.Data.GetData(typeof(PackageEntryViewModel)) is not PackageEntryViewModel dragged)
-            return;
-        e.Handled = true;
         if (DataContext is not MainViewModel vm)
             return;
-
         var list = vm.PackageAdvanced.Entries;
-        var oldIndex = list.IndexOf(dragged);
-        if (oldIndex < 0)
-            return;
-
-        var target = FindPackageEntryUnder(e.OriginalSource as DependencyObject);
-        var newIndex = target is null ? list.Count - 1 : list.IndexOf(target);
-        if (newIndex < 0 || newIndex == oldIndex)
-            return;
-
-        list.Move(oldIndex, newIndex);
-        vm.PackageAdvanced.Save();
+        ReorderDrop(list, e, (from, to) =>
+        {
+            list.Move(from, to);
+            vm.PackageAdvanced.Save();
+        });
     }
 
-    private static PackageEntryViewModel? FindPackageEntryUnder(DependencyObject? source)
-    {
-        while (source is not null and not ListBoxItem)
-            source = VisualTreeHelper.GetParent(source);
-        return (source as ListBoxItem)?.DataContext as PackageEntryViewModel;
-    }
+    private void TextureGroups_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e) =>
+        BeginReorderDrag<TextureGroupViewModel>(TextureGroupsList, e);
 
-    // --- Texture groups drag-to-reorder (mirrors the Package entries reorder) ----------------------
-
-    private DragAdorner? _texDragAdorner;
-    private AdornerLayer? _texDragLayer;
-
-    private void TextureGroups_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
-    {
-        if (e.OriginalSource is not FrameworkElement { Tag: "DragHandle" } handle
-            || handle.DataContext is not TextureGroupViewModel item)
-            return;
-
-        if (TextureGroupsList.ItemContainerGenerator.ContainerFromItem(item) is UIElement container)
-        {
-            _texDragLayer = AdornerLayer.GetAdornerLayer(TextureGroupsList);
-            if (_texDragLayer is not null)
-            {
-                _texDragAdorner = new DragAdorner(TextureGroupsList, container);
-                _texDragLayer.Add(_texDragAdorner);
-            }
-        }
-
-        try
-        {
-            DragDrop.DoDragDrop(TextureGroupsList, item, DragDropEffects.Move);
-        }
-        finally
-        {
-            if (_texDragAdorner is not null)
-            {
-                _texDragLayer?.Remove(_texDragAdorner);
-                _texDragAdorner = null;
-                _texDragLayer = null;
-            }
-        }
-    }
-
-    private void TextureGroups_DragOver(object sender, DragEventArgs e)
-    {
-        // Only claim reorder drags; a genuine file drop over the list falls through to Window_DragOver.
-        if (e.Data.GetData(typeof(TextureGroupViewModel)) is not TextureGroupViewModel)
-            return;
-        if (_texDragAdorner is not null)
-        {
-            var pos = e.GetPosition(TextureGroupsList);
-            _texDragAdorner.SetPosition(pos.X, pos.Y);
-        }
-        e.Effects = DragDropEffects.Move;
-        // Stop the bubble here so the window-level file-drop handler doesn't override the effect.
-        e.Handled = true;
-    }
+    private void TextureGroups_DragOver(object sender, DragEventArgs e) =>
+        ReorderDragOver<TextureGroupViewModel>(TextureGroupsList, e);
 
     private void TextureGroups_Drop(object sender, DragEventArgs e)
     {
-        if (e.Data.GetData(typeof(TextureGroupViewModel)) is not TextureGroupViewModel dragged)
-            return;
-        e.Handled = true;
         if (DataContext is not MainViewModel vm)
             return;
-
         var list = vm.Textures.Groups;
-        var oldIndex = list.IndexOf(dragged);
-        if (oldIndex < 0)
-            return;
-
-        var target = FindTextureGroupUnder(e.OriginalSource as DependencyObject);
-        var newIndex = target is null ? list.Count - 1 : list.IndexOf(target);
-        if (newIndex < 0 || newIndex == oldIndex)
-            return;
-
-        list.Move(oldIndex, newIndex);
-        vm.Textures.Save();
-        // Run order decides which group claims a file, so the match preview changes with the order.
-        vm.Textures.RequestMatchRefresh();
+        ReorderDrop(list, e, (from, to) =>
+        {
+            list.Move(from, to);
+            vm.Textures.Save();
+            // Run order decides which group claims a file, so the match preview changes with the order.
+            vm.Textures.RequestMatchRefresh();
+        });
     }
 
-    private static TextureGroupViewModel? FindTextureGroupUnder(DependencyObject? source)
+    private void GameSetupGames_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e) =>
+        BeginReorderDrag<GameSetupEntryViewModel>(GameSetupGamesList, e);
+
+    private void GameSetupGames_DragOver(object sender, DragEventArgs e) =>
+        ReorderDragOver<GameSetupEntryViewModel>(GameSetupGamesList, e);
+
+    private void GameSetupGames_Drop(object sender, DragEventArgs e)
     {
-        while (source is not null and not ListBoxItem)
-            source = VisualTreeHelper.GetParent(source);
-        return (source as ListBoxItem)?.DataContext as TextureGroupViewModel;
+        if (DataContext is not MainViewModel vm)
+            return;
+        // MoveGame reorders the persisted config alongside the list, then saves.
+        ReorderDrop(vm.GameSetup.Games, e, vm.GameSetup.MoveGame);
     }
 
     // --- Entry/group list context menus (Duplicate/Delete selected) --------------------------------
@@ -662,8 +586,8 @@ public partial class MainWindow : Window
             TextPreviewWindow.ShowPreview(this, path);
     }
 
-    /// <summary>Opens the full-size image for a clicked tile in the Textures match preview. Formats
-    /// WPF can't decode (the tile shows a shell icon) have nothing to show, so they no-op.</summary>
+    /// <summary>Opens the full-size image for a clicked tile in the Textures match preview. Files
+    /// nothing could decode (the tile shows a shell icon) have nothing to show, so they no-op.</summary>
     private void TextureMatch_Click(object sender, MouseButtonEventArgs e)
     {
         if ((sender as FrameworkElement)?.DataContext is TextureMatchViewModel match && match.HasImagePreview)
@@ -719,7 +643,8 @@ public partial class MainWindow : Window
     /// Double-click in the file list: a folder row navigates into that folder (Explorer-style); a
     /// file row extracts to a temp file and opens it with the user's default application for that
     /// type (so a .vtf lands in their VTF viewer instead of an internal raw-binary dump). Windows
-    /// shows its "Open with" picker when no handler is registered.
+    /// shows its "Open with" picker when no handler is registered. Holding Alt reveals the
+    /// extracted file in Explorer instead, like every other open action.
     /// </summary>
     private async void UnpackFiles_MouseDoubleClick(object sender, MouseButtonEventArgs e)
     {
@@ -748,9 +673,9 @@ public partial class MainWindow : Window
 
         try
         {
-            // UseShellExecute routes through the shell so the file opens in whatever app the user
-            // has associated (or the "Open with" dialog when there's no handler).
-            Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
+            // Opens in whatever app the user has associated (or the shell's "Open with" dialog
+            // when there's no handler) - or reveals the extracted file when Alt is held.
+            ShellOpen.Open(path);
         }
         catch (Exception ex)
         {
@@ -811,21 +736,6 @@ public partial class MainWindow : Window
     {
         if ((sender as FrameworkElement)?.DataContext is UnpackFileViewModel row)
             _vm.Unpack.GoToFile(row);
-    }
-
-    /// <summary>Returns a copy of <paramref name="src"/> with every pixel's alpha forced to 255, so a
-    /// texture whose alpha channel is data (not transparency) still previews as a visible image.</summary>
-    private static BitmapSource ForceOpaque(BitmapSource src)
-    {
-        var bgra = src.Format == PixelFormats.Bgra32 ? src : new FormatConvertedBitmap(src, PixelFormats.Bgra32, null, 0);
-        int w = bgra.PixelWidth, h = bgra.PixelHeight, stride = w * 4;
-        var pixels = new byte[stride * h];
-        bgra.CopyPixels(pixels, stride, 0);
-        for (int i = 3; i < pixels.Length; i += 4)
-            pixels[i] = 255;
-        var opaque = BitmapSource.Create(w, h, 96, 96, PixelFormats.Bgra32, null, pixels, stride);
-        opaque.Freeze();
-        return opaque;
     }
 
     /// <summary>Decodes a raster image (png/jpg/...) from bytes to a frozen bitmap for the thumbnail.
@@ -934,6 +844,10 @@ public partial class MainWindow : Window
     {
         if (UnpackDetailsColumn is null)
             return; // called before the template is realized
+
+        UnpackDetailThumb.Height = Math.Clamp(_settings.UnpackDetailsThumbHeight,
+            DetailsThumbMinHeight, DetailsThumbMaxHeight);
+
         if (_vm.Unpack.IsDetailsPaneOpen)
         {
             var w = Math.Max(DetailsPaneMinWidth, _settings.UnpackDetailsPaneWidth);
@@ -973,9 +887,16 @@ public partial class MainWindow : Window
         int gen = ++_detailThumbGeneration;
         var vm = _vm.Unpack;
 
-        // Start from the generic glyph; a successful decode replaces it below.
+        // Start from the generic glyph; a successful decode (or model load) replaces it below.
         UnpackDetailImage.Source = null;
         UnpackDetailImage.Visibility = Visibility.Collapsed;
+        UnpackDetailModel.Source = null;
+        UnpackDetailModel.Visibility = Visibility.Collapsed;
+        UnpackDetailModelHint.Visibility = Visibility.Collapsed;
+        UnpackDetailModelFps.Visibility = Visibility.Collapsed;
+        _modelPreviewActive = false;
+        _modelBitmap = null;
+        StopModelLoop();
         UnpackDetailFallback.Visibility = Visibility.Visible;
         bool isFolder = vm.DetailIsFolder;
         UnpackDetailFolderGlyph.Visibility = isFolder ? Visibility.Visible : Visibility.Collapsed;
@@ -986,6 +907,14 @@ public partial class MainWindow : Window
             || vm.DetailPreviewKind == UnpackPreviewKind.None)
             return;
 
+        // A .mdl is not an image - it goes to the Vulkan preview, which owns its own load path
+        // (it needs the .vvd/.vtx siblings too) and leaves the glyph up if anything fails.
+        if (vm.DetailPreviewKind == UnpackPreviewKind.Model)
+        {
+            await LoadModelPreviewAsync(entry, gen);
+            return;
+        }
+
         var bytes = await vm.ReadEntryBytesAsync(entry, UnpackPreviewMaxBytes, CancellationToken.None);
         if (bytes is null || gen != _detailThumbGeneration)
             return;
@@ -995,10 +924,359 @@ public partial class MainWindow : Window
             return; // decode failed or subject moved on - keep the generic glyph
 
         if (!vm.PreviewAlpha)
-            image = ForceOpaque(image);
+            image = TexturePreview.ForceOpaque(image);
         UnpackDetailImage.Source = image;
         UnpackDetailImage.Visibility = Visibility.Visible;
         UnpackDetailFallback.Visibility = Visibility.Collapsed;
+    }
+
+    // --- Unpack Details pane: 3D model preview ------------------------------------------------------
+    //
+    // Highlighting a .mdl swaps the thumbnail for a live render of its mesh: untextured grey over a
+    // ground grid, orbited with the mouse. The renderer is Vulkan drawing offscreen (see
+    // Rendering/VulkanModelPreview.cs) and hands back plain BGRA pixels, so as far as WPF is concerned
+    // this is still just a bitmap in an Image - no HwndHost, no airspace issues inside the pane.
+    //
+    // Everything here runs on the UI thread on purpose: a Vulkan device needs external synchronization
+    // and a render at this size is sub-millisecond. Only the .mdl/.vvd/.vtx parse is backgrounded, and
+    // that happens in the view model before any of this is touched.
+
+    /// <summary>
+    /// Opening view: a three-quarter front angle, slightly above.
+    /// <para>
+    /// The yaw is measured from +X, and dead-front is 0 because the renderer turns the model to face
+    /// <b>+X</b> the way HLMV presents it (see <c>VulkanModelPreview.ModelOrientation</c> - the
+    /// bind-pose vertices on disk actually face -Y). The +0.55 rad offset swings the eye round to the
+    /// model's front-left so it reads as a three-quarter view rather than a flat elevation.
+    /// </para>
+    /// </summary>
+    private const float ModelDefaultYaw = 0.55f, ModelDefaultPitch = 0.35f;
+
+    /// <summary>How far the pitch may travel before the look-at basis degenerates at the poles.</summary>
+    private const float ModelMaxPitch = 1.50f;
+
+    /// <summary>Cap on the offscreen target, so dragging the pane very wide on a HiDPI screen can't
+    /// ask for a silly allocation.</summary>
+    private const int ModelPreviewMaxPixels = 2048;
+
+    /// <summary>Target size is snapped down to a multiple of this. Resizing the pane otherwise tears
+    /// down and rebuilds the whole offscreen image set on every pixel of the drag; the few pixels of
+    /// slack sit against a background the render clears to anyway, so they don't show.</summary>
+    private const int ModelPreviewSizeStep = 8;
+
+    /// <summary>
+    /// Ceiling for the live preview. Deliberately well above any common refresh rate, because the
+    /// loop is driven by the compositor's vsync-paced tick and is therefore already bounded by the
+    /// display. A cap *below* the refresh rate does not do what it looks like it does: the only rates
+    /// reachable from a tick are integer divisions of it, so capping at 120 on a 144 Hz screen does
+    /// not give 120, it drops every other tick and gives 72.
+    /// </summary>
+    private const double ModelMinFrameMs = 1000.0 / 240.0;
+
+    /// <summary>A render slower than this makes the loop sit out the next tick, so a heavy model on a
+    /// weak GPU halves its frame rate instead of making the whole window feel sluggish.</summary>
+    private const double ModelFrameBudgetMs = 5.0;
+
+    private bool _modelSkipNextTick;
+
+    private VulkanModelPreview? _modelPreview;
+
+    /// <summary>Set once Vulkan has failed to come up, so every later .mdl skips straight to the glyph
+    /// instead of retrying (and re-logging) device creation.</summary>
+    private bool _modelPreviewUnavailable;
+
+    /// <summary>True while the pane is actually showing a model - gates the mouse handlers and resize
+    /// redraws, which the texture previews must not react to.</summary>
+    private bool _modelPreviewActive;
+
+    private float _modelYaw = ModelDefaultYaw, _modelPitch = ModelDefaultPitch, _modelZoom = 1f;
+
+    /// <summary>Where the camera is looking, sideways and up, as a fraction of the model's framing
+    /// distance (see <see cref="VulkanModelPreview.Render"/>). Moved by Shift+drag, as in HLMV.</summary>
+    private System.Numerics.Vector2 _modelPan;
+
+    private Point _modelDragFrom;
+    private bool _modelDragging;
+
+    /// <summary>True when the drag that is underway pans instead of orbiting. Latched at mouse-down
+    /// so letting go of Ctrl mid-drag doesn't switch to spinning the model.</summary>
+    private bool _modelPanning;
+
+    // The preview renders continuously off the compositor's frame tick rather than once per input
+    // event: input handlers only move the camera, so a fast drag can't queue up a burst of blocking
+    // submits, and the frame cap holds the cost steady whatever the display's refresh rate is.
+    private bool _modelLoopRunning;
+    private readonly System.Diagnostics.Stopwatch _modelClock = System.Diagnostics.Stopwatch.StartNew();
+    private TimeSpan _modelLastFrameAt;
+    private double _modelFps;
+
+    /// <summary>Reused across frames - a fresh BitmapSource per frame is what made a fast orbit
+    /// stutter, since each one allocated a full-size pixel array for the GC to collect.</summary>
+    private WriteableBitmap? _modelBitmap;
+
+    private void StartModelLoop()
+    {
+        if (_modelLoopRunning)
+            return;
+        _modelLoopRunning = true;
+        _modelLastFrameAt = default;
+        CompositionTarget.Rendering += OnModelFrame;
+    }
+
+    private void StopModelLoop()
+    {
+        if (!_modelLoopRunning)
+            return;
+        _modelLoopRunning = false;
+        CompositionTarget.Rendering -= OnModelFrame;
+    }
+
+    /// <summary>One live frame, rate-capped. Skips entirely while the pane is off-screen (another tab
+    /// selected, Details collapsed) so an idle model isn't spinning the GPU in the background.</summary>
+    private void OnModelFrame(object? sender, EventArgs e)
+    {
+        if (!_modelPreviewActive || !UnpackDetailThumb.IsVisible)
+            return;
+
+        // Graceful degradation rather than a fixed cap: only a frame that actually overran gives up
+        // the next tick.
+        if (_modelSkipNextTick)
+        {
+            _modelSkipNextTick = false;
+            return;
+        }
+
+        var now = _modelClock.Elapsed;
+        double sinceLast = (now - _modelLastFrameAt).TotalMilliseconds;
+        if (_modelLastFrameAt != default && sinceLast < ModelMinFrameMs)
+            return;
+        _modelLastFrameAt = now;
+
+        // Smoothed, so the readout is legible instead of flickering through every jittered frame.
+        if (sinceLast is > 0 and < 1000)
+            _modelFps = _modelFps <= 0 ? 1000.0 / sinceLast : _modelFps * 0.9 + (1000.0 / sinceLast) * 0.1;
+
+        RenderModelPreview();
+        _modelSkipNextTick = _modelPreview?.LastFrameMilliseconds > ModelFrameBudgetMs;
+    }
+
+    /// <summary>Loads a .mdl into the Vulkan preview and draws the first frame, or leaves the generic
+    /// glyph in place when the model has no usable mesh (or this machine has no Vulkan).</summary>
+    private async Task LoadModelPreviewAsync(PulseWorkshop.Core.Unpack.PackedEntry entry, int gen)
+    {
+        var vm = _vm.Unpack;
+        if (_modelPreviewUnavailable)
+            return;
+
+        var model = await vm.ReadModelMeshAsync(entry, CancellationToken.None);
+        if (model is null || gen != _detailThumbGeneration)
+            return;
+
+        // The device is built on first use rather than at startup - most sessions never preview a
+        // model, and bringing up Vulkan costs a few hundred milliseconds.
+        if (_modelPreview is null)
+        {
+            _modelPreview = VulkanModelPreview.TryCreate(vm.LogPreview);
+            if (_modelPreview is null)
+            {
+                _modelPreviewUnavailable = true;
+                return;
+            }
+        }
+
+        try
+        {
+            _modelPreview.SetMesh(model.Mesh, model.Materials);
+        }
+        catch (Exception ex)
+        {
+            vm.LogPreview($"3D preview: could not upload the mesh - {ex.Message}");
+            return;
+        }
+
+        // Bodygroup pickers for whatever the model actually lets you choose. Each one drives the
+        // renderer directly - no reupload, the draw loop just skips the sub-models not selected.
+        vm.SetBodyGroups(_modelPreview.BodyParts);
+        foreach (var group in vm.BodyGroups)
+            group.PropertyChanged += OnBodyGroupChanged;
+        vm.SetSkins(_modelPreview.SkinCount);
+        _modelPreview.ShowSkeleton = vm.ShowSkeleton;
+        vm.SetSkeleton(_modelPreview.HasSkeleton);
+
+        _modelYaw = ModelDefaultYaw;
+        _modelPitch = ModelDefaultPitch;
+        _modelZoom = 1f;
+        _modelPan = default;
+        _modelPreviewActive = true;
+        _modelFps = 0;
+        UnpackDetailFallback.Visibility = Visibility.Collapsed;
+        UnpackDetailModel.Visibility = Visibility.Visible;
+        UnpackDetailModelHint.Visibility = Visibility.Visible;
+        UnpackDetailModelFps.Visibility = Visibility.Visible;
+        RenderModelPreview();
+        StartModelLoop();
+    }
+
+    /// <summary>The skin picker changed - the renderer re-points the parts at the new skin family.</summary>
+    private void OnSkinChanged(int skin) => _modelPreview?.SetSkin(skin);
+
+    /// <summary>The skeleton toggle flipped. The frame loop picks it up on its next tick, so there is
+    /// nothing to render here.</summary>
+    private void OnShowSkeletonChanged(bool show)
+    {
+        if (_modelPreview is not null)
+            _modelPreview.ShowSkeleton = show;
+    }
+
+    /// <summary>A bodygroup picker changed - show that sub-model instead. The frame loop redraws on
+    /// its own tick, so there is nothing to render here.</summary>
+    private void OnBodyGroupChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName != nameof(BodyGroupViewModel.SelectedIndex)
+            || sender is not BodyGroupViewModel group)
+            return;
+        _modelPreview?.SetBodyGroup(group.Index, group.SelectedIndex);
+    }
+
+    // --- Unpack Details pane: preview box resize ----------------------------------------------------
+
+    private const double DetailsThumbMinHeight = 120, DetailsThumbMaxHeight = 900;
+
+    /// <summary>Drags the preview box taller or shorter. Shared by the texture thumbnail and the model
+    /// viewer - both want more room than the default on occasion.</summary>
+    private void UnpackDetailThumbGrip_DragDelta(object sender,
+        System.Windows.Controls.Primitives.DragDeltaEventArgs e)
+    {
+        UnpackDetailThumb.Height = Math.Clamp(UnpackDetailThumb.ActualHeight + e.VerticalChange,
+            DetailsThumbMinHeight, DetailsThumbMaxHeight);
+        // SizeChanged on the border already redraws the model at the new size.
+    }
+
+    private void UnpackDetailThumbGrip_DragCompleted(object sender,
+        System.Windows.Controls.Primitives.DragCompletedEventArgs e)
+    {
+        _settings.UnpackDetailsThumbHeight = UnpackDetailThumb.Height;
+        _settings.Save();
+    }
+
+    /// <summary>Renders the current camera into the preview Image. Silent no-op when there is nothing
+    /// to draw; a Vulkan error tears the preview down rather than repeating itself every frame.</summary>
+    private void RenderModelPreview()
+    {
+        if (!_modelPreviewActive || _modelPreview is not { HasMesh: true } preview)
+            return;
+
+        // Render at device pixels and tag the bitmap with the matching DPI, so WPF lays it out at the
+        // border's own size with one bitmap pixel per screen pixel (no resampling either way).
+        var dpi = VisualTreeHelper.GetDpi(UnpackDetailThumb);
+        int width = Quantize((UnpackDetailThumb.ActualWidth - 2) * dpi.DpiScaleX);
+        int height = Quantize((UnpackDetailThumb.ActualHeight - 2) * dpi.DpiScaleY);
+        if (width <= 0 || height <= 0)
+            return;
+
+        try
+        {
+            if (preview.Render(width, height, _modelYaw, _modelPitch, _modelZoom, _modelPan)
+                is not { } pixels)
+                return;
+
+            if (_modelBitmap is null || _modelBitmap.PixelWidth != width || _modelBitmap.PixelHeight != height
+                || Math.Abs(_modelBitmap.DpiX - 96 * dpi.DpiScaleX) > 0.01)
+            {
+                _modelBitmap = new WriteableBitmap(width, height, 96 * dpi.DpiScaleX, 96 * dpi.DpiScaleY,
+                    PixelFormats.Bgra32, null);
+                UnpackDetailModel.Source = _modelBitmap;
+            }
+            _modelBitmap.WritePixels(new Int32Rect(0, 0, width, height), pixels, width * 4, 0);
+
+            UnpackDetailModelFps.Text =
+                $"{preview.LastFrameMilliseconds:0.0} ms gpu  {_modelFps:0} fps  {width}x{height}";
+        }
+        catch (Exception ex)
+        {
+            // A lost device (driver reset, GPU removed) would otherwise throw on every mouse move.
+            _vm.Unpack.LogPreview($"3D preview: render failed, disabling - {ex.Message}");
+            _modelPreviewActive = false;
+            _modelPreviewUnavailable = true;
+            _modelPreview.Dispose();
+            _modelPreview = null;
+            UnpackDetailModel.Visibility = Visibility.Collapsed;
+            UnpackDetailModelHint.Visibility = Visibility.Collapsed;
+            UnpackDetailModelFps.Visibility = Visibility.Collapsed;
+            UnpackDetailFallback.Visibility = Visibility.Visible;
+            StopModelLoop();
+        }
+
+        // Device pixels, snapped down to a whole step and clamped. Snapping is what keeps a pane
+        // resize from rebuilding the offscreen images on every single pixel of the drag.
+        static int Quantize(double devicePixels)
+        {
+            int at = (int)devicePixels / ModelPreviewSizeStep * ModelPreviewSizeStep;
+            return Math.Clamp(at, 0, ModelPreviewMaxPixels);
+        }
+    }
+
+    private void UnpackDetailThumb_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (!_modelPreviewActive)
+            return;
+        _modelDragging = true;
+        _modelPanning = (Keyboard.Modifiers & ModifierKeys.Shift) != 0;
+        _modelDragFrom = e.GetPosition(UnpackDetailThumb);
+        UnpackDetailThumb.CaptureMouse();
+        UnpackDetailThumb.Cursor = Cursors.SizeAll;
+    }
+
+    /// <summary>
+    /// Vertical half-angle of the render's field of view, as a tangent. Panning divides the drag by
+    /// the pane height and scales by twice this, which is what makes the model track the cursor
+    /// exactly rather than drifting ahead of or behind it.
+    /// </summary>
+    private const float ModelFovTangent = 0.41421357f; // tan(45 degrees / 2)
+
+    private void UnpackDetailThumb_MouseMove(object sender, MouseEventArgs e)
+    {
+        if (!_modelDragging || !_modelPreviewActive)
+            return;
+        var now = e.GetPosition(UnpackDetailThumb);
+        double dx = now.X - _modelDragFrom.X, dy = now.Y - _modelDragFrom.Y;
+
+        if (_modelPanning)
+        {
+            // Pan is measured against the un-zoomed framing distance, so the drag has to be scaled by
+            // the zoom to keep the model glued to the cursor at every zoom level.
+            double height = Math.Max(UnpackDetailThumb.ActualHeight, 1);
+            float scale = (float)(2 * ModelFovTangent / height) * _modelZoom;
+            // Negated so the model follows the cursor rather than running away from it.
+            _modelPan.X -= (float)dx * scale;
+            _modelPan.Y += (float)dy * scale;
+        }
+        else
+        {
+            _modelYaw -= (float)dx * 0.01f;
+            _modelPitch = Math.Clamp(_modelPitch + (float)dy * 0.01f, -ModelMaxPitch, ModelMaxPitch);
+        }
+
+        _modelDragFrom = now;
+        // No render here - the frame loop picks the new camera up on its next tick. Rendering inline
+        // meant a fast drag queued one blocking submit per mouse event and the drag went sticky.
+    }
+
+    private void UnpackDetailThumb_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        if (!_modelDragging)
+            return;
+        _modelDragging = false;
+        UnpackDetailThumb.ReleaseMouseCapture();
+        UnpackDetailThumb.Cursor = null;
+    }
+
+    private void UnpackDetailThumb_MouseWheel(object sender, MouseWheelEventArgs e)
+    {
+        if (!_modelPreviewActive)
+            return;
+        _modelZoom = Math.Clamp(_modelZoom * (e.Delta > 0 ? 0.88f : 1.0f / 0.88f), 0.15f, 6f);
+        e.Handled = true; // don't scroll the Details pane out from under the model
     }
 
     /// <summary>

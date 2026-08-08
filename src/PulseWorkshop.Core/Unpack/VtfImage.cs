@@ -25,17 +25,29 @@ public sealed class VtfImage
     /// <summary>Row-major BGRA (8 bits per channel), <see cref="Width"/> * <see cref="Height"/> * 4 bytes.</summary>
     public byte[] Bgra { get; }
 
-    private VtfImage(int width, int height, int sourceWidth, int sourceHeight, byte[] bgra)
+    /// <summary>TEXTUREFLAGS_CLAMPS - sample U clamped to the edge instead of wrapping. Set on
+    /// anything that must not tile: iris maps, decals, screen overlays.</summary>
+    public bool ClampS { get; }
+
+    /// <summary>TEXTUREFLAGS_CLAMPT - the same for V.</summary>
+    public bool ClampT { get; }
+
+    private VtfImage(int width, int height, int sourceWidth, int sourceHeight, byte[] bgra,
+        bool clampS, bool clampT)
     {
         Width = width;
         Height = height;
         SourceWidth = sourceWidth;
         SourceHeight = sourceHeight;
         Bgra = bgra;
+        ClampS = clampS;
+        ClampT = clampT;
     }
 
     /// <summary>Set in the header flags for cubemaps (which store six faces per mip).</summary>
     private const uint TextureFlagsEnvMap = 0x4000;
+
+    private const uint TextureFlagsClampS = 0x0004, TextureFlagsClampT = 0x0008;
 
     // The subset of VTFImageFormat we can decode. Anything else -> no preview.
     private enum Fmt
@@ -147,7 +159,8 @@ public sealed class VtfImage
         var bgra = new byte[selW * selH * 4];
         if (!DecodeInto(src, selW, selH, fmt, bgra))
             return null;
-        return new VtfImage(selW, selH, width, height, bgra);
+        return new VtfImage(selW, selH, width, height, bgra,
+            (flags & TextureFlagsClampS) != 0, (flags & TextureFlagsClampT) != 0);
     }
 
     private static int MipDim(int dim, int level) => Math.Max(1, dim >> level);

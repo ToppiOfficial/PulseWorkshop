@@ -48,6 +48,9 @@ public partial class App : Application
         // Browser-style middle-click autoscroll on every ScrollViewer in the app.
         AutoScroll.Install();
 
+        // No rubber-band selection: a held button sweeping over list rows must not re-select them.
+        NoDragSelect.Install();
+
         var window = new MainWindow();
 
         // Later launches forward their file here (marshalled to the UI thread) instead of opening a

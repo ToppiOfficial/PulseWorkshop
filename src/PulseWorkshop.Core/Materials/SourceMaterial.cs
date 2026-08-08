@@ -17,7 +17,14 @@ public enum VmtShader
     Unknown,
     VertexLit,
     Unlit,
-    Eye,
+
+    /// <summary>The original two-layer eye: $basetexture is the sclera, sampled with the mesh's own
+    /// UVs, and $iris is projected over it and blended by its own alpha.</summary>
+    Eyes,
+
+    /// <summary>The later single-layer eye: $iris carries the whole eyeball and is projected over
+    /// the mesh, at half the plane equations' scale (the pixel shader remaps uv * 0.5 + 0.25).</summary>
+    EyeRefract,
 }
 
 /// <summary>
@@ -45,26 +52,43 @@ public sealed class Vmt
         {
             ["vertexlitgeneric"] = VmtShader.VertexLit,
             ["unlitgeneric"] = VmtShader.Unlit,
-            ["eyes"] = VmtShader.Eye,
-            ["eyeball"] = VmtShader.Eye,
-            ["eyerefract"] = VmtShader.Eye,
+            ["eyes"] = VmtShader.Eyes,
+            ["eyeball"] = VmtShader.Eyes,
+            ["eyerefract"] = VmtShader.EyeRefract,
         };
 
     /// <summary>
     /// The texture the preview samples as diffuse colour, material-relative and without extension,
     /// or null when this shader has none to give.
     /// <para>
-    /// Eye shaders carry no $basetexture: EyeRefract builds the eye from $iris behind $corneatexture,
-    /// so the iris is the layer that actually reads as the eye. The cornea's refraction and the
-    /// per-eye lighting are not implemented - this is the diffuse pass only.
+    /// The two eye shaders are built differently. EyeRefract has no $basetexture at all - $iris is
+    /// the whole eyeball, sclera included, and everything else it names (cornea, ambient occlusion,
+    /// reflection cubemap) layers on top and is not drawn here. The older Eyes shader draws
+    /// $basetexture as the sclera and composites $iris over it; see <see cref="IrisTexture"/>.
     /// </para>
     /// </summary>
     public string? DiffuseTexture => Shader switch
     {
-        VmtShader.Eye => this["$iris"] ?? this["$basetexture"] ?? this["$corneatexture"],
+        VmtShader.EyeRefract => this["$iris"] ?? this["$corneatexture"],
+        VmtShader.Eyes => this["$basetexture"] ?? this["$iris"],
         VmtShader.VertexLit or VmtShader.Unlit => this["$basetexture"],
         _ => null,
     };
+
+    /// <summary>
+    /// The Eyes shader's second layer, drawn over <see cref="DiffuseTexture"/> and masked by its own
+    /// alpha (<c>lerp(base, iris, iris.a)</c> in eyes_ps2x). Null for everything else, EyeRefract
+    /// included - there the iris <em>is</em> the diffuse.
+    /// </summary>
+    public string? IrisTexture =>
+        Shader == VmtShader.Eyes && this["$basetexture"] is not null ? this["$iris"] : null;
+
+    /// <summary>
+    /// How far the engine's iris plane equations are scaled before $iris is sampled. EyeRefract's
+    /// pixel shader remaps them (<c>uv * 0.5 + 0.25</c>, so a factor of 0.5 about the eye's centre);
+    /// the Eyes shader's vertex shader passes them straight through.
+    /// </summary>
+    public float IrisUvScale => Shader == VmtShader.EyeRefract ? 0.5f : 1f;
 
     /// Source's convention for a boolean parameter: present and not "0".
     public bool Flag(string parameter) => this[parameter]?.Trim() is { Length: > 0 } v && v != "0";
@@ -186,14 +210,22 @@ public sealed class ModelMaterial
     /// Decoded diffuse texture; null unless <see cref="Fallback"/> is <see cref="MaterialFallback.None"/>.
     public VtfImage? Diffuse { get; init; }
 
+    /// <summary>The Eyes shader's $iris layer, decoded, or null for every other material.
+    /// <c>EyeballProjection</c> turns it into a second draw over the sclera.</summary>
+    public VtfImage? Iris { get; init; }
+
     public MaterialFallback Fallback { get; init; }
+
+    /// <summary>Set on the synthesised iris layer, which blends over the sclera by its own alpha
+    /// without the VMT saying $translucent - the Eyes shader does that compositing in one pass.</summary>
+    public bool ForceTranslucent { get; init; }
 
     /// UnlitGeneric ignores lighting entirely - the texture is the final colour.
     public bool Unlit => Vmt?.Shader == VmtShader.Unlit;
 
     public float AlphaTestReference => Vmt?.AlphaTestReference ?? 0f;
 
-    public bool Translucent => Vmt?.Translucent ?? false;
+    public bool Translucent => ForceTranslucent || (Vmt?.Translucent ?? false);
 
     public bool Additive => Vmt?.Additive ?? false;
 
@@ -268,24 +300,45 @@ public static class ModelMaterialLoader
             return new ModelMaterial { Name = name, Path = path, Vmt = vmt, Fallback = MaterialFallback.Plain };
         }
 
+        if (LoadTexture(texture, read, log, maxTextureSize, name) is not { } image)
+            return new ModelMaterial { Name = name, Path = path, Vmt = vmt, Fallback = MaterialFallback.Missing };
+
+        log?.Invoke($"material: {name} -> {vmt.ShaderName}, {texture} ({image.Width}x{image.Height})");
+        return new ModelMaterial
+        {
+            Name = name,
+            Path = path,
+            Vmt = vmt,
+            Diffuse = image,
+            // The Eyes shader's iris is a second layer over this one, not an alternative to it. A
+            // missing iris is not fatal: the sclera still draws.
+            Iris = vmt.IrisTexture is { } iris
+                ? LoadTexture(iris, read, log, maxTextureSize, name)
+                : null,
+        };
+    }
+
+    /// <summary>A material-relative texture name ("models/foo/bar") decoded to pixels, or null when
+    /// it is missing or in a format the decoder does not handle - both logged, neither thrown.</summary>
+    private static VtfImage? LoadTexture(string texture, Func<string, byte[]?> read, Action<string>? log,
+        int maxTextureSize, string materialName)
+    {
         var texturePath = "materials/" + texture.Replace('\\', '/').TrimStart('/');
         if (!texturePath.EndsWith(".vtf", StringComparison.OrdinalIgnoreCase))
             texturePath += ".vtf";
 
         if (read(texturePath) is not { } vtfBytes)
         {
-            log?.Invoke($"material: {name} - {texturePath} is missing");
-            return new ModelMaterial { Name = name, Path = path, Vmt = vmt, Fallback = MaterialFallback.Missing };
+            log?.Invoke($"material: {materialName} - {texturePath} is missing");
+            return null;
         }
 
         if (VtfImage.Decode(vtfBytes, maxTextureSize) is not { } image)
         {
-            log?.Invoke($"material: {name} - {texturePath} is in a .vtf format the decoder does not handle");
-            return new ModelMaterial { Name = name, Path = path, Vmt = vmt, Fallback = MaterialFallback.Missing };
+            log?.Invoke($"material: {materialName} - {texturePath} is in a .vtf format the decoder does not handle");
+            return null;
         }
-
-        log?.Invoke($"material: {name} -> {vmt.ShaderName}, {texture} ({image.Width}x{image.Height})");
-        return new ModelMaterial { Name = name, Path = path, Vmt = vmt, Diffuse = image };
+        return image;
     }
 
     /// <summary>

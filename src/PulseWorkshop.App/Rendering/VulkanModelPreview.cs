@@ -105,6 +105,9 @@ public sealed unsafe class VulkanModelPreview : IDisposable
         public DeviceMemory Memory;
         public ImageView View;
         public DescriptorSet Set;
+
+        /// <summary>Which of the four wrap/clamp samplers this texture's .vtf flags asked for.</summary>
+        public Sampler Sampler;
     }
 
     private readonly Vk _vk;
@@ -128,7 +131,7 @@ public sealed unsafe class VulkanModelPreview : IDisposable
     /// blended, so bones read as an x-ray through whatever mesh is in front of them.</summary>
     private readonly Pipeline _xrayLinePipeline;
 
-    private readonly Sampler _sampler;
+    private readonly Sampler[] _samplers;
     private readonly Action<string>? _log;
 
     /// <summary>True when the colour format supports a linear blit, which is how the mip chain is
@@ -216,15 +219,20 @@ public sealed unsafe class VulkanModelPreview : IDisposable
     ];
 
     /// <summary>
-    /// A quarter turn about Z applied to the model (and its skeleton) but <b>not</b> to the ground grid
-    /// or the origin gizmo. A compiled Source model's bind-pose vertices face -Y; HLMV presents them
-    /// facing +X, and this is what lines the preview up with that. Purely presentational - the vertex
-    /// buffer still holds what the .vvd stores, and the two constants are each other's inverse (the
-    /// translucent sort needs the eye brought back into the model's own space).
-    /// </summary>
-    private static readonly Matrix4x4 ModelOrientation = Matrix4x4.CreateRotationZ(MathF.PI / 2f);
+    /// studiomdl's default root rotation (<c>g_defaultrotation</c>, a quarter turn about Z), applied to
+    /// the model and its skeleton but <b>not</b> to the ground grid or the origin gizmo.
+    /// <para>
+    /// The engine has no such transform: the compiler puts this turn into every animation's root bones
+    /// and leaves the reference mesh alone, so a skeletal model's .vvd faces -Y and only comes about
+    /// once a sequence is evaluated. Drawing the bind pose, this stands in for that missing sequence.
+    /// A <c>$staticprop</c> already has the turn baked into its vertices, so it gets identity here -
+    /// see <see cref="StudioMesh.IsStaticProp"/>. Purely presentational: the vertex buffer still holds
+    /// what the .vvd stores, and the second matrix is the first one's inverse (the translucent sort
+    /// needs the eye brought back into the model's own space).
+    /// </para></summary>
+    private Matrix4x4 _modelOrientation = Matrix4x4.Identity;
 
-    private static readonly Matrix4x4 ModelOrientationInverse = Matrix4x4.CreateRotationZ(-MathF.PI / 2f);
+    private Matrix4x4 _modelOrientationInverse = Matrix4x4.Identity;
 
     /// <summary>The skeleton overlay's colour: near-white grey at a bit over half opacity, which stays
     /// legible over both a dark texture and a bright one without reading as geometry.</summary>
@@ -245,7 +253,7 @@ public sealed unsafe class VulkanModelPreview : IDisposable
     private VulkanModelPreview(Vk vk, Instance instance, PhysicalDevice physical, Device device,
         Queue queue, CommandPool pool, CommandBuffer cmd, RenderPass renderPass,
         DescriptorSetLayout descriptorLayout, PipelineLayout layout, Pipeline[] triangles, Pipeline lines,
-        Pipeline xrayLines, Sampler sampler, bool canGenerateMipmaps, string deviceName,
+        Pipeline xrayLines, Sampler[] samplers, bool canGenerateMipmaps, string deviceName,
         Action<string>? log)
     {
         _vk = vk;
@@ -261,7 +269,7 @@ public sealed unsafe class VulkanModelPreview : IDisposable
         _trianglePipelines = triangles;
         _linePipeline = lines;
         _xrayLinePipeline = xrayLines;
-        _sampler = sampler;
+        _samplers = samplers;
         _canGenerateMipmaps = canGenerateMipmaps;
         DeviceName = deviceName;
         _log = log;
@@ -410,7 +418,7 @@ public sealed unsafe class VulkanModelPreview : IDisposable
             var descriptorLayout = CreateDescriptorLayout(vk, device);
             var (layout, triangles, lines, xrayLines) =
                 CreatePipelines(vk, device, renderPass, descriptorLayout);
-            var sampler = CreateSampler(vk, device);
+            var samplers = CreateSamplers(vk, device);
 
             // Mips come from a blit chain, which needs the format to filter linearly when sampled.
             vk.GetPhysicalDeviceFormatProperties(chosen, ColorFormat, out var formatProperties);
@@ -419,7 +427,7 @@ public sealed unsafe class VulkanModelPreview : IDisposable
 
             log?.Invoke($"3D preview: Vulkan ready on {chosenName} ({started.ElapsedMilliseconds} ms)");
             return new VulkanModelPreview(vk, instance, chosen, device, queue, pool, cmd, renderPass,
-                descriptorLayout, layout, triangles, lines, xrayLines, sampler, canMip, chosenName, log);
+                descriptorLayout, layout, triangles, lines, xrayLines, samplers, canMip, chosenName, log);
         }
         catch (Exception ex)
         {
@@ -556,28 +564,37 @@ public sealed unsafe class VulkanModelPreview : IDisposable
     }
 
     /// <summary>
-    /// One sampler for every texture: trilinear, repeating. Source content assumes wrapped UVs
-    /// (tiling trims, wrapped body maps) and anisotropy is skipped because it is an optional device
-    /// feature and this renderer enables none.
+    /// The four trilinear samplers, indexed by <see cref="SamplerIndex"/>: wrapping crossed with the
+    /// .vtf's own TEXTUREFLAGS_CLAMPS / CLAMPT. Wrapping is the common case (tiling trims, wrapped
+    /// body maps), but a texture flagged clamped must not tile - an iris map is authored as one disc
+    /// on a transparent field, and repeating it papers the eyeball with copies of itself.
+    /// Anisotropy is skipped because it is an optional device feature and this renderer enables none.
     /// </summary>
-    private static Sampler CreateSampler(Vk vk, Device device)
+    private static Sampler[] CreateSamplers(Vk vk, Device device)
     {
-        var info = new SamplerCreateInfo
+        var samplers = new Sampler[4];
+        for (int i = 0; i < samplers.Length; i++)
         {
-            SType = StructureType.SamplerCreateInfo,
-            MagFilter = Filter.Linear,
-            MinFilter = Filter.Linear,
-            MipmapMode = SamplerMipmapMode.Linear,
-            AddressModeU = SamplerAddressMode.Repeat,
-            AddressModeV = SamplerAddressMode.Repeat,
-            AddressModeW = SamplerAddressMode.Repeat,
-            MinLod = 0f,
-            MaxLod = 1000f, // no clamp - each image's own level count is the real limit
-            BorderColor = BorderColor.IntOpaqueBlack,
-        };
-        Check(vk.CreateSampler(device, in info, null, out var sampler), "vkCreateSampler");
-        return sampler;
+            var info = new SamplerCreateInfo
+            {
+                SType = StructureType.SamplerCreateInfo,
+                MagFilter = Filter.Linear,
+                MinFilter = Filter.Linear,
+                MipmapMode = SamplerMipmapMode.Linear,
+                AddressModeU = (i & 1) != 0 ? SamplerAddressMode.ClampToEdge : SamplerAddressMode.Repeat,
+                AddressModeV = (i & 2) != 0 ? SamplerAddressMode.ClampToEdge : SamplerAddressMode.Repeat,
+                AddressModeW = SamplerAddressMode.Repeat,
+                MinLod = 0f,
+                MaxLod = 1000f, // no clamp - each image's own level count is the real limit
+                BorderColor = BorderColor.IntOpaqueBlack,
+            };
+            Check(vk.CreateSampler(device, in info, null, out samplers[i]), "vkCreateSampler");
+        }
+        return samplers;
     }
+
+    /// <summary>Which of <see cref="_samplers"/> a texture wants, from its .vtf clamp flags.</summary>
+    private static int SamplerIndex(bool clampS, bool clampT) => (clampS ? 1 : 0) | (clampT ? 2 : 0);
 
     /// <summary>
     /// The pipelines, all off one shader pair and differing only in topology and state: triangles for
@@ -670,7 +687,9 @@ public sealed unsafe class VulkanModelPreview : IDisposable
                 SType = StructureType.PipelineDepthStencilStateCreateInfo,
                 DepthTestEnable = i < BlendModeCount,
                 DepthWriteEnable = i == (int)BlendMode.Opaque,
-                DepthCompareOp = CompareOp.Less,
+                // LessOrEqual, not Less: the Eyes shader's iris layer is a second draw over
+                // geometry already in the depth buffer, at exactly the same depth.
+                DepthCompareOp = CompareOp.LessOrEqual,
             };
         }
 
@@ -840,6 +859,12 @@ public sealed unsafe class VulkanModelPreview : IDisposable
         ObjectDisposedException.ThrowIf(_disposed, this);
 
         ReleaseMeshBuffers();
+
+        // A $staticprop's vertices already carry the compiler's root rotation; everything else keeps
+        // it in its animations, which this viewer does not evaluate, so stand in for it.
+        float turn = mesh.IsStaticProp ? 0f : MathF.PI / 2f;
+        _modelOrientation = Matrix4x4.CreateRotationZ(turn);
+        _modelOrientationInverse = Matrix4x4.CreateRotationZ(-turn);
 
         _meshCenter = (mesh.BoundsMin + mesh.BoundsMax) * 0.5f;
         var extent = mesh.BoundsMax - mesh.BoundsMin;
@@ -1206,21 +1231,22 @@ public sealed unsafe class VulkanModelPreview : IDisposable
     }
 
     private PreviewTexture CreateTextureFromVtf(VtfImage image) =>
-        CreateTexture(image.Bgra, image.Width, image.Height);
+        CreateTexture(image.Bgra, image.Width, image.Height,
+            SamplerIndex(image.ClampS, image.ClampT));
 
     /// <summary>
     /// Uploads BGRA pixels into a sampled image with a full mip chain, built by successive linear
     /// blits. Everything runs through one submit-and-wait: this is called while a model is being
     /// loaded, never inside the frame loop.
     /// </summary>
-    private PreviewTexture CreateTexture(byte[] bgra, int width, int height)
+    private PreviewTexture CreateTexture(byte[] bgra, int width, int height, int samplerIndex = 0)
     {
         uint mipLevels = _canGenerateMipmaps
             ? (uint)(Math.Floor(Math.Log2(Math.Max(width, height))) + 1)
             : 1;
 
         var staging = CreateHostBuffer<byte>(bgra, BufferUsageFlags.TransferSrcBit, out var stagingMemory);
-        var texture = new PreviewTexture();
+        var texture = new PreviewTexture { Sampler = _samplers[samplerIndex] };
         texture.Image = CreateImage(width, height, ColorFormat, SampleCountFlags.Count1Bit,
             ImageUsageFlags.TransferDstBit | ImageUsageFlags.TransferSrcBit | ImageUsageFlags.SampledBit,
             out texture.Memory, mipLevels);
@@ -1390,7 +1416,7 @@ public sealed unsafe class VulkanModelPreview : IDisposable
 
         var imageInfo = new DescriptorImageInfo
         {
-            Sampler = _sampler,
+            Sampler = texture.Sampler,
             ImageView = texture.View,
             ImageLayout = ImageLayout.ShaderReadOnlyOptimal,
         };
@@ -1490,7 +1516,7 @@ public sealed unsafe class VulkanModelPreview : IDisposable
         {
             // Centroids are in the model's own (unrotated) space, so the eye is brought back into it
             // rather than rotating every centroid.
-            var from = Vector3.Transform(eye + target, ModelOrientationInverse);
+            var from = Vector3.Transform(eye + target, _modelOrientationInverse);
             Array.Sort(_translucentParts, (a, b) =>
                 Vector3.DistanceSquared(b.Center, from).CompareTo(Vector3.DistanceSquared(a.Center, from)));
         }
@@ -1538,9 +1564,10 @@ public sealed unsafe class VulkanModelPreview : IDisposable
 
         ulong zeroOffset = 0;
 
-        // The model and its skeleton draw turned a quarter turn (see ModelOrientation); the grid and
-        // gizmo are the world reference and stay put, which is what makes the turn visible at all.
-        var modelMvp = ModelOrientation * mvp;
+        // The model and its skeleton draw under the compiler's root rotation (see _modelOrientation);
+        // the grid and gizmo are the world reference and stay put, which is what makes the turn
+        // visible at all. Identity for a $staticprop, whose vertices already carry it.
+        var modelMvp = _modelOrientation * mvp;
 
         // Grid and the origin gizmo: flat lines out of one buffer, depth-tested against the mesh that
         // follows. Four draws rather than a per-vertex colour attribute - the colour is a push
@@ -1858,7 +1885,8 @@ public sealed unsafe class VulkanModelPreview : IDisposable
         if (_checkerTexture is not null) DestroyTexture(_checkerTexture);
         if (_descriptorPool.Handle != 0)
             _vk.DestroyDescriptorPool(_device, _descriptorPool, null);
-        _vk.DestroySampler(_device, _sampler, null);
+        foreach (var sampler in _samplers)
+            _vk.DestroySampler(_device, sampler, null);
         _vk.DestroyDescriptorSetLayout(_device, _descriptorLayout, null);
         foreach (var pipeline in _trianglePipelines)
             _vk.DestroyPipeline(_device, pipeline, null);

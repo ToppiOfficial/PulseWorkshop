@@ -47,6 +47,10 @@ public sealed class StudioMesh
     /// children). Empty for a model with no bones at all.</summary>
     public required StudioBone[] Bones { get; init; }
 
+    /// <summary>$eyeball: the model's eyes, each owning a slice of <see cref="Positions"/>. Their UVs
+    /// are not usable as they come off disk - see <see cref="StudioEyeball"/>.</summary>
+    public required StudioEyeball[] Eyeballs { get; init; }
+
     /// <summary>
     /// Which material a part draws with under a given skin, or -1 when it has none. This indirection
     /// is the whole point of $texturegroup: swapping skins re-points the same geometry at a different
@@ -54,6 +58,11 @@ public sealed class StudioMesh
     /// </summary>
     public int MaterialFor(in MeshPart part, int skin)
     {
+        // A synthesised part (the iris layer of an Eyes-shader eyeball) names its material outright:
+        // it has no skin reference of its own, being no part of the .mdl's mesh tree, and its index
+        // can sit past MaterialNames - the caller's material list is the one that grew.
+        if (part.MaterialOverride >= 0)
+            return part.MaterialOverride;
         if (part.SkinRef < 0)
             return -1;
         var family = SkinFamilies[Math.Clamp(skin, 0, SkinFamilies.Length - 1)];
@@ -67,15 +76,37 @@ public sealed class StudioMesh
     /// <summary>studiohdr_t.version of the source .mdl (44-49).</summary>
     public required int Version { get; init; }
 
+    /// <summary>
+    /// STUDIOHDR_FLAGS_STATIC_PROP - the model was compiled with <c>$staticprop</c>, so studiomdl's
+    /// <c>MakeStaticProp</c> baked the compiler's default root rotation into these vertices and
+    /// collapsed the skeleton to one <c>static_prop</c> bone.
+    /// <para>
+    /// This is what says whether the bind pose is already turned. studiomdl's <c>g_defaultrotation</c>
+    /// defaults to +90 degrees about Z; it is applied to every <em>animation</em>'s root bones but
+    /// <b>not</b> to the reference mesh, so a skeletal model's .vvd stays in the authoring space
+    /// (Valve's character rigs face -Y) and only looks forward once a sequence is evaluated. A
+    /// $staticprop has the same turn baked into the vertices instead, and its one synthetic animation
+    /// carries no rotation, so it is never applied twice. A viewer that draws the bind pose without
+    /// animating - like this one - has to stand in for the missing sequence, but only when the
+    /// compiler did not already do it. See <c>utils/studiomdl/simplify.cpp</c>: <c>MakeStaticProp</c>
+    /// and <c>BuildRawTransforms</c>.
+    /// </para></summary>
+    public required bool IsStaticProp { get; init; }
+
     public int TriangleCount => Indices.Length / 3;
 }
 
 /// <summary>One draw range: <paramref name="IndexCount"/> indices starting at
 /// <paramref name="FirstIndex"/>. <paramref name="SkinRef"/> is resolved to a material through the
 /// active skin (see <see cref="StudioMesh.MaterialFor"/>), not used directly. Only visible when its
-/// bodygroup has <paramref name="Model"/> selected.</summary>
+/// bodygroup has <paramref name="Model"/> selected.
+/// <para>
+/// <paramref name="MaterialOverride"/> is -1 for everything the .mdl itself describes. It is set
+/// only on the extra parts <c>EyeballProjection</c> adds, which draw a second layer over geometry
+/// that is already in the list and so have no skin reference to resolve.
+/// </para></summary>
 public readonly record struct MeshPart(
-    int FirstIndex, int IndexCount, int SkinRef, int BodyPart, int Model);
+    int FirstIndex, int IndexCount, int SkinRef, int BodyPart, int Model, int MaterialOverride = -1);
 
 /// <summary>
 /// One bone of the bind-pose skeleton (mstudiobone_t). <paramref name="BindPose"/> is the bone -> model
@@ -94,6 +125,47 @@ public sealed record StudioBone(
 {
     /// <summary>The joint's position in model space at bind pose, in Source units.</summary>
     public Vector3 Position => BindPose.Translation;
+}
+
+/// <summary>
+/// One $eyeball (mstudioeyeball_t), already lifted out of its bone's space into model space.
+/// <para>
+/// An eyeball mesh's UVs on disk are meaningless - the engine never samples the iris with them, it
+/// projects the iris onto the eye every frame from the eye's own axes. <see cref="Uv"/> is that
+/// projection, and <c>EyeballProjection</c> applies it once the shader is known.
+/// </para>
+/// <para>
+/// The $eyeball QC's <c>diameter</c> (<see cref="Radius"/>) does <em>not</em> size the iris: the
+/// engine's projection uses <see cref="IrisScale"/> alone. Radius is kept because the EyeRefract
+/// pixel shader's optional $raytracesphere path needs it, which is not implemented here.
+/// </para>
+/// </summary>
+/// <param name="VertexBase">First vertex this eye owns in <see cref="StudioMesh.Positions"/>.</param>
+/// <param name="Origin">Centre of the eyeball in model space.</param>
+/// <param name="Right">The eye's right axis, after the $eyeball angle (zoffset) is applied.</param>
+/// <param name="IrisScale">mstudioeyeball_t.iris_scale - the reciprocal of the QC's iris size, so
+/// UV units per inch. Around 1.7-2.0 for a human eye.</param>
+public sealed record StudioEyeball(
+    string Name, int VertexBase, int VertexCount, int SkinRef,
+    Vector3 Origin, Vector3 Right, Vector3 Up, float IrisScale, float Radius)
+{
+    /// <summary>
+    /// The engine's iris texture coordinate for a model-space position, matching studiorender's
+    /// $irisu/$irisv plane equations: the matrix rows it builds are <c>-iris_scale * axis</c> with a
+    /// <c>+0.5</c> offset at the eye's centre, so <c>u = 0.5 - iris_scale * dot(right, p - org)</c>.
+    /// <para>
+    /// <paramref name="scale"/> is 1 for the Eyes shader, whose vertex shader samples $iris at those
+    /// coordinates as they stand, and 0.5 for EyeRefract, whose pixel shader remaps them
+    /// (<c>uv * 0.5 + 0.25</c>) before the lookup. That factor is the whole reason one iris map can
+    /// look right in one game and twice the size in another.
+    /// </para>
+    /// </summary>
+    public Vector2 Uv(Vector3 position, float scale)
+    {
+        var d = position - Origin;
+        float s = scale * IrisScale;
+        return new Vector2(0.5f - s * Vector3.Dot(d, Right), 0.5f - s * Vector3.Dot(d, Up));
+    }
 }
 
 /// <summary>
@@ -123,7 +195,11 @@ public static class StudioMeshReader
     public const int MaxVersion = 49;
 
     // studiohdr_t field offsets (the struct is 408 bytes; only these few are needed here).
-    private const int HdrId = 0, HdrVersion = 4, HdrChecksum = 8, HdrNumBodyParts = 232, HdrBodyPartIndex = 236;
+    private const int HdrId = 0, HdrVersion = 4, HdrChecksum = 8, HdrFlags = 152,
+        HdrNumBodyParts = 232, HdrBodyPartIndex = 236;
+
+    // studiohdr_t.flags: STUDIOHDR_FLAGS_STATIC_PROP (studio.h).
+    private const int FlagStaticProp = 0x10;
 
     // ... and the material tables: the texture list, the $cdmaterials list, and the skin table that
     // maps a mesh's material field to a texture index.
@@ -152,8 +228,8 @@ public static class StudioMeshReader
 
     // mstudioeyeball_t (172): sznameindex(0) bone(4) org(8) zoffset(20) radius(24) up(28)
     //   forward(40) texture(52) unused1(56) iris_scale(60) ...
-    private const int EyeballSize = 172, EyeballBone = 4, EyeballOrg = 8, EyeballRadius = 24,
-        EyeballUp = 28, EyeballForward = 40, EyeballIrisScale = 60;
+    private const int EyeballSize = 172, EyeballBone = 4, EyeballOrg = 8, EyeballZOffset = 20,
+        EyeballRadius = 24, EyeballUp = 28, EyeballForward = 40, EyeballIrisScale = 60;
 
     // mstudiobone_t (216): sznameindex(0) parent(4) bonecontroller[6](8) pos(32) quat(44) rot(60)
     //   posscale(72) rotscale(84) poseToBone(96, a 3x4 model -> bone matrix) qAlignment(144) flags(160) ...
@@ -161,17 +237,6 @@ public static class StudioMeshReader
 
     // studiohdr_t.numbones / .boneindex.
     private const int HdrNumBones = 156, HdrBoneIndex = 160;
-
-    /// <summary>
-    /// Shrinks the projected iris by a few percent. Flat-projecting the eyeball mesh only
-    /// approximates EyeRefract, which raytraces a sphere and refracts through the cornea, so the
-    /// straight geometric mapping lands a little large against what the engine draws.
-    /// <para>
-    /// Calibrated by eye against HLMV - raise it to shrink the iris, lower it to grow it. This is the
-    /// knob to turn if eyes ever look off; the projection maths above is not.
-    /// </para>
-    /// </summary>
-    private const float IrisProjectionCorrection = 1.07f;
 
     // vertexFileHeader_t (64): id(0) version(4) checksum(8) numLODs(12) numLODVertexes[8](16)
     //   numFixups(48) fixupTableStart(52) vertexDataStart(56) tangentDataStart(60)
@@ -243,8 +308,8 @@ public static class StudioMeshReader
         var bones = ReadBones(mdl, log);
 
         // --- the .mdl's mesh tree, which says where each mesh's vertices sit in that array -----
-        var layout = BuildLod0Layout(mdl, numBodyParts, bodyPartIndex, out var bodyParts, out var eyeballs);
-        ApplyEyeballUvs(mdl, bones, positions, texCoords, eyeballs, log);
+        var layout = BuildLod0Layout(mdl, numBodyParts, bodyPartIndex, out var bodyParts, out var rawEyeballs);
+        var eyeballs = ReadEyeballs(mdl, bones, rawEyeballs, log);
         log?.Invoke($"mdl: {layout.Count} mesh(es), {layout.Sum(m => m.Count)} LOD-0 vertices expected");
         if (bodyParts.Any(b => b.IsSelectable))
             log?.Invoke("mdl: bodygroups - "
@@ -314,9 +379,11 @@ public static class StudioMeshReader
             BodyParts = bodyParts,
             SkinFamilies = skinFamilies,
             Bones = bones,
+            Eyeballs = eyeballs,
             BoundsMin = min,
             BoundsMax = max,
             Version = version,
+            IsStaticProp = (I32(mdl, HdrFlags) & FlagStaticProp) != 0,
         };
     }
 
@@ -530,7 +597,7 @@ public static class StudioMeshReader
     /// rather than read off any single field.
     /// </summary>
     /// <summary>An eyeball mesh: which vertices it owns, and where its mstudioeyeball_t sits.</summary>
-    private readonly record struct EyeballMesh(int VertexBase, int VertexCount, int EyeballAt);
+    private readonly record struct EyeballMesh(int VertexBase, int VertexCount, int SkinRef, int EyeballAt);
 
     private static List<MeshSlot> BuildLod0Layout(byte[] mdl, int numBodyParts, int bodyPartIndex,
         out StudioBodyPart[] bodyParts, out List<EyeballMesh> eyeballs)
@@ -572,15 +639,15 @@ public static class StudioMeshReader
                     // family later - not an index into the texture list.
                     int skinRef = I32(mdl, meshAt);
 
-                    // An eyeball mesh's stored UVs are meaningless - the engine projects the iris onto
-                    // it at runtime - so note it here and rebuild them once the vertices are read.
+                    // An eyeball mesh's stored UVs are not what the engine samples the iris with - it
+                    // projects the iris on every frame - so note it here and rebuild them later.
                     if (I32(mdl, meshAt + MeshMaterialType) == 1)
                     {
                         int eyeball = I32(mdl, meshAt + MeshMaterialParam);
                         int eyeballAt = modelAt + I32(mdl, modelAt + ModelEyeballIndex) + eyeball * EyeballSize;
                         if (eyeball >= 0 && eyeball < I32(mdl, modelAt + ModelNumEyeballs)
                             && Fits(mdl, eyeballAt, EyeballSize))
-                            eyeballs.Add(new EyeballMesh(running, count, eyeballAt));
+                            eyeballs.Add(new EyeballMesh(running, count, skinRef, eyeballAt));
                     }
 
                     slots.Add(new MeshSlot(running, count, skinRef, bp, m));
@@ -593,24 +660,21 @@ public static class StudioMeshReader
     }
 
     /// <summary>
-    /// Rebuilds the UVs of every eyeball mesh by projecting its vertices onto the eye's own right/up
-    /// axes, which is what the engine does per frame instead of trusting the .vvd. Without this an
-    /// eyeball samples one arbitrary speck of its iris texture and renders as a flat blank disc.
-    /// <para>
-    /// The eyeball's origin and axes are stored in its bone's space, so they are lifted into model
-    /// space through the inverse of that bone's <c>poseToBone</c>. The eye is drawn in bind pose
-    /// looking straight ahead - it does not track a target the way the engine's does.
-    /// </para>
+    /// Lifts each mstudioeyeball_t into model space, deriving the eye's axes exactly the way
+    /// studiorender's <c>R_StudioEyeballPosition</c> does with eye movement off: forward is the
+    /// stored forward <em>negated</em>, the $eyeball angle (zoffset) swings it twice about the right
+    /// axis, and right/up are then re-orthogonalised against it. The eye therefore looks straight
+    /// ahead - it does not track a view target the way the engine's does.
     /// </summary>
-    private static void ApplyEyeballUvs(byte[] mdl, StudioBone[] bones, Vector3[] positions,
-        Vector2[] texCoords, List<EyeballMesh> eyeballs, Action<string>? log)
+    private static StudioEyeball[] ReadEyeballs(byte[] mdl, StudioBone[] bones,
+        List<EyeballMesh> eyeballs, Action<string>? log)
     {
-        foreach (var (vertexBase, vertexCount, at) in eyeballs)
+        var result = new List<StudioEyeball>(eyeballs.Count);
+        foreach (var (vertexBase, vertexCount, skinRef, at) in eyeballs)
         {
             int bone = I32(mdl, at + EyeballBone);
-            float radius = F32(mdl, at + EyeballRadius);
             float irisScale = F32(mdl, at + EyeballIrisScale);
-            if (bone < 0 || bone >= bones.Length || radius <= 0f || irisScale <= 0f)
+            if (bone < 0 || bone >= bones.Length || irisScale <= 0f)
                 continue;
 
             // The eyeball's origin and axes are stored in its bone's space; the bone's bind pose is
@@ -618,34 +682,27 @@ public static class StudioMeshReader
             var toModel = bones[bone].BindPose;
             var origin = Vector3.Transform(Vec3(mdl, at + EyeballOrg), toModel);
             var up = Vector3.TransformNormal(Vec3(mdl, at + EyeballUp), toModel);
-            var forward = Vector3.TransformNormal(Vec3(mdl, at + EyeballForward), toModel);
+            var forward = -Vector3.TransformNormal(Vec3(mdl, at + EyeballForward), toModel);
             if (up.LengthSquared() < 1e-8f || forward.LengthSquared() < 1e-8f)
                 continue;
-            up = Vector3.Normalize(up);
-            forward = Vector3.Normalize(forward);
+
             var right = Vector3.Cross(forward, up);
             if (right.LengthSquared() < 1e-8f)
                 continue;
             right = Vector3.Normalize(right);
 
-            // The iris disc's half-size is radius/(2 * iris_scale), and the eyeball mesh is that
-            // disc, so 0.5/that maps it across the whole 0..1 texture. Checked against a GFL2 port:
-            // predicted half-size 0.774 against a measured mesh half-extent of 0.80.
-            // Halving this scale is the classic mistake - it samples the middle of the iris only and
-            // the eye renders at double size. V runs down the image, hence the negation below.
-            float scale = irisScale / radius * IrisProjectionCorrection;
-            int last = Math.Min(vertexBase + vertexCount, positions.Length);
-            for (int i = vertexBase; i < last; i++)
-            {
-                var d = positions[i] - origin;
-                texCoords[i] = new Vector2(
-                    Vector3.Dot(d, right) * scale + 0.5f,
-                    0.5f - Vector3.Dot(d, up) * scale);
-            }
+            // zoffset is added twice - the engine reads it into a second local and passes the sum.
+            forward = Vector3.Normalize(forward + 2f * F32(mdl, at + EyeballZOffset) * right);
+            right = Vector3.Normalize(Vector3.Cross(forward, up));
+            up = Vector3.Normalize(Vector3.Cross(right, forward));
+
+            result.Add(new StudioEyeball(Str(mdl, at + I32(mdl, at)), vertexBase, vertexCount, skinRef,
+                origin, right, up, irisScale, F32(mdl, at + EyeballRadius)));
         }
 
-        if (eyeballs.Count > 0)
-            log?.Invoke($"mdl: projected iris UVs for {eyeballs.Count} eyeball mesh(es)");
+        if (result.Count > 0)
+            log?.Invoke($"mdl: {result.Count} eyeball(s)");
+        return result.ToArray();
     }
 
     private static float F32(byte[] b, int at) => BitConverter.ToSingle(b, at);

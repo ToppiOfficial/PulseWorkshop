@@ -19,7 +19,7 @@ public enum UnpackSortColumn { Name, Type, Source, Size }
 /// <summary>Kind of hover preview a file row supports (see <see cref="UnpackFileViewModel.PreviewKind"/>).
 /// <see cref="Model"/> is the odd one out - it is not a decoded image but a live 3D render, and it
 /// needs the file's .vvd/.vtx siblings as well as the .mdl itself.</summary>
-public enum UnpackPreviewKind { None, Image, Vtf, Vtex, Model }
+public enum UnpackPreviewKind { None, Image, Vtf, Vtex, Model, Text }
 
 /// Everything the 3D preview needs for one model: the render mesh and its resolved materials,
 /// indexed by <see cref="MeshPart.MaterialIndex"/>.
@@ -92,10 +92,16 @@ public sealed class UnpackViewModel : ObservableObject
     private int _openGeneration;
     // Opens currently awaiting their background load; IsLoading clears when the last one finishes.
     private int _pendingOpens;
+    // The remembered folder/file is last session's, so it is restored once - when this run first
+    // reopens that archive. Closing and reopening it later in the same run starts at the root.
+    private bool _canRestoreLastLocation = true;
 
     // The .mdl files the user has exported this session, surfaced by the "View model" bar so an
     // unpacked model can be sent straight to the Model View tab.
     private UnpackedModelViewModel? _selectedModel;
+
+    // The destination of the last export this session - the "Exported files" button's target.
+    private string? _lastExportRoot;
 
     // Typing restarts this timer; the search itself runs when it fires (or on Enter). Matching a
     // full-game mount is fast, but repopulating a 5000-row list on every keystroke is not.
@@ -117,6 +123,7 @@ public sealed class UnpackViewModel : ObservableObject
         CancelExportCommand = new RelayCommand(CancelExport, () => IsExporting);
         ViewModelCommand = new RelayCommand(ViewSelectedModel, () => CanViewModel);
         BrowseModelCommand = new RelayCommand(BrowseSelectedModel, () => CanViewModel);
+        BrowseExportFolderCommand = new RelayCommand(BrowseExportFolder, () => HasExportRoot);
         ToggleDetailsPaneCommand = new RelayCommand(() => IsDetailsPaneOpen = !IsDetailsPaneOpen);
         GoUpCommand = new RelayCommand(
             () => { if (_selectedFolder?.Parent is { } p) NavigateToFolder(p); },
@@ -144,6 +151,8 @@ public sealed class UnpackViewModel : ObservableObject
     public RelayCommand CancelExportCommand { get; }
     public RelayCommand ViewModelCommand { get; }
     public RelayCommand BrowseModelCommand { get; }
+    /// <summary>Opens the folder the last export wrote into (even when it held no .mdl).</summary>
+    public RelayCommand BrowseExportFolderCommand { get; }
     public RelayCommand ToggleDetailsPaneCommand { get; }
     /// <summary>Navigate to the parent of the selected folder ("up one level").</summary>
     public RelayCommand GoUpCommand { get; }
@@ -226,6 +235,23 @@ public sealed class UnpackViewModel : ObservableObject
 
     /// <summary>"View model" is available once an exported model is picked.</summary>
     private bool CanViewModel => _selectedModel is not null;
+
+    /// <summary>Where the last export of this session wrote (the chosen folder, or the "Beside
+    /// package" root). Kept so the user can get at the extracted files even when none was a .mdl.</summary>
+    public string? LastExportRoot
+    {
+        get => _lastExportRoot;
+        private set
+        {
+            if (!SetField(ref _lastExportRoot, value))
+                return;
+            OnPropertyChanged(nameof(HasExportRoot));
+            BrowseExportFolderCommand.RaiseCanExecuteChanged();
+        }
+    }
+
+    /// <summary>True once something has been exported this session (shows the "Exported files" button).</summary>
+    public bool HasExportRoot => _lastExportRoot is not null;
 
     /// <summary>Caption above the file list ("materials/models - 120 files" or match info).</summary>
     public string FileListCaption
@@ -1082,15 +1108,19 @@ public sealed class UnpackViewModel : ObservableObject
     }
 
     /// <summary>
-    /// Puts the tab back where it was the last time this same archive was open - same folder, same
-    /// highlighted file. Returns false (leaving the caller to select the root as usual) when a
-    /// different archive is opened, or when the remembered paths are no longer in this one - a
-    /// repacked .vpk, a different build of the game.
+    /// Puts the tab back where it was when the app last exited - same folder, same highlighted file.
+    /// Only the first open of that archive in a run restores; a close/reopen later in the same run
+    /// starts at the root. Returns false (leaving the caller to select the root as usual) when a
+    /// different archive is opened, when the restore is already spent, or when the remembered paths
+    /// are no longer in this one - a repacked .vpk, a different build of the game.
     /// </summary>
     private bool TryRestoreLastLocation(string archivePath)
     {
         if (!string.Equals(_settings.UnpackLastArchive, archivePath, StringComparison.OrdinalIgnoreCase))
             return false;
+        if (!_canRestoreLastLocation)
+            return false;
+        _canRestoreLastLocation = false; // last session's location is spent - only the first open uses it
         if (_settings.UnpackLastFolder is not { } folderPath || FindFolder(folderPath) is not { } folder)
             return false;
 
@@ -1484,6 +1514,8 @@ public sealed class UnpackViewModel : ObservableObject
             // Whatever landed on disk (full export, partial, or cancelled) - surface any .mdl among it
             // in the "View model" picker.
             RegisterExportedModels(entries, destRoot);
+            if (done > 0)
+                LastExportRoot = destRoot;
             Log($"=== {StatusMessage} ===");
             IsExporting = false;
             ExportProgress = 0;
@@ -1637,7 +1669,10 @@ public sealed class UnpackViewModel : ObservableObject
             var (mesh, materials) = await Task.Run(() =>
             {
                 var parsed = StudioMeshReader.Read(mdlBytes, vvdBytes, vtxBytes, Log);
-                return (parsed, ModelMaterialLoader.Resolve(parsed, ReadArchiveFile, Log));
+                // Eyes are finished last: how an iris is projected depends on the shader its VMT
+                // names, so it cannot be settled until the materials are resolved.
+                return EyeballProjection.Apply(
+                    parsed, ModelMaterialLoader.Resolve(parsed, ReadArchiveFile, Log), Log);
             }, ct);
 
             _detailMeshText = $"{mesh.Positions.Length:N0} verts - {mesh.TriangleCount:N0} tris - v{mesh.Version}";
@@ -1812,6 +1847,28 @@ public sealed class UnpackViewModel : ObservableObject
         }
     }
 
+    /// <summary>"Exported files": opens the folder the last export wrote into. Unlike "Browse file"
+    /// this needs no .mdl - it is how the user reaches the extracted files whatever they were.</summary>
+    private void BrowseExportFolder()
+    {
+        if (_lastExportRoot is not { } root)
+            return;
+        if (!Directory.Exists(root))
+        {
+            StatusMessage = $"{root} is no longer on disk.";
+            LastExportRoot = null;
+            return;
+        }
+        try
+        {
+            ShellOpen.Reveal(root);
+        }
+        catch (Exception ex)
+        {
+            StatusMessage = $"Couldn't open the folder: {ex.Message}";
+        }
+    }
+
     // --- Helpers --------------------------------------------------------------------------------
 
     internal static string FormatSize(long bytes)
@@ -1944,6 +2001,7 @@ public sealed class UnpackFileViewModel : ObservableObject
             "vtf" => UnpackPreviewKind.Vtf,
             "vtex_c" => UnpackPreviewKind.Vtex,
             "mdl" => UnpackPreviewKind.Model,
+            "txt" or "cfg" or "nut" or "lua" => UnpackPreviewKind.Text,
             _ => UnpackPreviewKind.None,
         };
 

@@ -14,7 +14,7 @@
     <Platform>x64</Platform>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <!-- App version. Shown in the window title at runtime (see MainWindow ctor). -->
-    <Version>0.8.0</Version>
+    <Version>0.8.1</Version>
     <!-- Vulkan interop (Rendering/) is pointer work throughout. -->
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>

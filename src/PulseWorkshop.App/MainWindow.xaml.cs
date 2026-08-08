@@ -2,6 +2,7 @@
 using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Documents;
@@ -113,14 +114,10 @@ public partial class MainWindow : Window
         };
     }
 
-    /// <summary>
-    /// Handles a shell file-association / "Open with" open - either this launch (a path passed on the
-    /// command line) or one forwarded from a second instance. Brings the window to the front and opens
-    /// the file in the tab that owns its type: <c>.pw_textureproject</c> -> Textures,
-    /// <c>.pw_mdlproject</c> -> Compile - Advanced, <c>.vpk</c>/<c>.gma</c>/<c>gameinfo.txt</c> ->
-    /// Unpack. An empty message (<see cref="SingleInstanceSignal.ActivateOnly"/>) just activates the
-    /// window.
-    /// </summary>
+    /// <summary>Handles a shell "Open with" open - this launch's command line, or one forwarded from a
+    /// second instance - by activating the window and routing the file to the tab that owns its type:
+    /// project files to Textures / Compile - Advanced, archives and gameinfo.txt to Unpack.</summary>
+    /// <remarks>An empty message (<see cref="SingleInstanceSignal.ActivateOnly"/>) only activates.</remarks>
     public void HandleShellOpen(string? openPath)
     {
         BringToFront();
@@ -158,9 +155,9 @@ public partial class MainWindow : Window
     }
 
     // --- Window-level file drop -------------------------------------------------------------------
-    // Dropping a project file or an unpackable archive anywhere on the window (that isn't over a more
-    // specific drop zone - the editor's content/preview zones handle and mark their own drops) routes
-    // it to the tab that owns its type, exactly as a shell "Open with" launch does.
+    // A project file or archive dropped anywhere on the window routes to the tab that owns its type,
+    // exactly as a shell "Open with" launch does. Drop zones that handle their own drops (the
+    // editor's content/preview) mark them handled and never reach here.
 
     private void Window_DragOver(object sender, DragEventArgs e)
     {
@@ -177,11 +174,10 @@ public partial class MainWindow : Window
         }
     }
 
-    /// <summary>The first dropped file the window can route to a tab (a <c>.pw_mdlproject</c> /
-    /// <c>.pw_textureproject</c> project, or a <c>.vpk</c>/<c>.gma</c>/<c>gameinfo.txt</c> archive),
-    /// or null if the drop carries no such file. While the Workshop tab is active, archives are not
-    /// routed to Unpack - a dropped .vpk/.gma there is content for the editor's own drop zones, not
-    /// something to auto-unpack.</summary>
+    /// <summary>The first dropped file the window can route to a tab - a project file or an
+    /// archive/gameinfo.txt - or null if the drop carries none.</summary>
+    /// <remarks>Archives are not routed while the Workshop tab is active: a .vpk dropped there is
+    /// content for the editor's own drop zones, not something to auto-unpack.</remarks>
     private string? GetRoutableDroppedFile(DragEventArgs e)
     {
         if (!e.Data.GetDataPresent(DataFormats.FileDrop)
@@ -254,10 +250,9 @@ public partial class MainWindow : Window
     private void OnViewModelPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
         if (e.PropertyName == nameof(MainViewModel.Editor))
-            // Preserve the user's current editor tab across entry changes. The only tab that can
-            // disappear is "Danger zone" (index 2, shown only for published items); if it's selected
-            // and the new editor isn't a published item, fall back to the first tab so we don't leave
-            // a collapsed tab selected with no matching header.
+            // Preserve the editor tab across entry changes. "Danger zone" (index 2) is the only one
+            // that can disappear - it shows for published items only - so fall back to the first tab
+            // rather than leave a collapsed tab selected with no header.
             if (EditorTabs.SelectedIndex == 2 && _vm.Editor?.IsEditingPublished != true)
                 EditorTabs.SelectedIndex = 0;
     }
@@ -319,9 +314,8 @@ public partial class MainWindow : Window
 
     // --- Drag-to-reorder lists --------------------------------------------------------------------
     // Shared by the Compile/Package advanced entry lists, the texture groups and the Game Setup games
-    // list. A reorder starts only when the press lands on a row's drag handle (Tag="DragHandle"), so
-    // the controls inside each row stay fully usable. A semi-transparent ghost of the row follows the
-    // cursor; on drop the row is moved within its collection and the owner persists the new order.
+    // list. A reorder starts only from a row's drag handle (Tag="DragHandle"), so the controls inside
+    // each row stay usable; a ghost follows the cursor and the owner persists the order on drop.
 
     private DragAdorner? _dragAdorner;
     private AdornerLayer? _dragLayer;
@@ -473,10 +467,9 @@ public partial class MainWindow : Window
     }
 
     // --- Entry/group list context menus (Duplicate/Delete selected) --------------------------------
-    // Right-clicking a row that isn't part of the current highlight selects just it first (Explorer
-    // behaviour), so the menu's batch action always includes the row the user pointed at. When the row
-    // is already in a multi-selection the whole selection is kept. The menu items then run the same
-    // batch operation the list's VM exposes, over every highlighted row.
+    // Right-clicking a row outside the current highlight selects just it first (Explorer behaviour),
+    // so the menu's batch action always includes the row pointed at; a row already in a multi-selection
+    // keeps it. The items then run the list VM's batch operation over every highlighted row.
 
     /// <summary>If the right-clicked row isn't already selected, select only it (keeps an existing
     /// multi-selection intact when the row is part of it).</summary>
@@ -569,11 +562,9 @@ public partial class MainWindow : Window
         }
     }
 
-    /// <summary>
-    /// Opens the preview for a package asset's thumbnail: the full-size image when the thumbnail
-    /// shows real pixels, or the raw text in a <see cref="TextPreviewWindow"/> for a text asset.
-    /// Only acts when the input file still exists on disk.
-    /// </summary>
+    /// <summary>Opens a package asset's thumbnail: the full-size image when the thumbnail shows real
+    /// pixels, or the raw text in a <see cref="TextPreviewWindow"/>. Only acts when the input file
+    /// still exists on disk.</summary>
     private void AssetThumbnail_Click(object sender, MouseButtonEventArgs e)
     {
         if ((sender as FrameworkElement)?.DataContext is not PackageAssetViewModel asset
@@ -600,11 +591,9 @@ public partial class MainWindow : Window
     // time the tab is entered, never again (so a manual Close stays closed).
     private bool _unpackRestored;
 
-    /// <summary>
-    /// Fires when the outer tab strip changes. The only thing it drives is the lazy Unpack restore:
-    /// reopening the last-session archive is deferred until the user actually enters the Unpack tab,
-    /// so restoring a heavy gameinfo mount never slows the app's launch.
-    /// </summary>
+    /// <summary>Fires when the outer tab strip changes. Its only job is the lazy Unpack restore:
+    /// reopening last session's archive waits until the user enters the Unpack tab, so a heavy
+    /// gameinfo mount never slows the app's launch.</summary>
     private void MainTabs_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         // SelectionChanged bubbles from the inner tab controls (Compile/Package/editor) too - only
@@ -629,23 +618,19 @@ public partial class MainWindow : Window
         _ = _vm.Unpack.OpenFromPathAsync(path);
     }
 
-    /// <summary>Mirrors the Unpack tree's read-only SelectedItem into the view model. Only a real
-    /// folder becomes the selection; a transition to null comes from the view model dropping the
-    /// tree's visual selection when the file list takes over as the active pane, so it is ignored
-    /// (the current folder stays the navigation context and the list stays populated).</summary>
+    /// <summary>Mirrors the Unpack tree's read-only SelectedItem into the view model - only a real
+    /// folder becomes the selection. Null is ignored: it means the VM dropped the tree's visual
+    /// selection to hand the file list the active pane, and that folder stays the context.</summary>
     private void UnpackTree_SelectedItemChanged(object sender, RoutedPropertyChangedEventArgs<object> e)
     {
         if (e.NewValue is UnpackFolderViewModel folder)
             _vm.Unpack.SelectedFolder = folder;
     }
 
-    /// <summary>
-    /// Double-click in the file list: a folder row navigates into that folder (Explorer-style); a
-    /// file row extracts to a temp file and opens it with the user's default application for that
-    /// type (so a .vtf lands in their VTF viewer instead of an internal raw-binary dump). Windows
-    /// shows its "Open with" picker when no handler is registered. Holding Alt reveals the
-    /// extracted file in Explorer instead, like every other open action.
-    /// </summary>
+    /// <summary>Double-click in the file list: a folder row navigates into it (Explorer-style), a file
+    /// row extracts to temp and opens in the user's default app for that type - Windows shows its
+    /// "Open with" picker when nothing is registered.</summary>
+    /// <remarks>Holding Alt reveals the extracted file in Explorer, like every other open action.</remarks>
     private async void UnpackFiles_MouseDoubleClick(object sender, MouseButtonEventArgs e)
     {
         // MouseDoubleClick fires for any button - only the left one opens/navigates, so a
@@ -703,6 +688,16 @@ public partial class MainWindow : Window
             _vm.Unpack.SortBy(column);
     }
 
+    /// <summary>Re-syncs the row VMs' <c>IsSelected</c> from the ListBox, the authority. A row
+    /// highlighted while virtualized out isn't in <c>SelectedItems</c> for the next click to clear, so
+    /// it stays selected in the VM and the Details pane freezes on that multi-selection.</summary>
+    private void UnpackFiles_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        var selected = new HashSet<object>(UnpackFiles.SelectedItems.Cast<object>());
+        foreach (var row in _vm.Unpack.Files)
+            row.IsSelected = selected.Contains(row);
+    }
+
     /// <summary>Right-click in the file list selects the row under the cursor (unless it is already
     /// part of the current multi-selection), so the context menu acts on what was clicked.</summary>
     private void UnpackFiles_PreviewMouseRightButtonDown(object sender, MouseButtonEventArgs e)
@@ -738,10 +733,9 @@ public partial class MainWindow : Window
             _vm.Unpack.GoToFile(row);
     }
 
-    /// <summary>Decodes a raster image (png/jpg/...) from bytes to a frozen bitmap for the thumbnail.
-    /// Reports the source's true pixel size via <paramref name="srcW"/>/<paramref name="srcH"/> (read
-    /// from metadata, so a capped decode doesn't misreport it), and caps the decoded bitmap's width so
-    /// a large source doesn't build a giant bitmap. Null if WPF can't decode it.</summary>
+    /// <summary>Decodes a raster image to a frozen thumbnail bitmap, capping the decode width so a
+    /// large source can't build a giant bitmap. <paramref name="srcW"/>/<paramref name="srcH"/> come
+    /// from metadata, so the capped decode doesn't misreport them. Null if WPF can't decode it.</summary>
     private static BitmapSource? TryDecodeImage(byte[] bytes, out int srcW, out int srcH)
     {
         srcW = srcH = 0;
@@ -770,10 +764,9 @@ public partial class MainWindow : Window
         }
     }
 
-    /// <summary>Decodes a previewable Unpack entry to a frozen thumbnail, shared by the hover popup
-    /// and the Details pane: a .vtf or Source 2 .vtex_c texture (via our lite readers) or a raster
-    /// image WPF can decode. Returns the bitmap (null when unavailable) with the source's true
-    /// dimensions and a short format label for the caption.</summary>
+    /// <summary>Decodes a previewable Unpack entry to a frozen thumbnail, shared by the hover popup and
+    /// the Details pane: a .vtf or .vtex_c through our lite readers, or a raster image through WPF.
+    /// Returns the bitmap (null when unavailable), the source's true size, and a format label.</summary>
     private static async Task<(BitmapSource? Image, int SrcW, int SrcH, string Fmt)> DecodePreviewAsync(
         UnpackPreviewKind kind, string ext, byte[] bytes, int minSize)
     {
@@ -820,6 +813,18 @@ public partial class MainWindow : Window
 
     /// <summary>Largest entry we'll pull into memory to decode a Details pane thumbnail.</summary>
     private const int UnpackPreviewMaxBytes = 64 * 1024 * 1024;
+
+    /// <summary>Largest entry shown by the text preview - well below the image cap, since it's the
+    /// whole file rendered in a WPF TextBox rather than a decoded bitmap.</summary>
+    private const int TextPreviewMaxBytes = 2 * 1024 * 1024;
+
+    /// <summary>Decodes a text-preview entry's bytes, honoring a UTF-8/UTF-16 BOM when present and
+    /// falling back to UTF-8 (Source's .cfg/.nut/.lua/.txt files are ASCII/UTF-8 in practice).</summary>
+    private static string DecodeText(byte[] bytes)
+    {
+        using var reader = new StreamReader(new MemoryStream(bytes), Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+        return reader.ReadToEnd();
+    }
 
     private int _detailThumbGeneration;
 
@@ -890,6 +895,8 @@ public partial class MainWindow : Window
         // Start from the generic glyph; a successful decode (or model load) replaces it below.
         UnpackDetailImage.Source = null;
         UnpackDetailImage.Visibility = Visibility.Collapsed;
+        UnpackDetailText.Text = string.Empty;
+        UnpackDetailText.Visibility = Visibility.Collapsed;
         UnpackDetailModel.Source = null;
         UnpackDetailModel.Visibility = Visibility.Collapsed;
         UnpackDetailModelHint.Visibility = Visibility.Collapsed;
@@ -915,6 +922,17 @@ public partial class MainWindow : Window
             return;
         }
 
+        if (vm.DetailPreviewKind == UnpackPreviewKind.Text)
+        {
+            var textBytes = await vm.ReadEntryBytesAsync(entry, TextPreviewMaxBytes, CancellationToken.None);
+            if (textBytes is null || gen != _detailThumbGeneration)
+                return; // too large, unreadable, or subject moved on - keep the generic glyph
+            UnpackDetailText.Text = DecodeText(textBytes);
+            UnpackDetailText.Visibility = Visibility.Visible;
+            UnpackDetailFallback.Visibility = Visibility.Collapsed;
+            return;
+        }
+
         var bytes = await vm.ReadEntryBytesAsync(entry, UnpackPreviewMaxBytes, CancellationToken.None);
         if (bytes is null || gen != _detailThumbGeneration)
             return;
@@ -932,24 +950,17 @@ public partial class MainWindow : Window
 
     // --- Unpack Details pane: 3D model preview ------------------------------------------------------
     //
-    // Highlighting a .mdl swaps the thumbnail for a live render of its mesh: untextured grey over a
-    // ground grid, orbited with the mouse. The renderer is Vulkan drawing offscreen (see
-    // Rendering/VulkanModelPreview.cs) and hands back plain BGRA pixels, so as far as WPF is concerned
-    // this is still just a bitmap in an Image - no HwndHost, no airspace issues inside the pane.
+    // Highlighting a .mdl swaps the thumbnail for a live render of its mesh over a ground grid, orbited
+    // with the mouse. Rendering/VulkanModelPreview.cs draws offscreen and hands back BGRA pixels, so to
+    // WPF this is still a bitmap in an Image - no HwndHost, no airspace issues inside the pane.
     //
     // Everything here runs on the UI thread on purpose: a Vulkan device needs external synchronization
-    // and a render at this size is sub-millisecond. Only the .mdl/.vvd/.vtx parse is backgrounded, and
-    // that happens in the view model before any of this is touched.
+    // and a render at this size is sub-millisecond. Only the .mdl/.vvd/.vtx parse is backgrounded, in
+    // the view model, before any of this is touched.
 
-    /// <summary>
-    /// Opening view: a three-quarter front angle, slightly above.
-    /// <para>
-    /// The yaw is measured from +X, and dead-front is 0 because the renderer turns the model to face
-    /// <b>+X</b> the way HLMV presents it (see <c>VulkanModelPreview.ModelOrientation</c> - the
-    /// bind-pose vertices on disk actually face -Y). The +0.55 rad offset swings the eye round to the
-    /// model's front-left so it reads as a three-quarter view rather than a flat elevation.
-    /// </para>
-    /// </summary>
+    /// <summary>Opening view: a three-quarter front angle, slightly above. Yaw is measured from +X and
+    /// dead-front is 0, because <c>VulkanModelPreview._modelOrientation</c> leaves every model facing
+    /// +X as HLMV presents it; the 0.55 rad offset swings the eye round to the model's front-left.</summary>
     private const float ModelDefaultYaw = 0.55f, ModelDefaultPitch = 0.35f;
 
     /// <summary>How far the pitch may travel before the look-at basis degenerates at the poles.</summary>
@@ -964,13 +975,9 @@ public partial class MainWindow : Window
     /// slack sit against a background the render clears to anyway, so they don't show.</summary>
     private const int ModelPreviewSizeStep = 8;
 
-    /// <summary>
-    /// Ceiling for the live preview. Deliberately well above any common refresh rate, because the
-    /// loop is driven by the compositor's vsync-paced tick and is therefore already bounded by the
-    /// display. A cap *below* the refresh rate does not do what it looks like it does: the only rates
-    /// reachable from a tick are integer divisions of it, so capping at 120 on a 144 Hz screen does
-    /// not give 120, it drops every other tick and gives 72.
-    /// </summary>
+    /// <summary>Ceiling for the live preview, deliberately far above any refresh rate: the loop rides
+    /// the compositor's vsync-paced tick and is already bounded by the display. A cap below the refresh
+    /// rate only reaches integer divisions of it - 120 on a 144 Hz screen drops to 72.</summary>
     private const double ModelMinFrameMs = 1000.0 / 240.0;
 
     /// <summary>A render slower than this makes the loop sit out the next tick, so a heavy model on a
@@ -1227,11 +1234,9 @@ public partial class MainWindow : Window
         UnpackDetailThumb.Cursor = Cursors.SizeAll;
     }
 
-    /// <summary>
-    /// Vertical half-angle of the render's field of view, as a tangent. Panning divides the drag by
-    /// the pane height and scales by twice this, which is what makes the model track the cursor
-    /// exactly rather than drifting ahead of or behind it.
-    /// </summary>
+    /// <summary>Vertical half-angle of the render's field of view, as a tangent. Panning divides the
+    /// drag by the pane height and scales by twice this, which is what makes the model track the
+    /// cursor exactly rather than drifting ahead of or behind it.</summary>
     private const float ModelFovTangent = 0.41421357f; // tan(45 degrees / 2)
 
     private void UnpackDetailThumb_MouseMove(object sender, MouseEventArgs e)
@@ -1279,11 +1284,9 @@ public partial class MainWindow : Window
         e.Handled = true; // don't scroll the Details pane out from under the model
     }
 
-    /// <summary>
-    /// Toggle the shared console window with the <c>~</c> / backtick key (like the Source engine
-    /// console), from any tab. Ignored while a text field has focus so the character can still be typed
-    /// into titles, descriptions, paths, etc.
-    /// </summary>
+    /// <summary>Toggles the shared console window with the <c>~</c> / backtick key (like the Source
+    /// engine console) from any tab. Ignored while a text field has focus, so the character can still
+    /// be typed into titles, descriptions and paths.</summary>
     protected override void OnPreviewKeyDown(KeyEventArgs e)
     {
         base.OnPreviewKeyDown(e);
@@ -1315,10 +1318,8 @@ public partial class MainWindow : Window
         e.Handled = true;
     }
 
-    /// <summary>
-    /// Darken the OS title bar to match the app's dark-grey theme. WPF doesn't theme the
-    /// non-client area, so we ask DWM to use the immersive dark title bar once the HWND exists.
-    /// </summary>
+    /// <summary>Darkens the OS title bar to match the app's theme. WPF doesn't theme the non-client
+    /// area, so DWM is asked for the immersive dark title bar once the HWND exists.</summary>
     protected override void OnSourceInitialized(EventArgs e)
     {
         base.OnSourceInitialized(e);
@@ -1352,10 +1353,9 @@ public partial class MainWindow : Window
     }
 
 #if DEBUG
-    /// <summary>Short SHA-256 (first 8 hex chars) of the compiled app assembly, shown in the window
-    /// title on Debug builds so distinct local builds are distinguishable. Hashes the assembly file
-    /// (PulseWorkshop.dll) rather than the thin apphost .exe, which stays constant across rebuilds.
-    /// Null if the file can't be read.</summary>
+    /// <summary>Short SHA-256 of the app assembly, shown in the Debug window title so local builds are
+    /// distinguishable. Hashes PulseWorkshop.dll, not the thin apphost .exe, which stays constant
+    /// across rebuilds. Null if the file can't be read.</summary>
     private static string? ExecutableSha
     {
         get
@@ -1379,10 +1379,8 @@ public partial class MainWindow : Window
     }
 #endif
 
-    /// <summary>
-    /// Enter in a search box flushes the pending (debounced) filter immediately instead of waiting
-    /// for the typing-pause timer. The TextBox is matched to its list by x:Name.
-    /// </summary>
+    /// <summary>Enter in a search box flushes the pending (debounced) filter immediately instead of
+    /// waiting for the typing-pause timer. The TextBox is matched to its list by x:Name.</summary>
     private void SearchBox_KeyDown(object sender, KeyEventArgs e)
     {
         if (e.Key != Key.Enter)
@@ -1447,10 +1445,8 @@ public partial class MainWindow : Window
         }
     }
 
-    /// <summary>
-    /// Opens the Workshop item in the Steam client (steam://) so it appears in the Steam overlay/
-    /// community; if Steam can't handle the protocol, falls back to the default browser.
-    /// </summary>
+    /// <summary>Opens the Workshop item in the Steam client (steam://) so it appears in the overlay
+    /// community; falls back to the default browser if Steam can't handle the protocol.</summary>
     private void OpenWorkshopItem_Click(object sender, RoutedEventArgs e)
     {
         if (RowData<WorkshopItem>(sender) is not { } item)
@@ -1461,10 +1457,8 @@ public partial class MainWindow : Window
             TryOpen(item.WorkshopUrl); // browser fallback
     }
 
-    /// <summary>
-    /// Opens the official Steam "Add/Edit Images &amp; Videos" page for the item being edited.
-    /// Gallery previews have no SDK API for these legacy Workshop games, so we deep-link instead.
-    /// </summary>
+    /// <summary>Opens the official Steam "Add/Edit Images &amp; Videos" page for the item being edited.
+    /// Gallery previews have no SDK API for these legacy Workshop games, so deep-link instead.</summary>
     private void OpenManagePreviews_Click(object sender, RoutedEventArgs e) =>
         OpenSteamItemPage("https://steamcommunity.com/sharedfiles/managepreviews/?id=");
 
@@ -1472,10 +1466,8 @@ public partial class MainWindow : Window
     private void OpenManageRequiredItems_Click(object sender, RoutedEventArgs e) =>
         OpenSteamItemPage("https://steamcommunity.com/workshop/managerequireditems/?id=");
 
-    /// <summary>
-    /// Deep-links to a Steam Workshop management page for the currently-edited published item,
-    /// preferring the Steam client (steam://openurl) and falling back to the default browser.
-    /// </summary>
+    /// <summary>Deep-links to a Steam Workshop management page for the currently-edited published
+    /// item, preferring the Steam client (steam://openurl) over the default browser.</summary>
     private void OpenSteamItemPage(string baseUrl)
     {
         if (_vm.Editor?.PublishedFileId is not { } id)
@@ -1511,17 +1503,9 @@ public partial class MainWindow : Window
         }
     }
 
-    /// <summary>
-    /// The three lists (Published / Drafts / Templates) each track their own selection. Opening an
-    /// item from one list must clear the highlight in the other two - otherwise a stale selection
-    /// lingers, and re-clicking that still-selected row is a no-op (SelectionChanged never fires),
-    /// leaving the editor (and its template-vs-draft buttons) showing the wrong mode.
-    /// </summary>
-    /// <summary>
-    /// Selects a row in one of the lists (which opens it via the list's SelectionChanged handler) and
-    /// scrolls it into view. Deferred to Background priority so a tab that was just switched to has
-    /// realized its ListBox before we select/scroll.
-    /// </summary>
+    /// <summary>Selects a row in one of the lists - which opens it via the list's SelectionChanged
+    /// handler - and scrolls it into view. Deferred to Background priority so a tab that was just
+    /// switched to has realized its ListBox before we select and scroll.</summary>
     private void SelectRow(ListBox list, object? item)
     {
         if (item is null)
@@ -1534,6 +1518,9 @@ public partial class MainWindow : Window
         }), System.Windows.Threading.DispatcherPriority.Background);
     }
 
+    /// <summary>Clears the highlight in the other two lists (Published / Drafts / Templates), which
+    /// each track their own. A stale selection left behind makes re-clicking that row a no-op -
+    /// SelectionChanged never fires - and the editor keeps showing the wrong mode.</summary>
     private void ClearOtherSelections(ListBox keep)
     {
         foreach (var list in new[] { PublishedList, DraftsList, TemplatesList })
@@ -1576,10 +1563,8 @@ public partial class MainWindow : Window
 
     private void DraftClearSelection_Click(object sender, RoutedEventArgs e) => _vm.SetAllDraftsSelected(false);
 
-    /// <summary>
-    /// Bulk publish/save: confirms first (spelling out how many are edits vs new items), then
-    /// publishes every ticked draft. New-item drafts missing requirements are skipped and reported.
-    /// </summary>
+    /// <summary>Bulk publish/save: confirms first (spelling out how many are edits vs new items), then
+    /// publishes every ticked draft. New-item drafts missing requirements are skipped and reported.</summary>
     private async void PublishSelectedDrafts_Click(object sender, RoutedEventArgs e)
     {
         if (!_vm.HasDraftSelection || _vm.IsBusy)
@@ -1638,10 +1623,8 @@ public partial class MainWindow : Window
         MessageBox.Show(this, message, title, MessageBoxButton.YesNo, MessageBoxImage.Warning)
             == MessageBoxResult.Yes;
 
-    /// <summary>
-    /// Danger zone: permanently delete the published item open in the editor. Confirms first
-    /// (defaulting to "No") because the deletion is irreversible.
-    /// </summary>
+    /// <summary>Danger zone: permanently deletes the published item open in the editor. Confirms
+    /// first, defaulting to "No", because the deletion is irreversible.</summary>
     private async void DeletePublished_Click(object sender, RoutedEventArgs e)
     {
         if (_vm.Editor is not { IsTemplateMode: false, PublishedFileId: { } id })

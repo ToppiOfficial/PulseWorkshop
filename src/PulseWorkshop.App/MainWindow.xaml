@@ -1383,7 +1383,10 @@
                           <TextBlock Text="{Binding ArchiveSummary}" Style="{StaticResource MutedText}" />
                       </StackPanel>
                       <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                          <Button Content="Open" Padding="10,4" Command="{Binding OpenCommand}" />
+                          <Button Content="Exported files" Padding="10,4" Command="{Binding BrowseExportFolderCommand}"
+                                  Visibility="{Binding HasExportRoot, Converter={StaticResource BoolToVis}}"
+                                  ToolTip="{Binding LastExportRoot, StringFormat='Open the folder the last export wrote into ({0}).'}" />
+                          <Button Content="Open" Margin="6,0,0,0" Padding="10,4" Command="{Binding OpenCommand}" />
                           <Button Content="Close" Margin="6,0,0,0" Padding="10,4" Command="{Binding CloseCommand}" />
                       </StackPanel>
 
@@ -1576,6 +1579,7 @@
                                  SelectionMode="Extended" Background="Transparent" BorderThickness="0"
                                  HorizontalContentAlignment="Stretch"
                                  MouseDoubleClick="UnpackFiles_MouseDoubleClick"
+                                 SelectionChanged="UnpackFiles_SelectionChanged"
                                  PreviewMouseRightButtonDown="UnpackFiles_PreviewMouseRightButtonDown"
                                  ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                                  VirtualizingPanel.IsVirtualizing="True"
@@ -1673,6 +1677,12 @@
                               <Grid>
                                 <Image x:Name="UnpackDetailImage" Stretch="Uniform" Margin="6"
                                        RenderOptions.BitmapScalingMode="HighQuality" Visibility="Collapsed" />
+                                <!-- Plain-text preview (.txt/.cfg/.nut/.lua): scrollable, read-only. -->
+                                <TextBox x:Name="UnpackDetailText" Visibility="Collapsed" IsReadOnly="True"
+                                         Background="Transparent" BorderThickness="0" Margin="6"
+                                         FontFamily="Consolas" FontSize="11" TextWrapping="NoWrap"
+                                         VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto"
+                                         IsReadOnlyCaretVisible="True" Foreground="{StaticResource TextBrush}" />
                                 <!-- Model preview only: fills the border edge to edge (no margin) and
                                      is drawn at exact device pixels, so no scaling filter applies. -->
                                 <Image x:Name="UnpackDetailModel" Stretch="None" Visibility="Collapsed"
